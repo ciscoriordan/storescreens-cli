@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "storescreens": {
+      "command": "storescreens-mcp",
+      "args": []
+    }
+  }
+}

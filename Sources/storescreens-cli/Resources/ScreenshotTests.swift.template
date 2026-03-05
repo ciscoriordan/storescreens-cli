@@ -1,0 +1,147 @@
+import XCTest
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// IMPORTANT: Accessibility Identifiers
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+// This test relies on .accessibilityIdentifier() to find UI elements reliably.
+// Add identifiers to your SwiftUI views — especially:
+//
+//   ✓ Buttons, toolbar items, and navigation elements
+//   ✓ Loading indicators (ProgressView) and content containers
+//   ✓ Text that appears in multiple places (e.g. your app name in both
+//     the launch screen AND the main toolbar — using text matching will
+//     cause false positives)
+//   ✓ Search fields, text fields, toggles, pickers
+//   ✓ Key content areas that indicate a screen has finished loading
+//
+// Example (SwiftUI):
+//   Button("Save") { ... }
+//     .accessibilityIdentifier("saveButton")
+//
+//   ProgressView()
+//     .accessibilityIdentifier("loadingIndicator")
+//
+//   ScrollView { ... }
+//     .accessibilityIdentifier("mainContent")
+//
+// Why: Matching by text label (e.g. app.staticTexts["My App"]) is fragile —
+// the same text can appear in multiple views (launch screen, toolbar, about
+// page). Accessibility identifiers are unique, stable, and testable.
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+final class ScreenshotTests: XCTestCase {
+
+    private var app: XCUIApplication!
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launchArguments = ["--uitesting"]
+        app.launch()
+
+        // Dismiss any system alerts (e.g. App Store review prompts, notification permissions)
+        addUIInterruptionMonitor(withDescription: "System Alert") { alert in
+            let dismissLabels = ["Not Now", "Cancel", "No Thanks", "Later", "Don't Allow", "OK"]
+            for label in dismissLabels {
+                let button = alert.buttons[label]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+
+        // TODO: Wait for your app's main content to load.
+        // Use a unique accessibility identifier — NOT text that might appear on
+        // a launch screen or splash screen. For example:
+        //
+        //   XCTAssertTrue(
+        //     app.buttons["mainMenuButton"].waitForExistence(timeout: 15),
+        //     "App did not finish loading"
+        //   )
+    }
+
+    // MARK: - Helpers
+
+    private func takeScreenshot(named name: String) {
+        print("[📸] \(name)")
+        let screenshot = XCUIScreen.main.screenshot()
+
+        // 1. XCTAttachment (stored in .xcresult as backup)
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        // 2. Write PNG to storescreens cache dir for filesystem-based capture
+        let hostHome = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? NSHomeDirectory()
+        let breadcrumb = (hostHome as NSString).appendingPathComponent(".storescreens-cache-dir")
+        guard let cacheDir = try? String(contentsOfFile: breadcrumb, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+
+        // Strip "Clone N of " prefix — xcodebuild creates clones for parallel test runs,
+        // but storescreens-cli expects the original simulator name as the directory key.
+        var deviceName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? "Unknown"
+        if let range = deviceName.range(of: #"^Clone \d+ of "#, options: .regularExpression) {
+            deviceName = String(deviceName[range.upperBound...])
+        }
+        let deviceDir = (cacheDir as NSString).appendingPathComponent(deviceName)
+        try? FileManager.default.createDirectory(atPath: deviceDir, withIntermediateDirectories: true)
+
+        let filePath = (deviceDir as NSString).appendingPathComponent("\(name).png")
+        try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: filePath))
+    }
+
+    /// Wait for any element with the given accessibility identifier to appear.
+    /// Use this instead of sleep() to wait for content to load.
+    private func waitForElement(id: String, timeout: TimeInterval = 10, description: String? = nil) {
+        let predicate = NSPredicate(format: "identifier == %@", id)
+        let query = app.descendants(matching: .any).matching(predicate).firstMatch
+        let desc = description ?? "Element '\(id)'"
+        XCTAssertTrue(
+            query.waitForExistence(timeout: timeout),
+            "\(desc) not found within \(Int(timeout))s"
+        )
+    }
+
+    // MARK: - App Store Screenshot Flow
+
+    func testGenerateAppStoreScreenshots() throws {
+{{SCREENSHOT_CALLS}}    }
+}
+
+// MARK: - Tips
+//
+// Reliable element targeting — use accessibility identifiers:
+//   In SwiftUI:   .accessibilityIdentifier("myButton")
+//   In UIKit:     view.accessibilityIdentifier = "myButton"
+//   In XCUITest:  app.buttons["myButton"].tap()
+//
+// Wait for elements before tapping:
+//   let el = app.buttons["Submit"]
+//   XCTAssertTrue(el.waitForExistence(timeout: 5))
+//   el.tap()
+//
+// Common interactions:
+//   app.scrollViews.firstMatch.swipeUp()          // scroll down
+//   app.swipeDown()                               // dismiss sheet
+//   app.navigationBars.buttons.firstMatch.tap()   // back button
+//   app.searchFields.firstMatch.tap()
+//   app.typeText("search query")
+//
+// Screenshot mode — app setup (in app init or root .task):
+//   if ProcessInfo.processInfo.arguments.contains("--uitesting") {
+//       subscriptionService.isSubscribed = true
+//       UIView.setAnimationsEnabled(false)
+//   }
+//
+// Guard StoreKit / entitlement checks — wrap just the specific call, not the whole function.
+// Using guard...return at the top of a function is dangerous: it silently skips everything
+// below it, including state setup like isInitialized = true.
+//   if !ProcessInfo.processInfo.arguments.contains("--uitesting") {
+//       checkEntitlements()
+//   }

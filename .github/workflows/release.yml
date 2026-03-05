@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal binary
+        run: |
+          swift build -c release --arch arm64 --arch x86_64
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp .build/release/storescreens-cli dist/storescreens
+          chmod +x dist/storescreens
+          cd dist
+          tar czf storescreens-${{ github.ref_name }}-macos.tar.gz storescreens
+          shasum -a 256 storescreens-${{ github.ref_name }}-macos.tar.gz > sha256.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/storescreens-${{ github.ref_name }}-macos.tar.gz
+            dist/sha256.txt
+          generate_release_notes: true
