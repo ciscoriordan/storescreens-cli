@@ -65,7 +65,33 @@ final class ScreenshotTests: XCTestCase {
 
     // MARK: - Helpers
 
+    /// Check if a screenshot should be captured based on the --only filter.
+    /// Returns true if no filter file exists (capture all) or if the name matches any filter prefix.
+    private func shouldCapture(named name: String) -> Bool {
+        let hostHome = ProcessInfo.processInfo.environment["SIMULATOR_HOST_HOME"]
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? NSHomeDirectory()
+        let filterPath = (hostHome as NSString)
+            .appendingPathComponent(".storescreens-cache/screenshot-filter.txt")
+
+        guard let filterContent = try? String(contentsOfFile: filterPath, encoding: .utf8) else {
+            return true // No filter file = capture all
+        }
+
+        let prefixes = filterContent.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        if prefixes.isEmpty { return true }
+
+        return prefixes.contains { name.hasPrefix($0) || name.contains($0) }
+    }
+
     private func takeScreenshot(named name: String) {
+        guard shouldCapture(named: name) else {
+            print("[⏭️] \(name) (skipped by --only filter)")
+            return
+        }
         print("[📸] \(name)")
         let screenshot = XCUIScreen.main.screenshot()
 

@@ -50,6 +50,9 @@ struct CaptureCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Show verbose xcodebuild output.")
     var verbose: Bool = false
 
+    @Option(name: .long, help: "Only capture screenshots matching these prefixes (comma-separated). Example: --only 14,18")
+    var only: String?
+
     @Flag(name: .long, help: "Skip the post-capture upload prompt.")
     var noUpload: Bool = false
 
@@ -114,6 +117,19 @@ struct CaptureCommand: AsyncParsableCommand {
             }
         }
 
+        // Write screenshot filter file if --only was passed, or clean it up if not
+        let filterFile = Self.screenshotFilterFile
+        if let only {
+            let prefixes = only.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let filterDir = (filterFile as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: filterDir, withIntermediateDirectories: true)
+            try prefixes.joined(separator: "\n").write(toFile: filterFile, atomically: true, encoding: .utf8)
+            logger.log("Screenshot filter: only capturing names matching \(prefixes.joined(separator: ", "))", level: .info)
+        } else {
+            try? FileManager.default.removeItem(atPath: filterFile)
+        }
+        defer { try? FileManager.default.removeItem(atPath: filterFile) }
+
         let result: CaptureResult
         switch mode {
         case .xctest:
@@ -142,6 +158,13 @@ struct CaptureCommand: AsyncParsableCommand {
     /// Must match the path read by ScreenshotTests.swift.template (~/.storescreens-cache-dir).
     private static let breadcrumbFile = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".storescreens-cache-dir")
+
+    /// Filter file for --only flag. Contains one prefix per line.
+    /// Test code reads this via SIMULATOR_HOST_HOME to skip non-matching screenshots.
+    private static let screenshotFilterFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".storescreens-cache")
+        .appendingPathComponent("screenshot-filter.txt")
+        .path
 
     /// ANSI color codes cycled per device for distinguishing log output.
     private static let deviceColors = [36, 35, 33, 32] // cyan, magenta, yellow, green

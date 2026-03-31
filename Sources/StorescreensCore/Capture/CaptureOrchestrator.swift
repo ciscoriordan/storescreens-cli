@@ -40,6 +40,13 @@ package struct CaptureResult: Sendable {
 package struct CaptureOrchestrator: Sendable {
     package init() {}
 
+    /// Filter file for --only flag. Contains one prefix per line.
+    /// Test code reads this via SIMULATOR_HOST_HOME to skip non-matching screenshots.
+    package static let screenshotFilterFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".storescreens-cache")
+        .appendingPathComponent("screenshot-filter.txt")
+        .path
+
     package func run(
         config: CaptureConfig,
         mode: CaptureMode = .xctest,
@@ -47,8 +54,21 @@ package struct CaptureOrchestrator: Sendable {
         noParallel: Bool = false,
         retries: Int = 0,
         keepAlive: Bool = false,
+        only: String? = nil,
         eventHandler: @escaping CaptureEventHandler
     ) async throws -> CaptureResult {
+        // Write screenshot filter file if --only was passed, or clean it up if not
+        let filterFile = Self.screenshotFilterFile
+        if let only {
+            let prefixes = only.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let filterDir = (filterFile as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: filterDir, withIntermediateDirectories: true)
+            try? prefixes.joined(separator: "\n").write(toFile: filterFile, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(atPath: filterFile)
+        }
+        defer { try? FileManager.default.removeItem(atPath: filterFile) }
+
         switch mode {
         case .xctest:
             return try await captureXCTest(

@@ -427,6 +427,7 @@ Useful if you don't have UI tests and just want a quick capture of your launch s
 | `--retries N` | Retry failed test runs per device |
 | `--keep-alive` | Keep simulators running after capture |
 | `--xcresult` | Extract screenshots from `.xcresult` bundle instead of filesystem |
+| `--only PREFIXES` | Only capture screenshots matching these prefixes (comma-separated) |
 | `--skip-check` | Skip preflight source code check |
 | `--verbose` | Stream full xcodebuild output to terminal (logs are always saved to `logs/`) |
 
@@ -714,6 +715,20 @@ When `locales` is set in your config:
 
 - **XCTest mode**: passes `-testLanguage` and `-testRegion` to `xcodebuild`, so your app launches in the target language without modifying simulator settings.
 - **Simple mode**: modifies the simulator's language preferences and reboots before capturing.
+
+## Filtering Screenshots
+
+Use `--only` to capture a subset of screenshots without modifying your test code. Pass a comma-separated list of prefixes - only screenshots whose names match will be captured:
+
+```bash
+# Only capture screenshots starting with "14" or "18"
+storescreens capture --only 14,18
+
+# More specific prefixes
+storescreens capture --only 14_ca_indian,18_tx_military
+```
+
+The filter works by writing a filter file that the test reads at runtime. Navigation still runs for all screenshots (maintaining test state), but `takeScreenshot` returns early for non-matching names. The filter file is automatically cleaned up after capture completes.
 
 ## Retries
 
