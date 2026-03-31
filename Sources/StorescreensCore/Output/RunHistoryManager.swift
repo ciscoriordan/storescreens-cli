@@ -99,25 +99,9 @@ package struct RunHistoryManager {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(atPath: src) else { return }
 
-        // A leaf directory is a device-size dir that contains only screenshots (.png) and
-        // no subdirectories. The staging root contains both app_icon.png AND subdirs
-        // (e.g. iPhone_6.9/, logs/), so it must NOT be treated as a leaf.
-        let containsPNG = items.contains { $0.hasSuffix(".png") }
-        let containsSubdirs = items.contains {
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: (src as NSString).appendingPathComponent($0), isDirectory: &isDir)
-            return isDir.boolValue
-        }
-        let isLeaf = containsPNG && !containsSubdirs
-
-        if isLeaf {
-            // Replace the whole device-size directory atomically.
-            try? fm.removeItem(atPath: dst)
-            try fm.moveItem(atPath: src, toPath: dst)
-            return
-        }
-
-        // Intermediate directory — ensure destination exists, then recurse.
+        // Ensure destination exists, then merge individual items.
+        // Never remove the whole destination directory - other devices'
+        // screenshots may already be there from a previous run.
         if !fm.fileExists(atPath: dst) {
             try fm.createDirectory(atPath: dst, withIntermediateDirectories: true)
         }
@@ -130,7 +114,7 @@ package struct RunHistoryManager {
             if isDir.boolValue {
                 try mergeDirectory(from: srcItem, into: dstItem)
             } else {
-                // Plain file — overwrite.
+                // Plain file - overwrite only this file, leave others untouched.
                 try? fm.removeItem(atPath: dstItem)
                 try fm.moveItem(atPath: srcItem, toPath: dstItem)
             }
