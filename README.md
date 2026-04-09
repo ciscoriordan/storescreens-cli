@@ -1,6 +1,6 @@
 # storescreens
 
-Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel, organizes the output by device and locale, and auto-detects which App Store size each simulator maps to.
+Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
 > **Using an AI coding assistant?** The [storescreens-skill](https://github.com/storescreens/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
 
@@ -488,6 +488,7 @@ Available Simulators
 |------|-------------|
 | `--all` | Show all simulators, including non-App Store sizes |
 | `--include-watch` | Include Apple Watch simulators |
+| `--include-mac` | Show Mac App Store screenshot sizes |
 | `--json` | Machine-readable output |
 
 ### `storescreens screenshot`
@@ -525,8 +526,11 @@ devices:
   - simulator: "iPhone 17 Pro Max"
   - simulator: "iPhone 17 Pro"
   - simulator: "iPad Pro 13-inch (M5)"
+  # macOS devices run tests natively (no simulator)
+  # - simulator: "Mac 2560x1600"
+  #   platform: macOS
 
-# Multiple locales (optional) — runs the full capture once per locale
+# Multiple locales (optional) - runs the full capture once per locale
 # locales:
 #   - en-US
 #   - ja
@@ -558,8 +562,11 @@ devices:
   - simulator: "iPhone 17 Pro Max"
   - simulator: "iPhone 17 Pro"
   - simulator: "iPad Pro 13-inch (M5)"
+  # macOS: tests run natively, no simulator needed
+  # - simulator: "Mac 2560x1600"
+  #   platform: macOS
 
-# Locales — runs full capture once per locale
+# Locales - runs full capture once per locale
 locales:
   - en-US
   - ja
@@ -579,7 +586,7 @@ output_dir: "./storescreens-output"
 test_target: MyAppUITests
 test_class: ScreenshotTests
 
-# Simple mode: launch arguments
+# Simple mode: launch arguments (not supported for macOS devices)
 # launch_arguments:
 #   - "--uitesting"
 #   - "--reset-state"
@@ -619,6 +626,37 @@ storescreens labels devices by physical screen dimension (6.9", 6.3", etc.). Her
 **² 6.5" (1242×2688)** is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it — only these older simulators do.
 
 **³ Older iPad slots** (12.9" 2nd Gen, 10.5", 9.7") require older simulator runtimes that may not be installed. Most apps only need the 13" slot.
+
+### Mac App Store
+
+macOS apps don't use simulators. XCUITests run natively on the Mac. Add macOS devices to your config with `platform: macOS`:
+
+```yaml
+devices:
+  - simulator: "Mac 2560x1600"
+    platform: macOS
+```
+
+| Mac App Store slot | storescreens size | Notes |
+|--------------------|-------------------|-------|
+| 2880x1800 | **Mac 2880x1800** | 15" Retina (MacBook Pro 15") |
+| 2560x1600 | **Mac 2560x1600** | 13" Retina (MacBook Pro 13", Air M1+) |
+| 1440x900 | **Mac 1440x900** | Non-Retina |
+| 1280x800 | **Mac 1280x800** | Minimum required |
+
+macOS XCUITests set the app window size in test code before capturing. Your test should resize the window to the target screenshot dimensions. Example:
+
+```swift
+// In your ScreenshotTests.swift for macOS
+let app = XCUIApplication()
+app.launch()
+
+// Resize the window to match the target screenshot size
+let window = app.windows.firstMatch
+window.frame = CGRect(x: 0, y: 0, width: 1280, height: 800)
+```
+
+Use `storescreens list --include-mac` to see available Mac App Store sizes.
 
 References:
 - [Apple: Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/)

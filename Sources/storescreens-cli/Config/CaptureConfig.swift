@@ -73,4 +73,15 @@ struct CaptureConfig: Codable {
 struct DeviceConfig: Codable, Sendable {
     var simulator: String
     var size: String?
+    /// Platform for this device: "iOS" (default) or "macOS".
+    /// When "macOS", tests run natively on the Mac instead of in a simulator.
+    var platform: String?
+
+    var isMacOS: Bool {
+        platform?.lowercased() == "macos"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case simulator, size, platform
+    }
 }

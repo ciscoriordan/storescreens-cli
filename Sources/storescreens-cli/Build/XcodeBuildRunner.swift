@@ -15,13 +15,14 @@ actor XcodeBuildRunner {
         self.logDir = dir
     }
 
-    /// Build for testing — produces a .xctestrun file.
+    /// Build for testing - produces a .xctestrun file.
     /// Returns the path to the .xctestrun file.
     func buildForTesting(
         project: String?,
         workspace: String?,
         scheme: String,
-        derivedDataPath: String
+        derivedDataPath: String,
+        isMacOS: Bool = false
     ) async throws -> String {
         var args = ["build-for-testing"]
         if let workspace {
@@ -29,14 +30,22 @@ actor XcodeBuildRunner {
         } else if let project {
             args += ["-project", project]
         }
-        args += [
-            "-scheme", scheme,
-            "-derivedDataPath", derivedDataPath,
-            "-destination", "generic/platform=iOS Simulator",
-            "CODE_SIGNING_ALLOWED=NO",
-            "ONLY_ACTIVE_ARCH=YES",
-            "EXCLUDED_ARCHS=x86_64",
-        ]
+        if isMacOS {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=macOS,arch=arm64",
+            ]
+        } else {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "generic/platform=iOS Simulator",
+                "CODE_SIGNING_ALLOWED=NO",
+                "ONLY_ACTIVE_ARCH=YES",
+                "EXCLUDED_ARCHS=x86_64",
+            ]
+        }
 
         let result = try await shell.xcodebuild(arguments: args)
         if verbose {
@@ -50,7 +59,7 @@ actor XcodeBuildRunner {
         return try findXCTestRun(in: derivedDataPath)
     }
 
-    /// Run tests without building on a specific simulator.
+    /// Run tests without building on a specific simulator (or natively for macOS).
     /// Returns the path to the .xcresult bundle.
     func testWithoutBuilding(
         xctestrunPath: String,
@@ -59,12 +68,16 @@ actor XcodeBuildRunner {
         testTarget: String? = nil,
         testClass: String? = nil,
         testLanguage: String? = nil,
-        testRegion: String? = nil
+        testRegion: String? = nil,
+        isMacOS: Bool = false
     ) async throws -> String {
+        let destination = isMacOS
+            ? "platform=macOS,arch=arm64"
+            : "platform=iOS Simulator,id=\(destinationUDID)"
         var args = [
             "test-without-building",
             "-xctestrun", xctestrunPath,
-            "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
+            "-destination", destination,
             "-resultBundlePath", resultBundlePath,
             "-parallel-testing-enabled", "NO",
         ]
@@ -258,17 +271,26 @@ actor XcodeBuildRunner {
     }
 
     func findAppBundle(in derivedDataPath: String) throws -> String {
-        let debugDir = (derivedDataPath as NSString)
-            .appendingPathComponent("Build/Products/Debug-iphonesimulator")
         let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(atPath: debugDir) else {
-            throw CLIError.buildFailed(output: "No build products found")
+        // Check iOS simulator products first, then macOS
+        let searchDirs = [
+            (derivedDataPath as NSString).appendingPathComponent("Build/Products/Debug-iphonesimulator"),
+            (derivedDataPath as NSString).appendingPathComponent("Build/Products/Debug"),
+        ]
+
+        for debugDir in searchDirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: debugDir) else {
+                continue
+            }
+
+            let appBundles = contents.filter { $0.hasSuffix(".app") }
+            let app = appBundles.first(where: { !$0.contains("UITests") && !$0.contains("-Runner") })
+                    ?? appBundles.first
+            if let app {
+                return (debugDir as NSString).appendingPathComponent(app)
+            }
         }
 
-        guard let app = contents.first(where: { $0.hasSuffix(".app") }) else {
-            throw CLIError.buildFailed(output: "No .app bundle found in build products")
-        }
-
-        return (debugDir as NSString).appendingPathComponent(app)
+        throw CLIError.buildFailed(output: "No .app bundle found in build products")
     }
 }

@@ -13,7 +13,7 @@ struct StoreScreensCLI: AsyncParsableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "storescreens",
-        abstract: "Capture iOS simulator screenshots for the App Store.",
+        abstract: "Capture App Store screenshots across iOS simulators and macOS.",
         version: storescreensVersion,
         subcommands: [ListCommand.self, InitCommand.self, SetupCommand.self, CaptureCommand.self, CheckCommand.self, ScreenshotCommand.self]
     )

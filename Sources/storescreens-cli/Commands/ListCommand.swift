@@ -16,6 +16,9 @@ struct ListCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Include Apple Watch simulators.")
     var includeWatch: Bool = false
 
+    @Flag(name: .long, help: "Show Mac App Store screenshot sizes.")
+    var includeMac: Bool = false
+
     func run() async throws {
         let manager = SimulatorManager()
         let devices = try await manager.listAvailableDevices()
@@ -44,7 +47,7 @@ struct ListCommand: AsyncParsableCommand {
             }
         }
 
-        if filtered.isEmpty {
+        if filtered.isEmpty && !includeMac {
             logger.log("No simulators found.", level: .warning)
             return
         }
@@ -69,6 +72,28 @@ struct ListCommand: AsyncParsableCommand {
 
         let mapped = filtered.filter { sizeMap[$0.udid] != nil }
         print("\n  \(mapped.count) of \(filtered.count) devices map to App Store sizes.")
+
+        if includeMac {
+            print("")
+            logger.header("Mac App Store Screenshot Sizes")
+            print("  macOS apps don't use simulators. Add these to storescreens.yml with platform: macOS.")
+            print("")
+            let macSizes = [
+                ("Mac 2880x1800", "15\" Retina (MacBook Pro 15\")"),
+                ("Mac 2560x1600", "13\" Retina (MacBook Pro 13\", Air M1+)"),
+                ("Mac 1440x900",  "Non-Retina"),
+                ("Mac 1280x800",  "Minimum required"),
+            ]
+            print("  \(String(format: "%-20s  %s", "Size", "Description"))")
+            print("  " + String(repeating: "─", count: 50))
+            for (name, desc) in macSizes {
+                print("  \(String(format: "%-20s  %s", name, desc))")
+            }
+            print("")
+            print("  Example storescreens.yml entry:")
+            print("    - simulator: \"Mac 2560x1600\"")
+            print("      platform: macOS")
+        }
     }
 
     private func printJSON(_ devices: [SimulatorDevice], sizeMap: [String: AppStoreScreenSize]) throws {

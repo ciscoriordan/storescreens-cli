@@ -98,6 +98,17 @@ package struct CaptureOrchestrator: Sendable {
 
     package static let deviceColors = [36, 35, 33, 32] // cyan, magenta, yellow, green
 
+    /// Human-readable name for a product family ID.
+    package static func familyDisplayName(_ family: Int) -> String {
+        switch family {
+        case 1: return "iPhone"
+        case 2: return "iPad"
+        case 4: return "Apple Watch"
+        case 6: return "Mac"
+        default: return "family \(family)"
+        }
+    }
+
     // MARK: - XCTest Mode
 
     private func captureXCTest(
@@ -155,17 +166,20 @@ package struct CaptureOrchestrator: Sendable {
         // 1b. Check that the app's Supported Destinations match the configured devices.
         // xcodebuild silently uses an iPhone clone when the app doesn't support iPad,
         // producing 0 screenshots. Detect this early and surface it to the caller.
+        // Skip this check for macOS devices (TARGETED_DEVICE_FAMILY doesn't apply).
+        let nonMacDevices = resolvedDevices.filter { !$0.isMacOS }
         let detector = ProjectDetector()
-        if let supportedFamilies = await detector.detectTargetedDeviceFamilies(
+        if !nonMacDevices.isEmpty,
+           let supportedFamilies = await detector.detectTargetedDeviceFamilies(
             project: config.project, workspace: config.workspace, scheme: config.scheme
         ) {
             var unsupportedDevices: [String] = []
-            for device in resolvedDevices {
+            for device in nonMacDevices {
                 let family = device.appStoreSize.productFamily
                 if !supportedFamilies.contains(family) {
-                    let familyName = family == 2 ? "iPad" : (family == 1 ? "iPhone" : "family \(family)")
+                    let familyName = Self.familyDisplayName(family)
                     let supportedNames = supportedFamilies
-                        .map { $0 == 2 ? "iPad" : ($0 == 1 ? "iPhone" : "family \($0)") }
+                        .map { Self.familyDisplayName($0) }
                         .joined(separator: "+")
                     let message = "\(device.simulatorName): app only supports \(supportedNames) " +
                         "(TARGETED_DEVICE_FAMILY=\(supportedFamilies.map(String.init).joined(separator: ","))). " +
@@ -186,8 +200,8 @@ package struct CaptureOrchestrator: Sendable {
             }
         }
 
-        // Clean up stale xcodebuild simulator clones from previous runs
-        for device in resolvedDevices {
+        // Clean up stale xcodebuild simulator clones from previous runs (iOS/iPadOS only)
+        for device in resolvedDevices where !device.isMacOS {
             try? await simulatorManager.deleteClonesOf(name: device.simulatorName, keepUDID: device.udid)
         }
 
@@ -395,17 +409,22 @@ package struct CaptureOrchestrator: Sendable {
         )
         let simulatorManager = SimulatorManager()
 
-        await logLine("Booting simulator for configuration...")
-        try await simulatorManager.boot(device.udid)
+        // macOS tests run natively - skip all simulator setup
+        if !device.isMacOS {
+            await logLine("Booting simulator for configuration...")
+            try await simulatorManager.boot(device.udid)
 
-        try await simulatorManager.setAppearance(appearance, udid: device.udid)
-        await logLine("Set appearance: \(appearance)")
+            try await simulatorManager.setAppearance(appearance, udid: device.udid)
+            await logLine("Set appearance: \(appearance)")
 
-        if config.statusBar != false {
-            let defaultArgs = "--time 9:41 --dataNetwork lte --cellularMode active --cellularBars 4 --batteryState charging --batteryLevel 90 --operatorName TELUS"
-            let statusBarArgs = config.statusBarArguments ?? defaultArgs
-            try await simulatorManager.overrideStatusBar(device.udid, arguments: statusBarArgs)
-            await logLine("Status bar configured")
+            if config.statusBar != false {
+                let defaultArgs = "--time 9:41 --dataNetwork lte --cellularMode active --cellularBars 4 --batteryState charging --batteryLevel 90 --operatorName TELUS"
+                let statusBarArgs = config.statusBarArguments ?? defaultArgs
+                try await simulatorManager.overrideStatusBar(device.udid, arguments: statusBarArgs)
+                await logLine("Status bar configured")
+            }
+        } else {
+            await logLine("macOS target - running tests natively...")
         }
 
         // Device-specific screenshot subdir avoids conflicts during parallel runs
@@ -501,12 +520,13 @@ package struct CaptureOrchestrator: Sendable {
                 testClass: testClass,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
+                isMacOS: device.isMacOS,
                 liveLineHandler: liveHandler
             )
             // Discard warmup screenshots so the real run starts with a clean slate
             try? FileManager.default.removeItem(at: deviceScreenshotsDir)
             try? FileManager.default.createDirectory(at: deviceScreenshotsDir, withIntermediateDirectories: true)
-            await logLine("Warmup run complete — starting real capture...")
+            await logLine("Warmup run complete - starting real capture...")
         }
 
         try await withRetries(retries, label: device.simulatorName, logLine: logLine) {
@@ -522,6 +542,7 @@ package struct CaptureOrchestrator: Sendable {
                 testClass: testClass,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
+                isMacOS: device.isMacOS,
                 liveLineHandler: liveHandler
             )
         }
@@ -868,12 +889,17 @@ package struct CaptureOrchestrator: Sendable {
         let productsDir = (derivedDataPath as NSString).appendingPathComponent("Build/Products")
         guard fm.fileExists(atPath: productsDir) else { return false }
 
-        // Look for the test runner .app in Debug-iphonesimulator
-        let debugDir = (productsDir as NSString).appendingPathComponent("Debug-iphonesimulator")
+        // Look for the test runner .app in Debug-iphonesimulator or Debug (macOS)
         let runnerName = "\(testTarget)-Runner.app"
-        let runnerPath = (debugDir as NSString).appendingPathComponent(runnerName)
+        let searchDirs = [
+            (productsDir as NSString).appendingPathComponent("Debug-iphonesimulator"),
+            (productsDir as NSString).appendingPathComponent("Debug"),
+        ]
+        let runnerPath = searchDirs
+            .map { ($0 as NSString).appendingPathComponent(runnerName) }
+            .first { fm.fileExists(atPath: $0) }
 
-        guard fm.fileExists(atPath: runnerPath) else { return false }
+        guard let runnerPath, fm.fileExists(atPath: runnerPath) else { return false }
 
         // Find the newest file in the runner bundle
         guard let runnerMtime = newestFileDate(inDirectory: runnerPath) else { return false }

@@ -75,7 +75,7 @@ struct CheckCommand: AsyncParsableCommand {
         }
         let hasIPhone = config.devices.contains {
             let name = $0.simulator.lowercased()
-            return !name.contains("ipad") && !name.contains("watch")
+            return !name.contains("ipad") && !name.contains("watch") && !$0.isMacOS
         }
         let hasMultipleLocales = (config.locales?.count ?? 0) > 1
         return PreflightScanner.DeviceContext(hasIPad: hasIPad, hasIPhone: hasIPhone, hasMultipleLocales: hasMultipleLocales)

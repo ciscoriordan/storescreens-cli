@@ -28,6 +28,16 @@ package enum CLIError: LocalizedError {
     case noBootedSimulator
     case simulatorNotBooted(name: String)
 
+    private func familyName(_ id: Int) -> String {
+        switch id {
+        case 1: return "iPhone"
+        case 2: return "iPad"
+        case 4: return "Apple Watch"
+        case 6: return "Mac"
+        default: return "family \(id)"
+        }
+    }
+
     package var errorDescription: String? {
         switch self {
         case .xcrunFailed(let msg):
@@ -81,9 +91,9 @@ package enum CLIError: LocalizedError {
         case .simulatorNotBooted(let name):
             return "Simulator '\(name)' is not booted. Pass --boot to boot it automatically."
         case .unsupportedDestinations(let devices, let families):
-            let familyNames = families.map { $0 == 2 ? "iPad" : ($0 == 1 ? "iPhone" : "family \($0)") }.joined(separator: "+")
+            let familyNames = families.map { familyName($0) }.joined(separator: "+")
             let deviceList = devices.joined(separator: ", ")
-            return "unsupported-destination: \(deviceList) — app only supports \(familyNames). Remove these devices from storescreens.yml, or add the missing device family in Xcode (General → Supported Destinations)."
+            return "unsupported-destination: \(deviceList) - app only supports \(familyNames). Remove these devices from storescreens.yml, or add the missing device family in Xcode (General -> Supported Destinations)."
         }
     }
 }

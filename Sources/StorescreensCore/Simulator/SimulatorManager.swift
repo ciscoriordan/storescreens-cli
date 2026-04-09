@@ -52,8 +52,8 @@ package actor SimulatorManager {
         guard let info = profiles[device.deviceTypeIdentifier] else {
             return nil
         }
-        // Only support iPhone (1) and iPad (2) for App Store screenshots
-        guard info.productFamily == 1 || info.productFamily == 2 || info.productFamily == 4 else {
+        // Support iPhone (1), iPad (2), Watch (4), and Mac (6) for App Store screenshots
+        guard info.productFamily == 1 || info.productFamily == 2 || info.productFamily == 4 || info.productFamily == 6 else {
             return nil
         }
         return AppStoreScreenSize(
@@ -131,34 +131,75 @@ package actor SimulatorManager {
     }
 
     package func resolveDevices(_ configs: [DeviceConfig]) async throws -> [ResolvedDevice] {
-        let allDevices = try await listAvailableDevices()
-        let profiles = try await loadDeviceTypeProfiles()
+        // Separate macOS devices (native) from simulator devices
+        let simulatorConfigs = configs.filter { !$0.isMacOS }
+        let macConfigs = configs.filter { $0.isMacOS }
 
-        return try configs.map { config in
-            guard let device = allDevices.first(where: { $0.name == config.simulator }) else {
-                throw CLIError.simulatorNotFound(name: config.simulator)
+        var resolved: [ResolvedDevice] = []
+
+        // Resolve simulator-based devices (iOS, iPadOS, watchOS)
+        if !simulatorConfigs.isEmpty {
+            let allDevices = try await listAvailableDevices()
+            let profiles = try await loadDeviceTypeProfiles()
+
+            for config in simulatorConfigs {
+                guard let device = allDevices.first(where: { $0.name == config.simulator }) else {
+                    throw CLIError.simulatorNotFound(name: config.simulator)
+                }
+
+                let size: AppStoreScreenSize
+                if let info = profiles[device.deviceTypeIdentifier],
+                   (info.productFamily == 1 || info.productFamily == 2 || info.productFamily == 4) {
+                    size = AppStoreScreenSize(
+                        width: info.width,
+                        height: info.height,
+                        productFamily: info.productFamily
+                    )
+                } else {
+                    throw CLIError.noMatchingDeviceSize(simulatorName: config.simulator)
+                }
+
+                resolved.append(ResolvedDevice(
+                    simulatorName: device.name,
+                    udid: device.udid,
+                    deviceTypeIdentifier: device.deviceTypeIdentifier,
+                    appStoreSize: size,
+                    isMacOS: false
+                ))
             }
-
-            let size: AppStoreScreenSize
-            if let info = profiles[device.deviceTypeIdentifier],
-               (info.productFamily == 1 || info.productFamily == 2 || info.productFamily == 4) {
-                // Auto-detected from screen dimensions
-                size = AppStoreScreenSize(
-                    width: info.width,
-                    height: info.height,
-                    productFamily: info.productFamily
-                )
-            } else {
-                throw CLIError.noMatchingDeviceSize(simulatorName: config.simulator)
-            }
-
-            return ResolvedDevice(
-                simulatorName: device.name,
-                udid: device.udid,
-                deviceTypeIdentifier: device.deviceTypeIdentifier,
-                appStoreSize: size
-            )
         }
+
+        // Resolve macOS devices (native, no simulator)
+        for config in macConfigs {
+            let size = Self.macScreenSize(named: config.simulator)
+            resolved.append(ResolvedDevice(
+                simulatorName: config.simulator,
+                udid: "mac-native",
+                deviceTypeIdentifier: "com.apple.platform.macosx",
+                appStoreSize: size,
+                isMacOS: true
+            ))
+        }
+
+        return resolved
+    }
+
+    /// Map a macOS device config name to its App Store screenshot size.
+    /// Mac App Store requires specific pixel dimensions for screenshots.
+    private static func macScreenSize(named name: String) -> AppStoreScreenSize {
+        // Parse explicit dimensions from the name, e.g. "Mac 2560x1600"
+        let lowered = name.lowercased()
+        if lowered.contains("2880x1800") || lowered.contains("2880") {
+            return AppStoreScreenSize(width: 2880, height: 1800, productFamily: 6)
+        } else if lowered.contains("2560x1600") || lowered.contains("2560") {
+            return AppStoreScreenSize(width: 2560, height: 1600, productFamily: 6)
+        } else if lowered.contains("1440x900") || lowered.contains("1440") {
+            return AppStoreScreenSize(width: 1440, height: 900, productFamily: 6)
+        } else if lowered.contains("1280x800") || lowered.contains("1280") {
+            return AppStoreScreenSize(width: 1280, height: 800, productFamily: 6)
+        }
+        // Default to Retina 13" (most common Mac App Store size)
+        return AppStoreScreenSize(width: 2560, height: 1600, productFamily: 6)
     }
 
     /// Erase the simulator to restore a clean state.

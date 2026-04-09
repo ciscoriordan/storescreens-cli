@@ -37,12 +37,14 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
     package var isIPhone: Bool { productFamily == 1 }
     package var isIPad: Bool { productFamily == 2 }
     package var isAppleWatch: Bool { productFamily == 4 }
+    package var isMac: Bool { productFamily == 6 }
 
     private var familyPrefix: String {
         switch productFamily {
         case 1: return "iPhone"
         case 2: return "iPad"
         case 4: return "Apple Watch"
+        case 6: return "Mac"
         default: return "Device"
         }
     }
@@ -89,6 +91,11 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
         "4-324x394":  "Apple Watch 40mm",          // Series 4-6, SE (small)
         "4-312x390":  "Apple Watch 42mm (S3)",     // Series 2, 3
         "4-272x340":  "Apple Watch 38mm",          // Series 2, 3 (small)
+        // Mac (App Store Connect screenshot sizes)
+        "6-2880x1800": "Mac 2880x1800",            // 15" Retina (MacBook Pro 15")
+        "6-2560x1600": "Mac 2560x1600",            // Retina (MacBook Pro 13", Air 13" M1+)
+        "6-1440x900":  "Mac 1440x900",             // Non-Retina
+        "6-1280x800":  "Mac 1280x800",             // Minimum required
     ]
 }
 

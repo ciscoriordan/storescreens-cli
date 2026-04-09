@@ -43,42 +43,65 @@ struct InitCommand: AsyncParsableCommand {
         ) ?? "MyApp"
         logger.log("Detected scheme: \(detectedScheme)", level: .success)
 
-        // Check platform — must target iOS
+        // Check platform - must target iOS or macOS
         let platforms = await detector.detectSupportedPlatforms(
             project: projectPath, workspace: workspacePath, scheme: detectedScheme
         )
-        if !platforms.isEmpty && !platforms.contains(where: { $0.contains("iphone") }) {
-            logger.log("This project does not target iOS.", level: .error)
-            logger.log("storescreens requires an iOS or universal (iOS + macOS) project.", level: .info)
+        let hasIOS = platforms.isEmpty || platforms.contains(where: { $0.contains("iphone") })
+        let hasMacOS = platforms.contains(where: { $0.contains("macos") || $0.contains("macosx") })
+        if !hasIOS && !hasMacOS {
+            logger.log("This project does not target iOS or macOS.", level: .error)
+            logger.log("storescreens requires an iOS, macOS, or universal project.", level: .info)
             return
+        }
+        if hasMacOS && !hasIOS {
+            logger.log("Detected macOS-only project", level: .success)
         }
 
         // Detect deployment target so we only pick compatible simulators
-        let deploymentTarget = await detector.detectDeploymentTarget(
-            project: projectPath, workspace: workspacePath, scheme: detectedScheme
-        )
-        if let target = deploymentTarget {
-            logger.log("Detected deployment target: iOS \(target)", level: .success)
+        let deploymentTarget: String?
+        if hasIOS {
+            deploymentTarget = await detector.detectDeploymentTarget(
+                project: projectPath, workspace: workspacePath, scheme: detectedScheme
+            )
+            if let target = deploymentTarget {
+                logger.log("Detected deployment target: iOS \(target)", level: .success)
+            }
+        } else {
+            deploymentTarget = nil
         }
 
-        // Pick default devices (using screen dimensions from CoreSimulator profiles)
-        let manager = SimulatorManager()
-        let devices = try await manager.listAvailableDevices(minimumRuntime: deploymentTarget)
-        var sizeMap: [String: AppStoreScreenSize] = [:]
-        for device in devices {
-            sizeMap[device.udid] = try await manager.appStoreSize(for: device)
+        // Pick default devices
+        var deviceConfigs: [DeviceConfig] = []
+
+        if hasIOS {
+            // Pick iOS devices using screen dimensions from CoreSimulator profiles
+            let manager = SimulatorManager()
+            let devices = try await manager.listAvailableDevices(minimumRuntime: deploymentTarget)
+            var sizeMap: [String: AppStoreScreenSize] = [:]
+            for device in devices {
+                sizeMap[device.udid] = try await manager.appStoreSize(for: device)
+            }
+            let defaultDevices = pickDefaultDevices(from: devices, sizeMap: sizeMap)
+
+            // Warn about missing required App Store sizes
+            detector.warnMissingRequiredSizes(sizeMap: sizeMap, logger: logger)
+
+            deviceConfigs.append(contentsOf: defaultDevices.map { DeviceConfig(simulator: $0.name) })
         }
-        let defaultDevices = pickDefaultDevices(from: devices, sizeMap: sizeMap)
 
-        // Warn about missing required App Store sizes
-        detector.warnMissingRequiredSizes(sizeMap: sizeMap, logger: logger)
+        if hasMacOS {
+            // Add a default Mac App Store size (13" Retina)
+            deviceConfigs.append(DeviceConfig(simulator: "Mac 2560x1600", platform: "macOS"))
+            logger.log("Added Mac 2560x1600 (13\" Retina) for Mac App Store", level: .success)
+        }
 
-        logger.log("Selected \(defaultDevices.count) default devices", level: .success)
+        logger.log("Selected \(deviceConfigs.count) default device(s)", level: .success)
 
         // Build config
         var config = CaptureConfig(
             scheme: detectedScheme,
-            devices: defaultDevices.map { DeviceConfig(simulator: $0.name) },
+            devices: deviceConfigs,
             outputDir: "./storescreens-output"
         )
         if let ws = workspacePath {
@@ -104,6 +127,9 @@ struct InitCommand: AsyncParsableCommand {
         yaml += "devices:\n"
         for device in config.devices {
             yaml += "  - simulator: \"\(device.simulator)\"\n"
+            if let platform = device.platform {
+                yaml += "    platform: \(platform)\n"
+            }
         }
 
         yaml += "\n# Optional: capture in multiple locales\n"

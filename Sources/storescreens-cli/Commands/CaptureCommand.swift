@@ -5,7 +5,7 @@ import Foundation
 struct CaptureCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "capture",
-        abstract: "Capture screenshots from iOS simulators."
+        abstract: "Capture screenshots from iOS simulators and macOS."
     )
 
     @Option(name: .shortAndLong, help: "Capture mode: 'xctest' (default) or 'simple'.")
@@ -256,14 +256,33 @@ struct CaptureCommand: AsyncParsableCommand {
         // Build once before running tests on any device.
         // This ensures source changes are compiled exactly once and all devices
         // use the same build products (avoids race conditions with parallel xcodebuild test).
-        logger.header("Building for testing...")
-        let xctestrunPath = try await buildRunner.buildForTesting(
-            project: config.project,
-            workspace: config.workspace,
-            scheme: config.scheme,
-            derivedDataPath: derivedData
-        )
-        logger.log("Build complete", level: .success)
+        let hasMacDevices = resolvedDevices.contains { $0.isMacOS }
+        let hasIOSDevices = resolvedDevices.contains { !$0.isMacOS }
+
+        var xctestrunPath = ""
+        if hasIOSDevices {
+            logger.header("Building for testing (iOS)...")
+            xctestrunPath = try await buildRunner.buildForTesting(
+                project: config.project,
+                workspace: config.workspace,
+                scheme: config.scheme,
+                derivedDataPath: derivedData,
+                isMacOS: false
+            )
+            logger.log("iOS build complete", level: .success)
+        }
+        if hasMacDevices {
+            logger.header("Building for testing (macOS)...")
+            let macXctestrunPath = try await buildRunner.buildForTesting(
+                project: config.project,
+                workspace: config.workspace,
+                scheme: config.scheme,
+                derivedDataPath: derivedData,
+                isMacOS: true
+            )
+            if xctestrunPath.isEmpty { xctestrunPath = macXctestrunPath }
+            logger.log("macOS build complete", level: .success)
+        }
 
         do {
             for currentLocale in locales {
@@ -487,12 +506,13 @@ struct CaptureCommand: AsyncParsableCommand {
                 testTarget: testTarget,
                 testClass: testClass,
                 testLanguage: testLanguage,
-                testRegion: testRegion
+                testRegion: testRegion,
+                isMacOS: device.isMacOS
             )
             // Discard warmup screenshots so the real run starts with a clean slate
             try? FileManager.default.removeItem(at: deviceScreenshotsDir)
             try? FileManager.default.createDirectory(at: deviceScreenshotsDir, withIntermediateDirectories: true)
-            logLine("Warmup run complete — starting real capture...")
+            logLine("Warmup run complete - starting real capture...")
         }
 
         try await withRetries(retries, label: device.simulatorName, logLine: logLine) {
@@ -504,7 +524,8 @@ struct CaptureCommand: AsyncParsableCommand {
                 testTarget: testTarget,
                 testClass: testClass,
                 testLanguage: testLanguage,
-                testRegion: testRegion
+                testRegion: testRegion,
+                isMacOS: device.isMacOS
             )
         }
         // Stop async handler, then drain any remaining buffered data synchronously.
@@ -647,10 +668,6 @@ struct CaptureCommand: AsyncParsableCommand {
             logger.log("\(device.simulatorName) -> \(device.appStoreSize.displayName)", level: .success)
         }
 
-        guard let firstDevice = resolvedDevices.first else {
-            throw CLIError.noDevicesConfigured
-        }
-
         let outputDir = (config.outputDir as NSString).expandingTildeInPath
         let historyManager = RunHistoryManager(
             outputDir: outputDir, keepRuns: config.keepRuns ?? 1, logger: logger
@@ -661,6 +678,17 @@ struct CaptureCommand: AsyncParsableCommand {
         // Set up xcodebuild log directory inside output
         let logDir = (effectiveOutputDir as NSString).appendingPathComponent("logs")
         await buildRunner.setLogDir(logDir)
+
+        // Simple mode does not support macOS devices (no simulator to install/launch into)
+        let macDevices = resolvedDevices.filter { $0.isMacOS }
+        if !macDevices.isEmpty {
+            logger.log("Simple mode does not support macOS devices. Use xctest mode instead: storescreens capture --mode xctest", level: .error)
+            logger.log("macOS devices skipped: \(macDevices.map(\.simulatorName).joined(separator: ", "))", level: .info)
+        }
+        let simulatorDevices = resolvedDevices.filter { !$0.isMacOS }
+        guard let firstDevice = simulatorDevices.first else {
+            throw CLIError.noDevicesConfigured
+        }
 
         // 2. Build
         logger.header("Building...")
@@ -699,10 +727,10 @@ struct CaptureCommand: AsyncParsableCommand {
 
                     let effectiveAppearance: String? = multipleAppearances ? currentAppearance : nil
 
-                    for (index, device) in resolvedDevices.enumerated() {
+                    for (index, device) in simulatorDevices.enumerated() {
                         let localeLabel = currentLocale.map { " [\($0)]" } ?? ""
                         let appearanceLabel = multipleAppearances ? " [\(currentAppearance)]" : ""
-                        logger.header("Capturing on \(device.simulatorName)\(localeLabel)\(appearanceLabel) [\(index + 1)/\(resolvedDevices.count)]...")
+                        logger.header("Capturing on \(device.simulatorName)\(localeLabel)\(appearanceLabel) [\(index + 1)/\(simulatorDevices.count)]...")
 
                         let devName = device.simulatorName
                         let retryLogLine: @Sendable (String) -> Void = { msg in

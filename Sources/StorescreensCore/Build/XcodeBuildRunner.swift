@@ -21,7 +21,8 @@ package actor XcodeBuildRunner {
         project: String?,
         workspace: String?,
         scheme: String,
-        derivedDataPath: String
+        derivedDataPath: String,
+        isMacOS: Bool = false
     ) async throws -> String {
         var args = ["build-for-testing"]
         if let workspace {
@@ -29,14 +30,22 @@ package actor XcodeBuildRunner {
         } else if let project {
             args += ["-project", project]
         }
-        args += [
-            "-scheme", scheme,
-            "-derivedDataPath", derivedDataPath,
-            "-destination", "generic/platform=iOS Simulator",
-            "CODE_SIGNING_ALLOWED=NO",
-            "ONLY_ACTIVE_ARCH=YES",
-            "EXCLUDED_ARCHS=x86_64",
-        ]
+        if isMacOS {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=macOS,arch=arm64",
+            ]
+        } else {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "generic/platform=iOS Simulator",
+                "CODE_SIGNING_ALLOWED=NO",
+                "ONLY_ACTIVE_ARCH=YES",
+                "EXCLUDED_ARCHS=x86_64",
+            ]
+        }
 
         let log = openStreamingLog(name: "build-for-testing")
         let result = try await shell.xcodebuild(
@@ -63,12 +72,16 @@ package actor XcodeBuildRunner {
         testTarget: String? = nil,
         testClass: String? = nil,
         testLanguage: String? = nil,
-        testRegion: String? = nil
+        testRegion: String? = nil,
+        isMacOS: Bool = false
     ) async throws -> String {
+        let destination = isMacOS
+            ? "platform=macOS,arch=arm64"
+            : "platform=iOS Simulator,id=\(destinationUDID)"
         var args = [
             "test-without-building",
             "-xctestrun", xctestrunPath,
-            "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
+            "-destination", destination,
             "-resultBundlePath", resultBundlePath,
             "-parallel-testing-enabled", "NO",
         ]
@@ -109,6 +122,7 @@ package actor XcodeBuildRunner {
     /// Build and test in a single xcodebuild invocation.
     /// Unlike build-for-testing + test-without-building, this lets XCTest clone the
     /// simulator for a clean state (no stale data, no hardware keyboard issues).
+    /// For macOS, tests run natively on the host Mac (no simulator needed).
     /// Returns the path to the .xcresult bundle.
     package func test(
         project: String?,
@@ -121,6 +135,7 @@ package actor XcodeBuildRunner {
         testClass: String? = nil,
         testLanguage: String? = nil,
         testRegion: String? = nil,
+        isMacOS: Bool = false,
         liveLineHandler: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
         var args = ["test"]
@@ -129,16 +144,26 @@ package actor XcodeBuildRunner {
         } else if let project {
             args += ["-project", project]
         }
-        args += [
-            "-scheme", scheme,
-            "-derivedDataPath", derivedDataPath,
-            "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
-            "-resultBundlePath", resultBundlePath,
-            "-parallel-testing-enabled", "NO",
-            "CODE_SIGNING_ALLOWED=NO",
-            "ONLY_ACTIVE_ARCH=YES",
-            "EXCLUDED_ARCHS=x86_64",
-        ]
+        if isMacOS {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=macOS,arch=arm64",
+                "-resultBundlePath", resultBundlePath,
+                "-parallel-testing-enabled", "NO",
+            ]
+        } else {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
+                "-resultBundlePath", resultBundlePath,
+                "-parallel-testing-enabled", "NO",
+                "CODE_SIGNING_ALLOWED=NO",
+                "ONLY_ACTIVE_ARCH=YES",
+                "EXCLUDED_ARCHS=x86_64",
+            ]
+        }
 
         if let target = testTarget, let cls = testClass {
             args += ["-only-testing", "\(target)/\(cls)"]
@@ -195,7 +220,8 @@ package actor XcodeBuildRunner {
         workspace: String?,
         scheme: String,
         destinationUDID: String,
-        derivedDataPath: String
+        derivedDataPath: String,
+        isMacOS: Bool = false
     ) async throws -> String {
         var args = ["build"]
         if let workspace {
@@ -203,12 +229,20 @@ package actor XcodeBuildRunner {
         } else if let project {
             args += ["-project", project]
         }
-        args += [
-            "-scheme", scheme,
-            "-derivedDataPath", derivedDataPath,
-            "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
-            "CODE_SIGNING_ALLOWED=NO",
-        ]
+        if isMacOS {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=macOS,arch=arm64",
+            ]
+        } else {
+            args += [
+                "-scheme", scheme,
+                "-derivedDataPath", derivedDataPath,
+                "-destination", "platform=iOS Simulator,id=\(destinationUDID)",
+                "CODE_SIGNING_ALLOWED=NO",
+            ]
+        }
 
         let log = openStreamingLog(name: "build")
         let result = try await shell.xcodebuild(
@@ -308,21 +342,27 @@ package actor XcodeBuildRunner {
     }
 
     package func findAppBundle(in derivedDataPath: String) throws -> String {
-        let debugDir = (derivedDataPath as NSString)
-            .appendingPathComponent("Build/Products/Debug-iphonesimulator")
         let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(atPath: debugDir) else {
-            throw CLIError.buildFailed(output: "No build products found")
+        // Check iOS simulator products first, then macOS
+        let searchDirs = [
+            (derivedDataPath as NSString).appendingPathComponent("Build/Products/Debug-iphonesimulator"),
+            (derivedDataPath as NSString).appendingPathComponent("Build/Products/Debug"),
+        ]
+
+        for debugDir in searchDirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: debugDir) else {
+                continue
+            }
+
+            let appBundles = contents.filter { $0.hasSuffix(".app") }
+            // Prefer bundles that aren't UITest runners (e.g. skip CCWCalcUITests-Runner.app)
+            let app = appBundles.first(where: { !$0.contains("UITests") && !$0.contains("-Runner") })
+                    ?? appBundles.first
+            if let app {
+                return (debugDir as NSString).appendingPathComponent(app)
+            }
         }
 
-        let appBundles = contents.filter { $0.hasSuffix(".app") }
-        // Prefer bundles that aren't UITest runners (e.g. skip CCWCalcUITests-Runner.app)
-        let app = appBundles.first(where: { !$0.contains("UITests") && !$0.contains("-Runner") })
-                ?? appBundles.first
-        guard let app else {
-            throw CLIError.buildFailed(output: "No .app bundle found in build products")
-        }
-
-        return (debugDir as NSString).appendingPathComponent(app)
+        throw CLIError.buildFailed(output: "No .app bundle found in build products")
     }
 }

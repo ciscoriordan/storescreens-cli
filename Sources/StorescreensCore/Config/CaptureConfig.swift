@@ -79,9 +79,21 @@ package struct CaptureConfig: Codable {
 package struct DeviceConfig: Codable, Sendable {
     package var simulator: String
     package var size: String?
+    /// Platform for this device: "iOS" (default) or "macOS".
+    /// When "macOS", tests run natively on the Mac instead of in a simulator.
+    package var platform: String?
 
-    package init(simulator: String, size: String? = nil) {
+    package init(simulator: String, size: String? = nil, platform: String? = nil) {
         self.simulator = simulator
         self.size = size
+        self.platform = platform
+    }
+
+    package var isMacOS: Bool {
+        platform?.lowercased() == "macos"
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case simulator, size, platform
     }
 }
