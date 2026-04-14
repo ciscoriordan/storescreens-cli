@@ -152,7 +152,7 @@ package struct ProjectDetector {
                              availableNames.contains("iPhone 6.7\"")
         if !hasLargeIPhone {
             logger.log(
-                "No compatible simulator for iPhone 6.7\"/6.9\" — required by App Store Connect. " +
+                "No compatible simulator for iPhone 6.7\"/6.9\" - required by App Store Connect. " +
                 "Install a simulator runtime that includes iPhone 15 Pro Max, 16 Pro Max, or 17 Pro Max.",
                 level: .error
             )
@@ -174,7 +174,7 @@ package struct ProjectDetector {
                                availableNames.contains("iPad Pro 12.9\"")
             if !hasLargeIPad {
                 logger.log(
-                    "No compatible simulator for iPad Pro 12.9\"/13\" — required by App Store Connect for iPad apps. " +
+                    "No compatible simulator for iPad Pro 12.9\"/13\" - required by App Store Connect for iPad apps. " +
                     "Install a simulator runtime that includes iPad Pro 13-inch.",
                     level: .error
                 )

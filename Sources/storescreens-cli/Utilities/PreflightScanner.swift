@@ -131,7 +131,7 @@ struct PreflightScanner {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "uiscreen-main-bounds",
-                    message: "UIScreen.main.bounds is deprecated — doesn't handle iPad split view or multiple scenes",
+                    message: "UIScreen.main.bounds is deprecated - doesn't handle iPad split view or multiple scenes",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -144,7 +144,7 @@ struct PreflightScanner {
                     findings.append(Finding(
                         severity: .error,
                         rule: "toolbar-tabbar-hidden",
-                        message: ".toolbarVisibility(.hidden, for: .tabBar) without iPad guard — may crash on iPad",
+                        message: ".toolbarVisibility(.hidden, for: .tabBar) without iPad guard - may crash on iPad",
                         filePath: filePath,
                         lineNumber: lineNumber,
                         lineContent: trimmed
@@ -156,7 +156,7 @@ struct PreflightScanner {
                     findings.append(Finding(
                         severity: .warning,
                         rule: "navigation-view-stack",
-                        message: ".navigationViewStyle(.stack) forces stack navigation on iPad — consider .automatic for sidebar support",
+                        message: ".navigationViewStyle(.stack) forces stack navigation on iPad - consider .automatic for sidebar support",
                         filePath: filePath,
                         lineNumber: lineNumber,
                         lineContent: trimmed
@@ -164,25 +164,25 @@ struct PreflightScanner {
                 }
             }
 
-            // Error: Unguarded CloudKit usage — crashes in simulator without iCloud entitlement/account
+            // Error: Unguarded CloudKit usage - crashes in simulator without iCloud entitlement/account
             if matchesCloudKitUsage(line) && !hasCloudKitGuard(lines: lines, at: index) {
                 findings.append(Finding(
                     severity: .error,
                     rule: "unguarded-cloudkit",
-                    message: "CKContainer/CKDatabase usage without availability guard — crashes in simulator without iCloud account",
+                    message: "CKContainer/CKDatabase usage without availability guard - crashes in simulator without iCloud account",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
                 ))
             }
 
-            // Warning: AppStore.requestReview / SKStoreReviewController — can show system alert during tests
+            // Warning: AppStore.requestReview / SKStoreReviewController - can show system alert during tests
             if (line.contains("requestReview") || line.contains("SKStoreReviewController"))
                 && !hasUITestingGuard(lines: lines, at: index) {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "unguarded-review-prompt",
-                    message: "App Store review prompt without --uitesting guard — system alert will block screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
+                    message: "App Store review prompt without --uitesting guard - system alert will block screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -194,12 +194,12 @@ struct PreflightScanner {
                 findings.append(dimensionFinding)
             }
 
-            // Warning: TipKit Tips.configure() without --uitesting guard — tips can overlay screenshots
+            // Warning: TipKit Tips.configure() without --uitesting guard - tips can overlay screenshots
             if line.contains("Tips.configure") && !hasUITestingGuard(lines: lines, at: index) {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "unguarded-tipkit",
-                    message: "Tips.configure() without --uitesting guard — TipKit popovers will overlay screenshots. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
+                    message: "Tips.configure() without --uitesting guard - TipKit popovers will overlay screenshots. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -290,7 +290,7 @@ struct PreflightScanner {
     /// Checks the whole file for file-level guards (isUITesting property, screenshotMode),
     /// and nearby lines for local guards (try/catch, accountStatus).
     private func hasCloudKitGuard(lines: [String], at index: Int) -> Bool {
-        // File-level guards — if present anywhere in the file, all CloudKit usage is considered guarded
+        // File-level guards - if present anywhere in the file, all CloudKit usage is considered guarded
         let fileLevelKeywords = [
             "isUITesting",              // Property-based UI testing guard
             "screenshotMode",           // Launch argument guard for testing
@@ -304,7 +304,7 @@ struct PreflightScanner {
             }
         }
 
-        // Local guards — check nearby lines for error handling
+        // Local guards - check nearby lines for error handling
         let localKeywords = [
             "#if",                      // Conditional compilation
             "canImport",               // Conditional import check
@@ -383,7 +383,7 @@ struct PreflightScanner {
                 return Finding(
                     severity: .warning,
                     rule: "hardcoded-screen-dimensions",
-                    message: "Possible hardcoded iPhone screen dimension (\(value)) — use GeometryReader or relative layout instead",
+                    message: "Possible hardcoded iPhone screen dimension (\(value)) - use GeometryReader or relative layout instead",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed

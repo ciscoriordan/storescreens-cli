@@ -269,12 +269,12 @@ package actor SimulatorManager {
 
     package func terminate(_ udid: String, bundleId: String) async throws {
         let result = try await shell.xcrun("simctl", arguments: ["terminate", udid, bundleId])
-        // Ignore errors — app may have already exited
+        // Ignore errors - app may have already exited
         _ = result
     }
 
     /// Set the simulator's appearance (light or dark mode).
-    /// Does not require a reboot — takes effect immediately.
+    /// Does not require a reboot - takes effect immediately.
     package func setAppearance(_ appearance: String, udid: String) async throws {
         let style = appearance.lowercased() == "dark" ? "dark" : "light"
         let result = try await shell.xcrun("simctl", arguments: ["ui", udid, "appearance", style])
@@ -296,12 +296,12 @@ package actor SimulatorManager {
     /// Clear the status bar override, restoring the default status bar.
     package func clearStatusBar(_ udid: String) async throws {
         let result = try await shell.xcrun("simctl", arguments: ["status_bar", udid, "clear"])
-        // Ignore errors — may not have been overridden
+        // Ignore errors - may not have been overridden
         _ = result
     }
 
     /// Disable the hardware keyboard in the simulator so software keyboard appears.
-    /// This is critical for UI tests that use typeText() — without this, XCUITest
+    /// This is critical for UI tests that use typeText() - without this, XCUITest
     /// fails with "Neither element nor any descendant has keyboard focus".
     package func disableHardwareKeyboard(_ udid: String) async throws {
         let prefsPath = NSHomeDirectory()

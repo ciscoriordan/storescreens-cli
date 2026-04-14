@@ -209,7 +209,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                logger.log("Stale DerivedData detected — test source is newer than compiled binary. Cleaning build products...", level: .warning)
+                logger.log("Stale DerivedData detected - test source is newer than compiled binary. Cleaning build products...", level: .warning)
                 CaptureOrchestrator.cleanDerivedData(at: derivedData)
             }
         }
@@ -556,7 +556,7 @@ struct CaptureCommand: AsyncParsableCommand {
         logLine("  xcresult path: \(resultPath)")
         logLine("  xcresult exists: \(FileManager.default.fileExists(atPath: resultPath))")
 
-        // Extract screenshots — filesystem (default) or xcresult (--xcresult flag)
+        // Extract screenshots - filesystem (default) or xcresult (--xcresult flag)
         var screenshots: [CaptureManifest.Screenshot] = []
         if xcresult && FileManager.default.fileExists(atPath: resultPath) {
             // xcresult mode: extract named attachments from the .xcresult bundle
@@ -571,7 +571,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 )
                 logLine("  xcresult attachments: \(attachments.count) test details")
                 for detail in attachments {
-                    logLine("    test: \(detail.testIdentifier) — \(detail.attachments.count) attachments")
+                    logLine("    test: \(detail.testIdentifier) - \(detail.attachments.count) attachments")
                     for att in detail.attachments {
                         logLine("      → \(att.suggestedHumanReadableName) [\(att.exportedFileName)]")
                     }
@@ -656,7 +656,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                logger.log("Stale DerivedData detected — cleaning build products...", level: .warning)
+                logger.log("Stale DerivedData detected - cleaning build products...", level: .warning)
                 CaptureOrchestrator.cleanDerivedData(at: derivedData)
             }
         }

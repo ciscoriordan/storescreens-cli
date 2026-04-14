@@ -32,7 +32,7 @@ package struct RunHistoryManager {
             // Staging mode: write to a hidden staging dir next to outputDir
             // (same parent directory = same filesystem for atomic moves).
             // The staging dir must NOT be inside outputDir because mergeDirectory
-            // uses removeItem(dst) on leaf directories — if the staging dir were a
+            // uses removeItem(dst) on leaf directories - if the staging dir were a
             // child of outputDir, removing outputDir would also delete the staging dir
             // before moveItem can move it into place.
             let parentDir = (outputDir as NSString).deletingLastPathComponent

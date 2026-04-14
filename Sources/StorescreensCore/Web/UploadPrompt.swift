@@ -33,7 +33,7 @@ package struct UploadPrompt {
             if initResponse.status == "ready" {
                 token = initResponse.upload_token!
             } else if initResponse.status == "verification_required" {
-                // Existing user — needs verification
+                // Existing user - needs verification
                 logger.log("A verification code has been sent to \(email).", level: .info)
                 guard let code = promptCode() else { return }
 

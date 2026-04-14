@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents an App Store screenshot size, derived from actual screen dimensions.
-/// New devices are automatically supported — no code changes needed.
+/// New devices are automatically supported - no code changes needed.
 package struct AppStoreScreenSize: Codable, Hashable, Sendable {
     package let width: Int
     package let height: Int
@@ -52,7 +52,7 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
     // MARK: - Friendly names for known resolutions
 
     /// Maps "family-widthxheight" to a human-readable App Store display name.
-    /// This table is purely cosmetic — the CLI works without it.
+    /// This table is purely cosmetic - the CLI works without it.
     /// When Apple adds a new resolution, it auto-generates a name until this table is updated.
     private static let friendlyNames: [String: String] = [
         // iPhone

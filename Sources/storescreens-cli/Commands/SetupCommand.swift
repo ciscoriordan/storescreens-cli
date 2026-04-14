@@ -66,7 +66,7 @@ struct SetupCommand: AsyncParsableCommand {
             testTargetDir = first
             logger.log("Found UI test target: \(first)", level: .success)
         } else {
-            // No UI test target found — guide the user
+            // No UI test target found - guide the user
             let suggestedName = scheme + "UITests"
             logger.log("No UI test target found.", level: .warning)
             logger.log("Create one in Xcode:", level: .info)
@@ -127,7 +127,7 @@ struct SetupCommand: AsyncParsableCommand {
                 }
             } else {
                 screenNames = ["Home", "Detail"]
-                logger.log("No input — using defaults: Home, Detail", level: .info)
+                logger.log("No input - using defaults: Home, Detail", level: .info)
             }
         }
 
@@ -149,7 +149,7 @@ struct SetupCommand: AsyncParsableCommand {
                     try testFileContent.write(toFile: testFilePath, atomically: true, encoding: .utf8)
                     logger.log("Overwrote \(testFilePath) (\(screenNames.count) screenshots)", level: .success)
                 } else {
-                    logger.log("Skipped — keeping existing file.", level: .info)
+                    logger.log("Skipped - keeping existing file.", level: .info)
                 }
             }
         } else {
@@ -267,12 +267,12 @@ struct SetupCommand: AsyncParsableCommand {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         //
         // This test relies on .accessibilityIdentifier() to find UI elements reliably.
-        // Add identifiers to your SwiftUI views — especially:
+        // Add identifiers to your SwiftUI views - especially:
         //
         //   ✓ Buttons, toolbar items, and navigation elements
         //   ✓ Loading indicators (ProgressView) and content containers
         //   ✓ Text that appears in multiple places (e.g. your app name in both
-        //     the launch screen AND the main toolbar — using text matching will
+        //     the launch screen AND the main toolbar - using text matching will
         //     cause false positives)
         //   ✓ Search fields, text fields, toggles, pickers
         //   ✓ Key content areas that indicate a screen has finished loading
@@ -287,7 +287,7 @@ struct SetupCommand: AsyncParsableCommand {
         //   ScrollView { ... }
         //     .accessibilityIdentifier("mainContent")
         //
-        // Why: Matching by text label (e.g. app.staticTexts["My App"]) is fragile —
+        // Why: Matching by text label (e.g. app.staticTexts["My App"]) is fragile -
         // the same text can appear in multiple views (launch screen, toolbar, about
         // page). Accessibility identifiers are unique, stable, and testable.
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -316,7 +316,7 @@ struct SetupCommand: AsyncParsableCommand {
                 }
 
                 // TODO: Wait for your app's main content to load.
-                // Use a unique accessibility identifier — NOT text that might appear on
+                // Use a unique accessibility identifier - NOT text that might appear on
                 // a launch screen or splash screen. For example:
                 //
                 //   XCTAssertTrue(

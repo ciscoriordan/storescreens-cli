@@ -114,7 +114,7 @@ struct HTMLPreviewGenerator {
         indexFilename: String
     ) -> String {
         var title = deviceType
-        if let appearance { title += " — \(appearance)" }
+        if let appearance { title += " - \(appearance)" }
 
         // Group by locale
         var localeGroups: [(locale: String?, captures: [CaptureManifest.DeviceCapture])] = []
@@ -159,7 +159,7 @@ struct HTMLPreviewGenerator {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>\(escapeHTML(title)) — \(escapeHTML(appName))</title>
+          <title>\(escapeHTML(title)) - \(escapeHTML(appName))</title>
           \(styleTag(darkBackground: isDark))
         </head>
         <body>
@@ -202,7 +202,7 @@ struct HTMLPreviewGenerator {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>\(escapeHTML(manifest.appName)) — Screenshot Preview</title>
+          <title>\(escapeHTML(manifest.appName)) - Screenshot Preview</title>
           <style>
             *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
             body {
@@ -374,7 +374,7 @@ struct HTMLPreviewGenerator {
         return "preview_\(name).html"
     }
 
-    /// Reverse of pageFilename — extract device type and appearance from a preview filename.
+    /// Reverse of pageFilename - extract device type and appearance from a preview filename.
     private func parsePageFilename(_ filename: String) -> (deviceType: String, appearance: String?)? {
         // Format: preview_{DeviceType}[_{appearance}].html
         guard filename.hasPrefix("preview_") && filename.hasSuffix(".html") else { return nil }

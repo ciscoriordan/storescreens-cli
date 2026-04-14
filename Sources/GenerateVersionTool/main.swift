@@ -17,7 +17,7 @@ else {
 }
 
 let content = """
-// Auto-generated from VERSION — do not edit directly.
+// Auto-generated from VERSION - do not edit directly.
 package let storescreensVersion: String = "\(version)"
 
 """

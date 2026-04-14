@@ -10,9 +10,9 @@ storescreens ships as three complementary pieces. Most users only need the CLI; 
 
 | Piece | What it is | When you want it |
 |---|---|---|
-| **`storescreens` (CLI)** | The core binary. Runs UI tests across simulators, captures screenshots, builds the HTML preview gallery. | Always — this is the engine. Use it from your terminal, CI, or scripts. |
+| **`storescreens` (CLI)** | The core binary. Runs UI tests across simulators, captures screenshots, builds the HTML preview gallery. | Always - this is the engine. Use it from your terminal, CI, or scripts. |
 | **`storescreens-mcp` (MCP server)** | A structured wrapper that exposes the CLI's operations as [Model Context Protocol](https://modelcontextprotocol.io) tools with inline progress streaming. | When your AI coding assistant (Claude Code, Cursor, etc.) should drive captures directly instead of parsing CLI output from a Bash call. |
-| **[storescreens-skill](https://github.com/ciscoriordan/storescreens-skill)** | An agent skill — instructions and templates that teach an assistant how to detect your Xcode project, generate config, scaffold UI tests, and run a capture. | When you want an assistant to do the full setup for you, from zero to first screenshots, with no manual steps. Works with any assistant that supports skills. |
+| **[storescreens-skill](https://github.com/ciscoriordan/storescreens-skill)** | An agent skill - instructions and templates that teach an assistant how to detect your Xcode project, generate config, scaffold UI tests, and run a capture. | When you want an assistant to do the full setup for you, from zero to first screenshots, with no manual steps. Works with any assistant that supports skills. |
 
 Both the CLI and MCP server are installed by `brew install storescreens`.
 
@@ -86,7 +86,7 @@ storescreens capture --verbose
 
 ### How it works
 
-The CLI uses **XCUITest** — Apple's built-in UI testing framework — to drive your app and capture screenshots. A UI test launches your app in a simulator, taps through screens programmatically, and saves screenshots at each step. The CLI then runs that test across every device size in your config.
+The CLI uses **XCUITest** - Apple's built-in UI testing framework - to drive your app and capture screenshots. A UI test launches your app in a simulator, taps through screens programmatically, and saves screenshots at each step. The CLI then runs that test across every device size in your config.
 
 #### Do I need a UI test target?
 
@@ -106,7 +106,7 @@ If you wrote your `ScreenshotTests.swift` by hand (rather than generating it wit
 1. **File → New → Target → UI Testing Bundle**
 2. Name it to match your `test_target` in `storescreens.yml` (e.g. `ExampleUITests`)
 3. Set **Target to be Tested** to your app
-4. Click **Finish** — Xcode creates the target with a default `ExampleUITestsLaunchTests.swift` placeholder
+4. Click **Finish** - Xcode creates the target with a default `ExampleUITestsLaunchTests.swift` placeholder
 5. **Delete** the placeholder file Xcode generated (move to Trash)
 6. **Right-click** your UI test group in the Project Navigator → **Add Files to "[project]"**
 7. Select your `ScreenshotTests.swift` and confirm it is added to the `ExampleUITests` target
@@ -202,31 +202,31 @@ func testScreenshots() {
     let app = XCUIApplication()
     app.launch()
 
-    // Home screen — shown right after launch
+    // Home screen - shown right after launch
     takeScreenshot(named: "01_Home")
 
-    // Search — tap the search tab, enter a query
+    // Search - tap the search tab, enter a query
     app.tabBars.buttons["Search"].tap()
     app.searchFields.firstMatch.tap()
     app.typeText("recipes")
     takeScreenshot(named: "02_Search")
 
-    // Detail — tap a result
+    // Detail - tap a result
     app.cells.firstMatch.tap()
     takeScreenshot(named: "03_Detail")
 
-    // Settings — go back, open settings
+    // Settings - go back, open settings
     app.navigationBars.buttons.firstMatch.tap()
     app.tabBars.buttons["Settings"].tap()
     takeScreenshot(named: "04_Settings")
 }
 ```
 
-You can test your navigation works before running the full capture — just run the test in Xcode with **Cmd+U** or click the diamond next to the test function.
+You can test your navigation works before running the full capture - just run the test in Xcode with **Cmd+U** or click the diamond next to the test function.
 
 #### Accessibility identifiers
 
-UI tests find elements by accessibility identifier, text label, or type. **Always prefer `.accessibilityIdentifier()`** over matching by text — text labels can appear in multiple places (e.g. your app name on both the launch screen and the main toolbar), causing tests to match the wrong element or pass prematurely.
+UI tests find elements by accessibility identifier, text label, or type. **Always prefer `.accessibilityIdentifier()`** over matching by text - text labels can appear in multiple places (e.g. your app name on both the launch screen and the main toolbar), causing tests to match the wrong element or pass prematurely.
 
 Add identifiers to your SwiftUI views:
 
@@ -235,11 +235,11 @@ Add identifiers to your SwiftUI views:
 Button("Save") { ... }
   .accessibilityIdentifier("saveButton")
 
-// Loading indicators — so tests can wait for loading to finish
+// Loading indicators - so tests can wait for loading to finish
 ProgressView()
   .accessibilityIdentifier("loadingIndicator")
 
-// Content containers — so tests can wait for content to appear
+// Content containers - so tests can wait for content to appear
 ScrollView { ... }
   .accessibilityIdentifier("mainContent")
 
@@ -307,9 +307,9 @@ Intermediate screenshots and named pipes for real-time logging are stored in `.s
 ##### Why filesystem over xcresult?
 
 The filesystem approach is more reliable than extracting from `.xcresult` bundles:
-- Screenshots are saved incrementally — if the test crashes partway through, you still get all screenshots captured before the crash
+- Screenshots are saved incrementally - if the test crashes partway through, you still get all screenshots captured before the crash
 - No dependency on `xcresulttool` parsing or attachment name filtering
-- Faster — no post-processing needed after the test finishes
+- Faster - no post-processing needed after the test finishes
 
 If you prefer xcresult extraction (e.g., your test only uses `XCTAttachment` without filesystem writes), pass `--xcresult`:
 
@@ -345,10 +345,10 @@ Check for this in your app to set up the ideal state for screenshots:
 
 Common things to configure in screenshot mode:
 
-- **Simulate pro/premium access** — show the full app without paywalls. Make sure your entitlement checks don't override this (skip StoreKit verification in screenshot mode).
-- **Disable animations** — makes UI interactions instant and screenshots deterministic.
-- **Reset UI state** — clear persisted toggles, expansion states, or onboarding flags so tests always start from a known state.
-- **Seed sample data** — pre-populate the app with good-looking content if it would otherwise be empty on first launch.
+- **Simulate pro/premium access** - show the full app without paywalls. Make sure your entitlement checks don't override this (skip StoreKit verification in screenshot mode).
+- **Disable animations** - makes UI interactions instant and screenshots deterministic.
+- **Reset UI state** - clear persisted toggles, expansion states, or onboarding flags so tests always start from a known state.
+- **Seed sample data** - pre-populate the app with good-looking content if it would otherwise be empty on first launch.
 
 #### Simple mode (no tests needed)
 
@@ -423,7 +423,7 @@ Use `--non-interactive` to skip prompts and use auto-discovered screens (or defa
 
 Captures screenshots using one of two modes.
 
-**XCTest mode** (default) — runs your UI tests, collects screenshots written to the filesystem by your test code. Use `--verbose` to see full xcodebuild output in the terminal (logs are always saved to the output directory either way):
+**XCTest mode** (default) - runs your UI tests, collects screenshots written to the filesystem by your test code. Use `--verbose` to see full xcodebuild output in the terminal (logs are always saved to the output directory either way):
 
 ```bash
 storescreens capture --verbose
@@ -434,7 +434,7 @@ How it works:
 2. Your test code writes screenshots as PNGs to a shared cache directory
 3. The CLI collects PNGs from the cache and organizes them into folders by device size
 
-**Simple mode** — boots each simulator, installs your app, and takes a raw screenshot of whatever's on screen:
+**Simple mode** - boots each simulator, installs your app, and takes a raw screenshot of whatever's on screen:
 
 ```bash
 storescreens capture --mode simple
@@ -465,11 +465,11 @@ Scans your Swift source files for patterns that can crash or break on iPad and o
 $ storescreens check
 
 Preflight Check
-  iPad detected in config — running iPad-specific checks
+  iPad detected in config - running iPad-specific checks
 ✗ Views/ContentView.swift:47  [toolbar-tabbar-hidden]
-    .toolbarVisibility(.hidden, for: .tabBar) without iPad guard — may crash on iPad
+    .toolbarVisibility(.hidden, for: .tabBar) without iPad guard - may crash on iPad
 ! Views/CardView.swift:89  [hardcoded-screen-dimensions]
-    Possible hardcoded iPhone screen dimension (390) — use GeometryReader instead
+    Possible hardcoded iPhone screen dimension (390) - use GeometryReader instead
 
 1 error, 1 warning found
 Errors block capture. Use --skip-check to bypass.
@@ -479,13 +479,13 @@ Errors block capture. Use --skip-check to bypass.
 
 | Rule | Severity | What it catches |
 |------|----------|-----------------|
-| `toolbar-tabbar-hidden` | Error | `.toolbarVisibility(.hidden, for: .tabBar)` without an iPad device check — can crash on iPad |
-| `unguarded-cloudkit` | Error | `CKContainer`/`CKDatabase` usage without an `accountStatus` check, error handling, or UI-testing guard — crashes in simulator without iCloud account |
-| `uiscreen-main-bounds` | Warning | `UIScreen.main.bounds` — deprecated, doesn't handle iPad split view or multiple scenes |
+| `toolbar-tabbar-hidden` | Error | `.toolbarVisibility(.hidden, for: .tabBar)` without an iPad device check - can crash on iPad |
+| `unguarded-cloudkit` | Error | `CKContainer`/`CKDatabase` usage without an `accountStatus` check, error handling, or UI-testing guard - crashes in simulator without iCloud account |
+| `uiscreen-main-bounds` | Warning | `UIScreen.main.bounds` - deprecated, doesn't handle iPad split view or multiple scenes |
 | `hardcoded-screen-dimensions` | Warning | Literal iPhone screen sizes (390, 844, etc.) used in layout context |
 | `navigation-view-stack` | Warning | `.navigationViewStyle(.stack)` forces stack navigation on iPad |
 
-iPad-specific rules only fire when an iPad is in your configured device list. The scanner is guard-aware — it won't flag `.toolbarVisibility(.hidden, for: .tabBar)` if it finds a `UIDevice` / `userInterfaceIdiom` check in the surrounding lines, and it won't flag CloudKit usage if the file contains an `isUITesting` guard, `accountStatus` check, `try`/`catch`, or `screenshotMode` launch argument check.
+iPad-specific rules only fire when an iPad is in your configured device list. The scanner is guard-aware - it won't flag `.toolbarVisibility(.hidden, for: .tabBar)` if it finds a `UIDevice` / `userInterfaceIdiom` check in the surrounding lines, and it won't flag CloudKit usage if the file contains an `isUITesting` guard, `accountStatus` check, `try`/`catch`, or `screenshotMode` launch argument check.
 
 | Flag | Description |
 |------|-------------|
@@ -647,9 +647,9 @@ storescreens labels devices by physical screen dimension (6.9", 6.3", etc.). Her
 
 **No 6.7" slot exists in App Store Connect.**
 
-**¹ 6.5" is auto-filled** — providing 6.9" screenshots causes App Store Connect to automatically use them for the 6.5" slot too. A dedicated 6.5" simulator is only needed if you want distinct screenshots for that slot.
+**¹ 6.5" is auto-filled** - providing 6.9" screenshots causes App Store Connect to automatically use them for the 6.5" slot too. A dedicated 6.5" simulator is only needed if you want distinct screenshots for that slot.
 
-**² 6.5" (1242×2688)** is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it — only these older simulators do.
+**² 6.5" (1242×2688)** is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it - only these older simulators do.
 
 **³ Older iPad slots** (12.9" 2nd Gen, 10.5", 9.7") require older simulator runtimes that may not be installed. Most apps only need the 13" slot.
 
@@ -735,10 +735,10 @@ storescreens-output/
 
 Every capture run saves full xcodebuild output to `logs/` in the output directory:
 
-- **`test-<id>.log`** — one per device, containing the full build + test output (compiler errors, element lookups, assertion failures, test durations)
-- **`test-debug-<id>.log`** — debug prints from your test code, if you write to the storescreens named pipe
+- **`test-<id>.log`** - one per device, containing the full build + test output (compiler errors, element lookups, assertion failures, test durations)
+- **`test-debug-<id>.log`** - debug prints from your test code, if you write to the storescreens named pipe
 
-When something goes wrong, check these logs first — the root cause is almost always visible in the xcodebuild output. Use `--verbose` to also stream xcodebuild output to the terminal in real time.
+When something goes wrong, check these logs first - the root cause is almost always visible in the xcodebuild output. Use `--verbose` to also stream xcodebuild output to the terminal in real time.
 
 #### Event flow diagram
 
@@ -765,9 +765,9 @@ CaptureOrchestrator emits CaptureEvent
   │                                                            organizeFromFilesystem (TTY/CLI)
   ├── .deviceCompleted(…)      → "✓ device: N screenshots"
   ├── .deviceFailed(…)         → "✗ device: error"
-  └── .preflightFinding(…)     → "⚑ check:rule — message"
+  └── .preflightFinding(…)     → "⚑ check:rule - message"
 
-MCP (storescreens-mcp) — get_capture_status
+MCP (storescreens-mcp) - get_capture_status
   ├── recent meaningful events from AsyncTaskStore   ← the events above
   ├── tailDeviceLogs()  when silent >60s ───────────→ reads logs/test-<id>.log tail
   └── scanDeviceLogs()  always ─────────────────────→ scans logs/test-<id>.log for errors
@@ -818,7 +818,7 @@ With history enabled, a `latest` symlink always points to the most recent succes
 
 ## Device Size Detection
 
-The CLI reads screen dimensions directly from Xcode's CoreSimulator device profiles at runtime — no hardcoded device list. When Apple releases new devices with existing screen sizes (e.g., iPhone 18 Pro Max with the same resolution as iPhone 17 Pro Max), they appear seamlessly under the correct App Store size category. Devices with entirely new screen sizes are detected automatically and shown with their raw dimensions (e.g., `iPhone 1440x3120`).
+The CLI reads screen dimensions directly from Xcode's CoreSimulator device profiles at runtime - no hardcoded device list. When Apple releases new devices with existing screen sizes (e.g., iPhone 18 Pro Max with the same resolution as iPhone 17 Pro Max), they appear seamlessly under the correct App Store size category. Devices with entirely new screen sizes are detected automatically and shown with their raw dimensions (e.g., `iPhone 1440x3120`).
 
 To get friendly display names for new screen sizes (e.g., `iPhone 7.1"`), update the CLI via Homebrew:
 
@@ -860,7 +860,7 @@ Running tests on 1 simulators...
 
 Every `storescreens capture` run automatically scans your Swift source for common issues before building. This catches problems like unconditional tab bar hiding (which crashes on iPad) before you waste time on a full build + test cycle.
 
-The check is device-aware — iPad-specific rules only run when your config includes an iPad device. If you only capture iPhone screenshots, iPad rules are skipped entirely.
+The check is device-aware - iPad-specific rules only run when your config includes an iPad device. If you only capture iPhone screenshots, iPad rules are skipped entirely.
 
 To disable the automatic check, either:
 

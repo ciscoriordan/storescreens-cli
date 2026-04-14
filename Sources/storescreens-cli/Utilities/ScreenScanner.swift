@@ -81,7 +81,7 @@ struct ScreenScanner {
     private func findTabs(in source: String) -> [DiscoveredScreen] {
         var results: [DiscoveredScreen] = []
 
-        // Tab("Title", ...)  — SwiftUI 5+ Tab syntax
+        // Tab("Title", ...)  - SwiftUI 5+ Tab syntax
         for match in matches(for: #"Tab\(\s*"([^"]+)""#, in: source) {
             results.append(DiscoveredScreen(name: match, source: .tab))
         }
@@ -162,7 +162,7 @@ struct ScreenScanner {
         return results
     }
 
-    /// struct SomeView: View — fallback, finds all View-conforming structs.
+    /// struct SomeView: View - fallback, finds all View-conforming structs.
     /// Filters out common non-screen patterns.
     private func findViewStructs(in source: String) -> [DiscoveredScreen] {
         var results: [DiscoveredScreen] = []

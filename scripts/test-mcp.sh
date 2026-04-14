@@ -83,7 +83,7 @@ else
   fail "tools/list → unexpected: $resp"
 fi
 
-# 4. tools/call check (may error if no project in cwd — both are valid)
+# 4. tools/call check (may error if no project in cwd - both are valid)
 send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"check","arguments":{"directory":"."}}}'
 resp=$(recv)
 if echo "$resp" | grep -q '"result"'; then

@@ -5,12 +5,12 @@ import XCTest
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
 // This test relies on .accessibilityIdentifier() to find UI elements reliably.
-// Add identifiers to your SwiftUI views — especially:
+// Add identifiers to your SwiftUI views - especially:
 //
 //   ✓ Buttons, toolbar items, and navigation elements
 //   ✓ Loading indicators (ProgressView) and content containers
 //   ✓ Text that appears in multiple places (e.g. your app name in both
-//     the launch screen AND the main toolbar — using text matching will
+//     the launch screen AND the main toolbar - using text matching will
 //     cause false positives)
 //   ✓ Search fields, text fields, toggles, pickers
 //   ✓ Key content areas that indicate a screen has finished loading
@@ -25,7 +25,7 @@ import XCTest
 //   ScrollView { ... }
 //     .accessibilityIdentifier("mainContent")
 //
-// Why: Matching by text label (e.g. app.staticTexts["My App"]) is fragile —
+// Why: Matching by text label (e.g. app.staticTexts["My App"]) is fragile -
 // the same text can appear in multiple views (launch screen, toolbar, about
 // page). Accessibility identifiers are unique, stable, and testable.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -54,7 +54,7 @@ final class ScreenshotTests: XCTestCase {
         }
 
         // TODO: Wait for your app's main content to load.
-        // Use a unique accessibility identifier — NOT text that might appear on
+        // Use a unique accessibility identifier - NOT text that might appear on
         // a launch screen or splash screen. For example:
         //
         //   XCTAssertTrue(
@@ -109,7 +109,7 @@ final class ScreenshotTests: XCTestCase {
         guard let cacheDir = try? String(contentsOfFile: breadcrumb, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines) else { return }
 
-        // Strip "Clone N of " prefix — xcodebuild creates clones for parallel test runs,
+        // Strip "Clone N of " prefix - xcodebuild creates clones for parallel test runs,
         // but storescreens-cli expects the original simulator name as the directory key.
         var deviceName = ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? "Unknown"
         if let range = deviceName.range(of: #"^Clone \d+ of "#, options: .regularExpression) {
@@ -142,7 +142,7 @@ final class ScreenshotTests: XCTestCase {
 
 // MARK: - Tips
 //
-// Reliable element targeting — use accessibility identifiers:
+// Reliable element targeting - use accessibility identifiers:
 //   In SwiftUI:   .accessibilityIdentifier("myButton")
 //   In UIKit:     view.accessibilityIdentifier = "myButton"
 //   In XCUITest:  app.buttons["myButton"].tap()
@@ -159,13 +159,13 @@ final class ScreenshotTests: XCTestCase {
 //   app.searchFields.firstMatch.tap()
 //   app.typeText("search query")
 //
-// Screenshot mode — app setup (in app init or root .task):
+// Screenshot mode - app setup (in app init or root .task):
 //   if ProcessInfo.processInfo.arguments.contains("--uitesting") {
 //       subscriptionService.isSubscribed = true
 //       UIView.setAnimationsEnabled(false)
 //   }
 //
-// Guard StoreKit / entitlement checks — wrap just the specific call, not the whole function.
+// Guard StoreKit / entitlement checks - wrap just the specific call, not the whole function.
 // Using guard...return at the top of a function is dangerous: it silently skips everything
 // below it, including state setup like isInitialized = true.
 //   if !ProcessInfo.processInfo.arguments.contains("--uitesting") {

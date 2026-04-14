@@ -63,7 +63,7 @@ struct ListCommand: AsyncParsableCommand {
 
         for device in filtered {
             let size = sizeMap[device.udid]
-            let sizeStr = size?.displayName ?? "—"
+            let sizeStr = size?.displayName ?? "-"
             let stateStr = device.isBooted ? "Booted" : "Shutdown"
             let line = String(format: "  %-\(nameWidth)@  %-\(stateWidth)@  %@",
                               device.name as NSString, stateStr as NSString, sizeStr as NSString)

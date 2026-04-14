@@ -151,7 +151,7 @@ package struct CaptureOrchestrator: Sendable {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                await eventHandler(.phase("Stale DerivedData detected — test source is newer than compiled binary. Cleaning build products..."))
+                await eventHandler(.phase("Stale DerivedData detected - test source is newer than compiled binary. Cleaning build products..."))
                 Self.cleanDerivedData(at: derivedData)
             }
         }
@@ -478,7 +478,7 @@ package struct CaptureOrchestrator: Sendable {
             liveHandler = nil
         }
 
-        // Live screenshot watcher — polls deviceScreenshotsDir for new PNGs while the test runs
+        // Live screenshot watcher - polls deviceScreenshotsDir for new PNGs while the test runs
         // and emits screenshotCaptured events in real time. Only active in non-TTY mode (MCP/pipe
         // context) so CLI terminal output is unchanged.
         let simulatorName = device.simulatorName
@@ -625,7 +625,7 @@ package struct CaptureOrchestrator: Sendable {
         } else {
             // Filesystem mode (default)
             // In non-TTY mode the live watcher already emitted screenshotCaptured events
-            // for each PNG as it appeared during the test run — suppress duplicates here.
+            // for each PNG as it appeared during the test run - suppress duplicates here.
             let onSaved: @Sendable (String, String) async -> Void = isatty(STDOUT_FILENO) == 0
                 ? { @Sendable _, _ in }
                 : { @Sendable name, _ in
@@ -650,7 +650,7 @@ package struct CaptureOrchestrator: Sendable {
         }
         await logLine("✓ \(screenshots.count) screenshots")
 
-        // Fail fast if no screenshots were collected — this indicates a simulator crash,
+        // Fail fast if no screenshots were collected - this indicates a simulator crash,
         // RequestDenied from SBMainWorkspace, or other hard failure. Throwing here lets
         // withRetries retry the run if --retries is set, rather than silently producing 0.
         if screenshots.isEmpty {

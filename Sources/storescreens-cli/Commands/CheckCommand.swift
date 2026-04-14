@@ -31,7 +31,7 @@ struct CheckCommand: AsyncParsableCommand {
 
         logger.header("Preflight Check")
         if deviceContext.hasIPad {
-            logger.log("iPad detected in config — running iPad-specific checks", level: .info)
+            logger.log("iPad detected in config - running iPad-specific checks", level: .info)
         }
 
         let scanner = PreflightScanner()

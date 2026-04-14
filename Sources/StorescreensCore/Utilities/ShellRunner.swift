@@ -94,7 +94,7 @@ package actor ShellRunner {
 
             // Wait for stdout EOF, stderr EOF, and process termination.
             // All three are tracked in the DispatchGroup so this single await
-            // covers everything — no waitUntilExit() needed.
+            // covers everything - no waitUntilExit() needed.
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 group.notify(queue: .global()) {
                     continuation.resume()

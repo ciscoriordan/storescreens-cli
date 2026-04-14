@@ -176,12 +176,12 @@ package struct PreflightScanner {
         }
     }
 
-    /// waitForElement(id: "identifier") — always an identifier lookup.
+    /// waitForElement(id: "identifier") - always an identifier lookup.
     private static let waitForElementPattern = try! NSRegularExpression(
         pattern: #"waitForElement\s*\(\s*id:\s*"([^"]+)""#
     )
 
-    /// app.TYPE["camelCaseId"] — subscript starting lowercase with ≥1 uppercase (camelCase).
+    /// app.TYPE["camelCaseId"] - subscript starting lowercase with ≥1 uppercase (camelCase).
     /// Excludes label-like strings ("Save", "OK", "My Screen") which rarely start lowercase.
     private static let elementSubscriptPattern = try! NSRegularExpression(
         pattern: #"app\.\w+\s*\[\s*"([a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)"\s*\]"#
@@ -222,7 +222,7 @@ package struct PreflightScanner {
                     findings.append(Finding(
                         severity: .warning,
                         rule: "missing-accessibility-identifier",
-                        message: "UI test references '\(id)' but no .accessibilityIdentifier(\"\(id)\") found in app source — add it to the view or the element lookup will fail",
+                        message: "UI test references '\(id)' but no .accessibilityIdentifier(\"\(id)\") found in app source - add it to the view or the element lookup will fail",
                         filePath: file,
                         lineNumber: lineNumber,
                         lineContent: trimmed
@@ -235,7 +235,7 @@ package struct PreflightScanner {
 
     // MARK: - Test File Pattern Checks
 
-    /// Matches navigationBars.buttons["LocalizedLabel"] — localized labels break in non-English locales.
+    /// Matches navigationBars.buttons["LocalizedLabel"] - localized labels break in non-English locales.
     /// Excludes camelCase identifiers (which are locale-agnostic accessibility identifiers).
     private static let localizedNavButtonPattern = try! NSRegularExpression(
         pattern: #"navigationBars\.buttons\s*\[\s*"([A-Z][^"]+)"\s*\]"#
@@ -263,7 +263,7 @@ package struct PreflightScanner {
                         findings.append(Finding(
                             severity: .warning,
                             rule: "localized-nav-button",
-                            message: "navigationBars.buttons[\"\(label)\"] matches by localized title — breaks in non-English locales. Use element(boundBy: 0) for the system back button, or add an .accessibilityIdentifier to a custom button and query by that.",
+                            message: "navigationBars.buttons[\"\(label)\"] matches by localized title - breaks in non-English locales. Use element(boundBy: 0) for the system back button, or add an .accessibilityIdentifier to a custom button and query by that.",
                             filePath: file,
                             lineNumber: index + 1,
                             lineContent: trimmed
@@ -286,7 +286,7 @@ package struct PreflightScanner {
                         findings.append(Finding(
                             severity: .warning,
                             rule: "simulator-clone-device-name",
-                            message: "SIMULATOR_DEVICE_NAME is used without stripping the \"Clone N of \" prefix — xcodebuild renames simulators during parallel runs, so screenshots will be written to the wrong directory. Add: if let r = deviceName.range(of: #\"^Clone \\d+ of \"#, options: .regularExpression) { deviceName = String(deviceName[r.upperBound...]) }",
+                            message: "SIMULATOR_DEVICE_NAME is used without stripping the \"Clone N of \" prefix - xcodebuild renames simulators during parallel runs, so screenshots will be written to the wrong directory. Add: if let r = deviceName.range(of: #\"^Clone \\d+ of \"#, options: .regularExpression) { deviceName = String(deviceName[r.upperBound...]) }",
                             filePath: file,
                             lineNumber: index + 1,
                             lineContent: trimmed
@@ -322,7 +322,7 @@ package struct PreflightScanner {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "uiscreen-main-bounds",
-                    message: "UIScreen.main.bounds is deprecated — doesn't handle iPad split view or multiple scenes",
+                    message: "UIScreen.main.bounds is deprecated - doesn't handle iPad split view or multiple scenes",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -335,7 +335,7 @@ package struct PreflightScanner {
                     findings.append(Finding(
                         severity: .error,
                         rule: "toolbar-tabbar-hidden",
-                        message: ".toolbarVisibility(.hidden, for: .tabBar) without iPad guard — may crash on iPad",
+                        message: ".toolbarVisibility(.hidden, for: .tabBar) without iPad guard - may crash on iPad",
                         filePath: filePath,
                         lineNumber: lineNumber,
                         lineContent: trimmed
@@ -347,7 +347,7 @@ package struct PreflightScanner {
                     findings.append(Finding(
                         severity: .warning,
                         rule: "navigation-view-stack",
-                        message: ".navigationViewStyle(.stack) forces stack navigation on iPad — consider .automatic for sidebar support",
+                        message: ".navigationViewStyle(.stack) forces stack navigation on iPad - consider .automatic for sidebar support",
                         filePath: filePath,
                         lineNumber: lineNumber,
                         lineContent: trimmed
@@ -355,25 +355,25 @@ package struct PreflightScanner {
                 }
             }
 
-            // Error: Unguarded CloudKit usage — crashes in simulator without iCloud entitlement/account
+            // Error: Unguarded CloudKit usage - crashes in simulator without iCloud entitlement/account
             if matchesCloudKitUsage(line) && !hasCloudKitGuard(lines: lines, at: index) {
                 findings.append(Finding(
                     severity: .error,
                     rule: "unguarded-cloudkit",
-                    message: "CKContainer/CKDatabase usage without availability guard — crashes in simulator without iCloud account",
+                    message: "CKContainer/CKDatabase usage without availability guard - crashes in simulator without iCloud account",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
                 ))
             }
 
-            // Warning: AppStore.requestReview / SKStoreReviewController — can show system alert during tests
+            // Warning: AppStore.requestReview / SKStoreReviewController - can show system alert during tests
             if (line.contains("requestReview") || line.contains("SKStoreReviewController"))
                 && !hasUITestingGuard(lines: lines, at: index) {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "unguarded-review-prompt",
-                    message: "App Store review prompt without --uitesting guard — system alert will block screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
+                    message: "App Store review prompt without --uitesting guard - system alert will block screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -385,7 +385,7 @@ package struct PreflightScanner {
                 findings.append(Finding(
                     severity: .warning,
                     rule: "unguarded-server-sync",
-                    message: "Server sync/fetch call without --uitesting guard — may re-download data during screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
+                    message: "Server sync/fetch call without --uitesting guard - may re-download data during screenshot tests. Guard with: if !ProcessInfo.processInfo.arguments.contains(\"--uitesting\")",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed
@@ -479,7 +479,7 @@ package struct PreflightScanner {
 
     /// Check if the file contains guards around CloudKit usage.
     private func hasCloudKitGuard(lines: [String], at index: Int) -> Bool {
-        // File-level guards — if present anywhere in the file, all CloudKit usage is considered guarded
+        // File-level guards - if present anywhere in the file, all CloudKit usage is considered guarded
         let fileLevelKeywords = [
             "isUITesting",              // Property-based UI testing guard
             "screenshotMode",           // Launch argument guard for testing
@@ -493,7 +493,7 @@ package struct PreflightScanner {
             }
         }
 
-        // Local guards — check nearby lines for error handling
+        // Local guards - check nearby lines for error handling
         let localKeywords = [
             "#if",                      // Conditional compilation
             "canImport",               // Conditional import check
@@ -590,7 +590,7 @@ package struct PreflightScanner {
                 return Finding(
                     severity: .warning,
                     rule: "hardcoded-screen-dimensions",
-                    message: "Possible hardcoded iPhone screen dimension (\(value)) — use GeometryReader or relative layout instead",
+                    message: "Possible hardcoded iPhone screen dimension (\(value)) - use GeometryReader or relative layout instead",
                     filePath: filePath,
                     lineNumber: lineNumber,
                     lineContent: trimmed

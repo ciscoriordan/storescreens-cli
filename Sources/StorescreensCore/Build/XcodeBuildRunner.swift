@@ -15,7 +15,7 @@ package actor XcodeBuildRunner {
         self.logDir = dir
     }
 
-    /// Build for testing — produces a .xctestrun file.
+    /// Build for testing - produces a .xctestrun file.
     /// Returns the path to the .xctestrun file.
     package func buildForTesting(
         project: String?,

@@ -20,7 +20,7 @@ struct RunHistoryManager {
             // Staging mode: write to a hidden staging dir next to outputDir
             // (same parent directory = same filesystem for atomic moves).
             // The staging dir must NOT be inside outputDir because mergeDirectory
-            // uses removeItem(dst) on leaf directories — if the staging dir were a
+            // uses removeItem(dst) on leaf directories - if the staging dir were a
             // child of outputDir, removing outputDir would also delete the staging dir
             // before moveItem can move it into place.
             let parentDir = (outputDir as NSString).deletingLastPathComponent
@@ -85,7 +85,7 @@ struct RunHistoryManager {
     /// Recursively merge `src` into `dst`.
     ///
     /// - Leaf directories (those that contain `.png` files and no subdirectories)
-    ///   are replaced atomically — the destination is removed and the source moved
+    ///   are replaced atomically - the destination is removed and the source moved
     ///   in. This is the device-size directory level (e.g. `iPhone_6.9/`, `iPad_Pro_13/`).
     /// - Intermediate directories (locale, appearance) are merged: items inside
     ///   them are processed individually, leaving unrelated sibling directories
@@ -111,7 +111,7 @@ struct RunHistoryManager {
             if isDir.boolValue {
                 try mergeDirectory(from: srcItem, into: dstItem)
             } else {
-                // Plain file — overwrite.
+                // Plain file - overwrite.
                 try? fm.removeItem(atPath: dstItem)
                 try fm.moveItem(atPath: srcItem, toPath: dstItem)
             }

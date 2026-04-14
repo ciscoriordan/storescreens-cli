@@ -338,7 +338,7 @@ struct StorescreensMCP {
         let taskId = String(UUID().uuidString.prefix(8).lowercased())
         await AsyncTaskStore.shared.start(taskId: taskId)
 
-        // Run capture in background — returns taskId immediately so Claude can poll.
+        // Run capture in background - returns taskId immediately so Claude can poll.
         Task {
             actor EventCollector {
                 private(set) var events: [String] = []
@@ -353,7 +353,7 @@ struct StorescreensMCP {
                 let result = try await orchestrator.run(config: captureConfig) { event in
                     switch event {
                     case .phase(let msg):
-                        // Internal log dir signal — store for status polling, don't surface as an event
+                        // Internal log dir signal - store for status polling, don't surface as an event
                         if msg.hasPrefix("logDir:") {
                             let logDir = String(msg.dropFirst("logDir:".count))
                             await AsyncTaskStore.shared.setLogDir(taskId: taskId, logDir: logDir)
@@ -386,7 +386,7 @@ struct StorescreensMCP {
                         await collector.append(line)
                         await AsyncTaskStore.shared.appendEvent(taskId: taskId, line: line)
                     case .preflightFinding(let rule, _, let message):
-                        let line = "⚑ check:\(rule) — \(message)"
+                        let line = "⚑ check:\(rule) - \(message)"
                         await collector.append(line)
                         await AsyncTaskStore.shared.appendEvent(taskId: taskId, line: line)
                     }
@@ -573,7 +573,7 @@ struct StorescreensMCP {
                 return t.hasPrefix("✗") || deviceLogErrorPatterns.contains(where: { t.contains($0) })
             }
 
-            // Scan log files for device failures — catches errors that xcodebuild writes to
+            // Scan log files for device failures - catches errors that xcodebuild writes to
             // stderr (appended by finalizeLog) which may not have appeared as events yet.
             var deviceFailureLines: [String] = allErrors
             if let logDir {
@@ -884,7 +884,7 @@ struct StorescreensMCP {
         if FileManager.default.fileExists(atPath: configPath) {
             config = try ConfigLoader().load(from: configPath)
         } else {
-            // Minimal valid config — scheme and at least one device required to capture
+            // Minimal valid config - scheme and at least one device required to capture
             let scheme = args["scheme"]?.stringValue ?? "MyApp"
             config = CaptureConfig(scheme: scheme, devices: [], outputDir: "storescreens-output")
         }
