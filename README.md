@@ -1,12 +1,12 @@
 ![StoreScreens](assets/banner.png)
 
-# storescreens
+# StoreScreens
 
 Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
 ## Three pieces, one workflow
 
-storescreens ships as three complementary pieces. Most users only need the CLI; the other two exist to make AI coding assistants first-class operators.
+StoreScreens ships as three complementary pieces. Most users only need the CLI; the other two exist to make AI coding assistants first-class operators.
 
 | Piece | What it is | When you want it |
 |---|---|---|
@@ -18,16 +18,16 @@ Both the CLI and MCP server are installed by `brew install storescreens`.
 
 ### How this compares to other Xcode MCP servers
 
-storescreens is purpose-built for one job: generating the complete set of App Store Connect screenshots. It is not a general Xcode control surface, and it is not competing with the general-purpose Xcode MCP servers, it complements them.
+StoreScreens is purpose-built for one job: generating the complete set of App Store Connect screenshots. It is not a general Xcode control surface, and it is not competing with the general-purpose Xcode MCP servers, it complements them.
 
 | Tool | Scope | Best for | App Store screenshot output |
 |---|---|---|---|
 | **`storescreens`** | Narrow. App Store screenshot capture, device-size routing, locale and appearance matrix, HTML preview gallery. | Producing the final screenshot set for App Store Connect in one command. | Yes. Named, organized by device and locale, ready to upload. |
 | [**Apple Xcode MCP**](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) (built into Xcode 26.3+) | Xcode-resident tools. Most notably `RenderPreview` for a single SwiftUI `#Preview`. | Checking one view's layout without spinning up a simulator. | No. |
-| [**XcodeBuildMCP**](https://github.com/getsentry/XcodeBuildMCP) (Sentry) | General iOS/macOS build, test, and device interaction driven by `xcodebuild`. | Letting an agent compile, test, and debug iOS/macOS projects through a unified MCP interface. | No. |
-| [**xc-mcp**](https://github.com/conorluddy/xc-mcp) (conorluddy) | 29 tools covering build, simulator lifecycle, and accessibility-first UI automation. Optimized for low-context agent interactions. | Agents that need to drive the simulator via semantic accessibility queries (fast, token-cheap) instead of parsing screenshots. | No, its screenshot tool is for a single capture, not a full App Store matrix. |
+| [**XcodeBuildMCP**](https://github.com/getsentry/XcodeBuildMCP) | General iOS/macOS build, test, and device interaction driven by `xcodebuild`. | Letting an agent compile, test, and debug iOS/macOS projects through a unified MCP interface. | No. |
+| [**xc-mcp**](https://github.com/conorluddy/xc-mcp) | 29 tools covering build, simulator lifecycle, and accessibility-first UI automation. Optimized for low-context agent interactions. | Agents that need to drive the simulator via semantic accessibility queries (fast, token-cheap) instead of parsing screenshots. | No, its screenshot tool is for a single capture, not a full App Store matrix. |
 
-If you are shipping an app, you will likely use storescreens alongside one of the general servers: the general server handles build and run, storescreens handles the screenshot matrix at the end.
+If you are shipping an app, you will likely use StoreScreens alongside one of the general servers: the general server handles build and run, StoreScreens handles the screenshot matrix at the end.
 
 Each run produces a browsable HTML preview with per-device galleries:
 
@@ -298,7 +298,7 @@ By default, screenshots are collected from the **filesystem**. Your test code wr
 
 The generated `takeScreenshot()` helper does two things:
 1. Creates an `XCTAttachment` (stored in the `.xcresult` bundle as a backup)
-2. Writes a PNG file to the storescreens cache directory on the host filesystem
+2. Writes a PNG file to the StoreScreens cache directory on the host filesystem
 
 The CLI reads the cache directory from a breadcrumb file at `~/.storescreens-cache-dir`, which it writes before each capture run. Your test code discovers this path using `SIMULATOR_HOST_HOME`:
 
@@ -332,7 +332,7 @@ storescreens capture --xcresult
 
 #### Screenshot mode in your app
 
-Your app can detect when it's being run by storescreens and adjust its behavior accordingly. The generated test file launches your app with `--screenshotMode` as a launch argument:
+Your app can detect when it's being run by StoreScreens and adjust its behavior accordingly. The generated test file launches your app with `--screenshotMode` as a launch argument:
 
 ```swift
 app.launchArguments = ["--screenshotMode"]
@@ -642,9 +642,9 @@ test_class: ScreenshotTests
 
 ## App Store Connect Screenshot Sizes
 
-storescreens labels devices by physical screen dimension (6.9", 6.3", etc.). Here's how those map to what App Store Connect requires:
+StoreScreens labels devices by physical screen dimension (6.9", 6.3", etc.). Here's how those map to what App Store Connect requires:
 
-| App Store Connect slot | storescreens size | Simulator to use |
+| App Store Connect slot | StoreScreens size | Simulator to use |
 |------------------------|-------------------|------------------|
 | 6.9" (primary required) | **6.9"** | `iPhone 17 Pro Max` |
 | 6.5" (auto-filled from 6.9") ¹ | **6.5"** | `iPhone 11 Pro Max`, `iPhone Xs Max` ² |
@@ -676,7 +676,7 @@ devices:
     platform: macOS
 ```
 
-| Mac App Store slot | storescreens size | Notes |
+| Mac App Store slot | StoreScreens size | Notes |
 |--------------------|-------------------|-------|
 | 2880x1800 | **Mac 2880x1800** | 15" Retina (MacBook Pro 15") |
 | 2560x1600 | **Mac 2560x1600** | 13" Retina (MacBook Pro 13", Air M1+) |
@@ -749,7 +749,7 @@ storescreens-output/
 Every capture run saves full xcodebuild output to `logs/` in the output directory:
 
 - **`test-<id>.log`** - one per device, containing the full build + test output (compiler errors, element lookups, assertion failures, test durations)
-- **`test-debug-<id>.log`** - debug prints from your test code, if you write to the storescreens named pipe
+- **`test-debug-<id>.log`** - debug prints from your test code, if you write to the StoreScreens named pipe
 
 When something goes wrong, check these logs first - the root cause is almost always visible in the xcodebuild output. Use `--verbose` to also stream xcodebuild output to the terminal in real time.
 
@@ -841,7 +841,7 @@ brew upgrade storescreens
 
 ## Real-Time Test Logging
 
-When your UI tests write to the storescreens named pipe, the CLI displays progress in real time:
+When your UI tests write to the StoreScreens named pipe, the CLI displays progress in real time:
 
 ```
                   ✓ iPhone 17 Pro Max -> iPhone 6.9"
@@ -893,11 +893,11 @@ Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to 
 
 ### Works with Xcode MCP (Xcode 26.3+)
 
-storescreens complements Xcode's built-in MCP server. When both are available, the agent can pick the right tool for each situation:
+StoreScreens complements Xcode's built-in MCP server. When both are available, the agent can pick the right tool for each situation:
 
 - **Xcode `RenderPreview`** - check a single SwiftUI `#Preview` in isolation (no simulator needed)
-- **storescreens `take_screenshot`** - capture the full running app in a simulator (<1 second)
-- **storescreens `capture`** - full App Store screenshot suite across multiple devices, locales, and appearances
+- **StoreScreens `take_screenshot`** - capture the full running app in a simulator (<1 second)
+- **StoreScreens `capture`** - full App Store screenshot suite across multiple devices, locales, and appearances
 
 ## Alternatives
 
