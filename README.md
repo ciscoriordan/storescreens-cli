@@ -2,9 +2,9 @@
 
 Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
-> **Using an AI coding assistant?** The [storescreens-skill](https://github.com/storescreens/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
+> **Using an AI coding assistant?** The [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
 
-https://github.com/storescreens/storescreens-cli/raw/main/demo.mov
+https://github.com/ciscoriordan/storescreens-cli/raw/main/demo.mov
 
 ## Install
 
@@ -13,14 +13,14 @@ Requires **macOS 14+** (Sonoma or later).
 ### Homebrew
 
 ```bash
-brew tap storescreens/tap
+brew tap ciscoriordan/tap
 brew install storescreens
 ```
 
 ### Script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/storescreens/storescreens-cli/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ciscoriordan/storescreens-cli/main/install.sh | sh
 ```
 
 ### From source
@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/storescreens/storescreens-cli/main/
 Requires **Xcode 16+**.
 
 ```bash
-git clone https://github.com/storescreens/storescreens-cli.git
+git clone https://github.com/ciscoriordan/storescreens-cli.git
 cd storescreens-cli
 swift build -c release
 sudo cp .build/release/storescreens-cli /usr/local/bin/storescreens
@@ -850,7 +850,7 @@ storescreens check --directory ./MyApp      # scan a specific directory
 
 ## Agent Skill
 
-Use [storescreens-skill](https://github.com/storescreens/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports **targeted screenshots** for quick visual checks during development.
+Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports **targeted screenshots** for quick visual checks during development.
 
 When the MCP server is configured, the agent streams per-screenshot progress inline as each device captures:
 

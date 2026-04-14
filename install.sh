@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="storescreens/storescreens-cli"
+REPO="ciscoriordan/storescreens-cli"
 INSTALL_DIR="/usr/local/bin"
 
 # Get latest release tag
