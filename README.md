@@ -1,3 +1,5 @@
+![StoreScreens](assets/banner.png)
+
 # storescreens
 
 Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
