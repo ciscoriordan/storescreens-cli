@@ -8,6 +8,12 @@ Capture App Store screenshots across every required device size in one command. 
 
 <video src="https://github.com/user-attachments/assets/fb0c0cf1-8fdc-4e28-98c9-1baded6dd947" controls></video>
 
+When the MCP server is configured, the agent streams per-screenshot progress inline as each device captures:
+
+![Capture starting - MCP tool called, taskId returned, polling begins](assets/mcp-capture-start.png)
+
+![Per-screenshot progress streaming inline as each device captures](assets/mcp-capture-progress.png)
+
 ## Install
 
 Requires **macOS 14+** (Sonoma or later).
@@ -853,12 +859,6 @@ storescreens check --directory ./MyApp      # scan a specific directory
 ## Agent Skill
 
 Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports **targeted screenshots** for quick visual checks during development.
-
-When the MCP server is configured, the agent streams per-screenshot progress inline as each device captures:
-
-![Capture starting - MCP tool called, taskId returned, polling begins](assets/mcp-capture-start.png)
-
-![Per-screenshot progress streaming inline as each device captures](assets/mcp-capture-progress.png)
 
 ### Works with Xcode MCP (Xcode 26.3+)
 
