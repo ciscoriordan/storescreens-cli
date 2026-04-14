@@ -6,7 +6,7 @@ Capture App Store screenshots across every required device size in one command. 
 
 > **Using an AI coding assistant?** The [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
 
-<video src="https://github.com/ciscoriordan/storescreens-cli/raw/main/demo.mov" controls></video>
+<video src="https://github.com/user-attachments/assets/fb0c0cf1-8fdc-4e28-98c9-1baded6dd947" controls></video>
 
 ## Install
 
