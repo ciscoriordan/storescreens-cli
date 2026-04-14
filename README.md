@@ -4,7 +4,17 @@
 
 Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
-> **Using an AI coding assistant?** The [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
+## Three pieces, one workflow
+
+storescreens ships as three complementary pieces. Most users only need the CLI; the other two exist to make AI coding assistants first-class operators.
+
+| Piece | What it is | When you want it |
+|---|---|---|
+| **`storescreens` (CLI)** | The core binary. Runs UI tests across simulators, captures screenshots, builds the HTML preview gallery. | Always — this is the engine. Use it from your terminal, CI, or scripts. |
+| **`storescreens-mcp` (MCP server)** | A structured wrapper that exposes the CLI's operations as [Model Context Protocol](https://modelcontextprotocol.io) tools with inline progress streaming. | When your AI coding assistant (Claude Code, Cursor, etc.) should drive captures directly instead of parsing CLI output from a Bash call. |
+| **[storescreens-skill](https://github.com/ciscoriordan/storescreens-skill)** | An agent skill — instructions and templates that teach an assistant how to detect your Xcode project, generate config, scaffold UI tests, and run a capture. | When you want an assistant to do the full setup for you, from zero to first screenshots, with no manual steps. Works with any assistant that supports skills. |
+
+Both the CLI and MCP server are installed by `brew install storescreens`.
 
 Each run produces a browsable HTML preview with per-device galleries:
 
