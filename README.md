@@ -6,8 +6,6 @@ Capture App Store screenshots across every required device size in one command. 
 
 > **Using an AI coding assistant?** The [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) agent can handle the entire setup for you — install, config, UI tests, and capture — in any assistant that supports skills.
 
-<video src="https://github.com/user-attachments/assets/fb0c0cf1-8fdc-4e28-98c9-1baded6dd947" controls></video>
-
 Each run produces a browsable HTML preview with per-device galleries:
 
 ![Preview index page listing every captured device](assets/preview-index.png)
@@ -21,6 +19,8 @@ When the MCP server is configured, the agent streams per-screenshot progress inl
 ![Capture starting - MCP tool called, taskId returned, polling begins](assets/mcp-capture-start.png)
 
 ![Per-screenshot progress streaming inline as each device captures](assets/mcp-capture-progress.png)
+
+<video src="https://github.com/user-attachments/assets/fb0c0cf1-8fdc-4e28-98c9-1baded6dd947" controls></video>
 
 ## Install
 
