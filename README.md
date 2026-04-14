@@ -8,6 +8,14 @@ Capture App Store screenshots across every required device size in one command. 
 
 <video src="https://github.com/user-attachments/assets/fb0c0cf1-8fdc-4e28-98c9-1baded6dd947" controls></video>
 
+Each run produces a browsable HTML preview with per-device galleries:
+
+![Preview index page listing every captured device](assets/preview-index.png)
+
+![iPad Pro 13" gallery with all 19 screenshots](assets/preview-ipad.png)
+
+![iPhone 6.9" gallery with all 19 screenshots](assets/preview-iphone.png)
+
 When the MCP server is configured, the agent streams per-screenshot progress inline as each device captures:
 
 ![Capture starting - MCP tool called, taskId returned, polling begins](assets/mcp-capture-start.png)
@@ -16,7 +24,7 @@ When the MCP server is configured, the agent streams per-screenshot progress inl
 
 ## Install
 
-Requires **macOS 14+** (Sonoma or later).
+Requires **macOS 14+** (Sonoma or later) on **Apple Silicon** (arm64). Intel Macs are not supported in the prebuilt binaries; Intel users can build from source.
 
 ### Homebrew
 
