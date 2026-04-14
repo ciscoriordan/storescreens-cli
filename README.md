@@ -16,6 +16,19 @@ storescreens ships as three complementary pieces. Most users only need the CLI; 
 
 Both the CLI and MCP server are installed by `brew install storescreens`.
 
+### How this compares to other Xcode MCP servers
+
+storescreens is purpose-built for one job: generating the complete set of App Store Connect screenshots. It is not a general Xcode control surface, and it is not competing with the general-purpose Xcode MCP servers, it complements them.
+
+| Tool | Scope | Best for | App Store screenshot output |
+|---|---|---|---|
+| **`storescreens`** | Narrow. App Store screenshot capture, device-size routing, locale and appearance matrix, HTML preview gallery. | Producing the final screenshot set for App Store Connect in one command. | Yes. Named, organized by device and locale, ready to upload. |
+| [**Apple Xcode MCP**](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) (built into Xcode 26.3+) | Xcode-resident tools. Most notably `RenderPreview` for a single SwiftUI `#Preview`. | Checking one view's layout without spinning up a simulator. | No. |
+| [**XcodeBuildMCP**](https://github.com/getsentry/XcodeBuildMCP) (Sentry) | General iOS/macOS build, test, and device interaction driven by `xcodebuild`. | Letting an agent compile, test, and debug iOS/macOS projects through a unified MCP interface. | No. |
+| [**xc-mcp**](https://github.com/conorluddy/xc-mcp) (conorluddy) | 29 tools covering build, simulator lifecycle, and accessibility-first UI automation. Optimized for low-context agent interactions. | Agents that need to drive the simulator via semantic accessibility queries (fast, token-cheap) instead of parsing screenshots. | No, its screenshot tool is for a single capture, not a full App Store matrix. |
+
+If you are shipping an app, you will likely use storescreens alongside one of the general servers: the general server handles build and run, storescreens handles the screenshot matrix at the end.
+
 Each run produces a browsable HTML preview with per-device galleries:
 
 ![Preview index page listing every captured device](assets/preview-index.png)
