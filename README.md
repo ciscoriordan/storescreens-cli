@@ -319,12 +319,17 @@ Intermediate screenshots and named pipes for real-time logging are stored in `.s
 
 ##### Why filesystem over xcresult?
 
-The filesystem approach is more reliable than extracting from `.xcresult` bundles:
-- Screenshots are saved incrementally - if the test crashes partway through, you still get all screenshots captured before the crash
-- No dependency on `xcresulttool` parsing or attachment name filtering
-- Faster - no post-processing needed after the test finishes
+Filesystem capture is the primary path because it gives you things xcresult export can't:
 
-If you prefer xcresult extraction (e.g., your test only uses `XCTAttachment` without filesystem writes), pass `--xcresult`:
+- **Streaming progress** - PNGs land one-by-one as the test runs, so the MCP server streams per-screenshot updates to your AI assistant. `xcresulttool export` only runs after the entire test finishes, so progress is all-or-nothing.
+- **Incremental safety** - if the test crashes partway through, you still get every screenshot captured before the crash.
+- **Deterministic filenames** - you pick the name. `xcresulttool` appends `_N_UUID.png` to every attachment, which has to be regex-stripped back to the original name.
+- **No silent skip rules** - `xcresulttool` silently drops attachments whose names start with `Screenshot`, `UI Snapshot`, `Synthesized Event`, `Screen Recording`, and several others. Filesystem writes are always kept, no matter what you name them.
+- **Faster** - no post-processing step after the test finishes.
+
+The tradeoff: filesystem capture only works on simulators, because it relies on `SIMULATOR_HOST_HOME` to cross the sandbox boundary back to your Mac. App Store screenshots are simulator-only anyway, so this rarely matters.
+
+If you need to capture on real devices, or you want attachments visible in Xcode's built-in test report UI, pass `--xcresult` instead:
 
 ```bash
 storescreens capture --xcresult
