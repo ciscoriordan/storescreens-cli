@@ -711,7 +711,7 @@ struct StorescreensMCP {
                     severity: "warning", rule: "stale-derived-data",
                     file: expandedPath, line: 0,
                     message: "Test source files are newer than the compiled test binary in DerivedData. " +
-                        "Next capture will clean and rebuild automatically.",
+                        "xcodebuild may produce a stale test binary. To force a clean rebuild, run: rm -rf \"\(expandedPath)/Build/Products\"",
                     lineContent: ""
                 )
                 findings.append(staleFinding)

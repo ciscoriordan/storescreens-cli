@@ -201,7 +201,10 @@ struct CaptureCommand: AsyncParsableCommand {
             }
         }
 
-        // 0. Check for stale DerivedData (persistent path only)
+        // 0. Check for stale DerivedData (persistent path only).
+        // Surface a diagnostic so the user can act on it, but do NOT auto-clean: deleting
+        // build products without confirmation is destructive. If tests behave strangely
+        // the user can remove <DerivedData>/Build/Products manually and rerun.
         if config.derivedDataPath != nil {
             if CaptureOrchestrator.isDerivedDataStale(
                 derivedDataPath: derivedData,
@@ -209,8 +212,11 @@ struct CaptureCommand: AsyncParsableCommand {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                logger.log("Stale DerivedData detected - test source is newer than compiled binary. Cleaning build products...", level: .warning)
-                CaptureOrchestrator.cleanDerivedData(at: derivedData)
+                let productsDir = (derivedData as NSString).appendingPathComponent("Build/Products")
+                logger.log(
+                    "⚑ Test sources newer than compiled test bundle; xcodebuild may produce a stale binary. Consider deleting \(productsDir) if tests behave strangely.",
+                    level: .warning
+                )
             }
         }
 
@@ -528,6 +534,20 @@ struct CaptureCommand: AsyncParsableCommand {
                 isMacOS: device.isMacOS
             )
         }
+        // Parse the xcresult for real pass/fail counts before we tell the user "done".
+        // xcodebuild exits non-zero on assertion failures but still writes the xcresult,
+        // and the failure messages (including file:line) only live there, not in stdout.
+        let xcresultParser = XCResultParser()
+        var testSummary: XCTestSummaryCLI?
+        var legacyFailureSummaries: [String] = []
+        if FileManager.default.fileExists(atPath: resultPath) {
+            testSummary = await xcresultParser.extractTestSummary(resultBundlePath: resultPath)
+            legacyFailureSummaries = await xcresultParser.extractFailureSummaries(resultBundlePath: resultPath)
+            for failure in legacyFailureSummaries {
+                logLine("⚠️  Test failure: \(failure)")
+            }
+        }
+
         // Stop async handler, then drain any remaining buffered data synchronously.
         // (O_NONBLOCK: read() returns EAGAIN immediately when the buffer is empty.)
         pipeHandle?.readabilityHandler = nil
@@ -547,7 +567,25 @@ struct CaptureCommand: AsyncParsableCommand {
                 }
             }
         }
-        logLine("✓ Tests completed [\(appearance)]")
+
+        // Emit a status line reflecting actual test outcomes, not just "xcodebuild exited".
+        if let summary = testSummary {
+            if summary.hasFailures {
+                logLine("✗ Tests failed [\(appearance)]: \(summary.failedTests) of \(summary.totalTests)")
+                for failure in summary.failures {
+                    let firstLine = failure.failureText
+                        .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                        .first.map(String.init) ?? failure.failureText
+                    logLine("  ✗ \(failure.testName): \(firstLine)")
+                }
+            } else if summary.totalTests > 0 {
+                logLine("✓ Tests passed [\(appearance)]: \(summary.passedTests) of \(summary.totalTests)")
+            } else {
+                logLine("✓ Tests completed [\(appearance)] (0 tests reported in xcresult)")
+            }
+        } else {
+            logLine("✓ Tests completed [\(appearance)]")
+        }
 
         try? pipeHandle?.close()
         unlink(pipePath)
@@ -561,7 +599,6 @@ struct CaptureCommand: AsyncParsableCommand {
         if xcresult && FileManager.default.fileExists(atPath: resultPath) {
             // xcresult mode: extract named attachments from the .xcresult bundle
             logLine("  Extracting from xcresult...")
-            let xcresultParser = XCResultParser()
             let rawExportDir = (tempDir.path as NSString)
                 .appendingPathComponent("xcresult-export-\(device.udid)-\(appearance)")
             do {
@@ -601,8 +638,33 @@ struct CaptureCommand: AsyncParsableCommand {
             )
             logLine("  Found \(screenshots.count) screenshots via filesystem")
         }
-        // Fail fast if no screenshots were captured (e.g. simulator crash, SBMainWorkspace errors)
+        // Fail loudly if no screenshots were captured, and make the message match reality:
+        // if the xcresult shows test failures, name them; if all tests passed, point at
+        // the breadcrumb mechanism; otherwise fall back to the generic simulator-state hint.
         if screenshots.isEmpty {
+            if let summary = testSummary, summary.hasFailures {
+                let detailed = legacyFailureSummaries.isEmpty
+                    ? summary.failures.map { failure -> String in
+                        let firstLine = failure.failureText
+                            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                            .first.map(String.init) ?? failure.failureText
+                        return "\(failure.testName): \(firstLine)"
+                    }
+                    : legacyFailureSummaries
+                throw CLIError.noScreenshotsTestFailures(
+                    device: device.simulatorName,
+                    totalTests: summary.totalTests,
+                    failedTests: summary.failedTests,
+                    failureSummaries: detailed
+                )
+            }
+            if let summary = testSummary, summary.totalTests > 0, summary.failedTests == 0 {
+                throw CLIError.noScreenshotsAllTestsPassed(
+                    device: device.simulatorName,
+                    totalTests: summary.totalTests,
+                    cacheDir: deviceScreenshotsDir.path
+                )
+            }
             throw CLIError.noScreenshotsFound(device: device.simulatorName)
         }
         logLine("✓ \(screenshots.count) screenshots")
@@ -648,7 +710,7 @@ struct CaptureCommand: AsyncParsableCommand {
             }
         }
 
-        // 0. Check for stale DerivedData (persistent path only)
+        // 0. Check for stale DerivedData (persistent path only). Warn only, no auto-clean.
         if config.derivedDataPath != nil {
             if CaptureOrchestrator.isDerivedDataStale(
                 derivedDataPath: derivedData,
@@ -656,8 +718,11 @@ struct CaptureCommand: AsyncParsableCommand {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                logger.log("Stale DerivedData detected - cleaning build products...", level: .warning)
-                CaptureOrchestrator.cleanDerivedData(at: derivedData)
+                let productsDir = (derivedData as NSString).appendingPathComponent("Build/Products")
+                logger.log(
+                    "⚑ Test sources newer than compiled test bundle; xcodebuild may produce a stale binary. Consider deleting \(productsDir) if tests behave strangely.",
+                    level: .warning
+                )
             }
         }
 

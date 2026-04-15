@@ -143,7 +143,11 @@ package struct CaptureOrchestrator: Sendable {
             }
         }
 
-        // 0. Check for stale DerivedData (persistent path only)
+        // 0. Check for stale DerivedData (persistent path only).
+        // Surface a diagnostic so the user can act on it, but do NOT auto-clean:
+        // storescreens-managed or not, deleting build products without confirmation
+        // is a destructive action. If tests behave strangely the user can remove
+        // <DerivedData>/Build/Products manually, or rerun after a touch.
         if config.derivedDataPath != nil {
             if Self.isDerivedDataStale(
                 derivedDataPath: derivedData,
@@ -151,8 +155,12 @@ package struct CaptureOrchestrator: Sendable {
                 project: config.project,
                 workspace: config.workspace
             ) {
-                await eventHandler(.phase("Stale DerivedData detected - test source is newer than compiled binary. Cleaning build products..."))
-                Self.cleanDerivedData(at: derivedData)
+                let productsDir = (derivedData as NSString).appendingPathComponent("Build/Products")
+                await eventHandler(.preflightFinding(
+                    rule: "stale-test-bundle",
+                    device: nil,
+                    message: "Test sources newer than compiled test bundle; xcodebuild may produce a stale binary. Consider deleting \(productsDir) if tests behave strangely."
+                ))
             }
         }
 
@@ -547,16 +555,20 @@ package struct CaptureOrchestrator: Sendable {
             )
         }
 
-        // Surface any test assertion failures from the xcresult bundle.
-        // xcodebuild exits with non-zero on assertion failures but still writes the
-        // xcresult, so this runs regardless of whether tests passed. The failure
-        // message and file:line are only available in the xcresult (not in stdout),
-        // so we emit them immediately after xcodebuild exits so they surface in
-        // get_capture_status polling before the rest of the run completes.
+        // Parse the xcresult for real pass/fail counts. xcodebuild exits non-zero on
+        // assertion failures but still writes the xcresult, and the failure messages
+        // (including file:line) only live there, not in stdout. Extract them now so
+        // the status surface reflects actual test outcomes instead of "xcodebuild exited".
+        var testSummary: XCTestSummary?
+        var legacyFailureSummaries: [String] = []
         if FileManager.default.fileExists(atPath: resultPath) {
             let xcresultParser = XCResultParser()
-            let failures = await xcresultParser.extractFailureSummaries(resultBundlePath: resultPath)
-            for failure in failures {
+            testSummary = await xcresultParser.extractTestSummary(resultBundlePath: resultPath)
+            // Fallback: the legacy object graph gives file:line for each assertion,
+            // which the modern summary JSON does not. Capture it as a secondary detail
+            // source so we can surface it even if the new schema parse fails.
+            legacyFailureSummaries = await xcresultParser.extractFailureSummaries(resultBundlePath: resultPath)
+            for failure in legacyFailureSummaries {
                 await logLine("⚠️  Test failure: \(failure)")
             }
         }
@@ -580,7 +592,27 @@ package struct CaptureOrchestrator: Sendable {
             }
         }
         liveWatcher?.cancel()
-        await logLine("✓ Tests completed [\(appearance)]")
+
+        // Emit a status line that reflects what actually happened, not just
+        // "xcodebuild exited". If the summary parse succeeded, we report real
+        // pass/fail counts; otherwise we fall back to the old neutral message.
+        if let summary = testSummary {
+            if summary.hasFailures {
+                await logLine("✗ Tests failed [\(appearance)]: \(summary.failedTests) of \(summary.totalTests)")
+                for failure in summary.failures {
+                    let firstLine = failure.failureText
+                        .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                        .first.map(String.init) ?? failure.failureText
+                    await logLine("  ✗ \(failure.testName): \(firstLine)")
+                }
+            } else if summary.totalTests > 0 {
+                await logLine("✓ Tests passed [\(appearance)]: \(summary.passedTests) of \(summary.totalTests)")
+            } else {
+                await logLine("✓ Tests completed [\(appearance)] (0 tests reported in xcresult)")
+            }
+        } else {
+            await logLine("✓ Tests completed [\(appearance)]")
+        }
 
         try? pipeHandle?.close()
         try? pipeLogHandle?.close()
@@ -650,10 +682,35 @@ package struct CaptureOrchestrator: Sendable {
         }
         await logLine("✓ \(screenshots.count) screenshots")
 
-        // Fail fast if no screenshots were collected - this indicates a simulator crash,
-        // RequestDenied from SBMainWorkspace, or other hard failure. Throwing here lets
-        // withRetries retry the run if --retries is set, rather than silently producing 0.
+        // Fail loudly if no screenshots were collected. Pick the error variant that
+        // actually matches what we observed in the xcresult so the message points at
+        // the right root cause, not a generic "simulator in bad state" red herring.
         if screenshots.isEmpty {
+            if let summary = testSummary, summary.hasFailures {
+                // Prefer the legacy assertion summaries (they include file:line); fall
+                // back to the modern summary's failureText if the legacy parse was empty.
+                let detailed = legacyFailureSummaries.isEmpty
+                    ? summary.failures.map { failure -> String in
+                        let firstLine = failure.failureText
+                            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                            .first.map(String.init) ?? failure.failureText
+                        return "\(failure.testName): \(firstLine)"
+                    }
+                    : legacyFailureSummaries
+                throw CLIError.noScreenshotsTestFailures(
+                    device: device.simulatorName,
+                    totalTests: summary.totalTests,
+                    failedTests: summary.failedTests,
+                    failureSummaries: detailed
+                )
+            }
+            if let summary = testSummary, summary.totalTests > 0, summary.failedTests == 0 {
+                throw CLIError.noScreenshotsAllTestsPassed(
+                    device: device.simulatorName,
+                    totalTests: summary.totalTests,
+                    cacheDir: deviceScreenshotsDir.path
+                )
+            }
             throw CLIError.noScreenshotsFound(device: device.simulatorName)
         }
 

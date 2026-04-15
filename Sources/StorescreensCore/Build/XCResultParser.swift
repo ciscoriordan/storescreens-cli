@@ -1,9 +1,70 @@
 import Foundation
 
+/// Summary of test results extracted from an .xcresult bundle.
+/// Counts plus human-readable failure details, suitable for surfacing to the user.
+package struct XCTestSummary: Sendable {
+    package let totalTests: Int
+    package let passedTests: Int
+    package let failedTests: Int
+    package let skippedTests: Int
+    package let failures: [Failure]
+
+    package struct Failure: Sendable {
+        /// Full test identifier, e.g. "MyAppUITests/ScreenshotTests/testPolytonicLayer()"
+        package let testName: String
+        /// Target name, e.g. "MyAppUITests"
+        package let targetName: String
+        /// Assertion message plus source location if available.
+        package let failureText: String
+    }
+
+    /// True when xcresulttool reported at least one non-passed, non-skipped test.
+    package var hasFailures: Bool { failedTests > 0 }
+}
+
 package struct XCResultParser {
     private let shell = ShellRunner()
 
     package init() {}
+
+    /// Extract a high level test summary (pass/fail/skip counts plus failures) from a result bundle.
+    /// Uses `xcresulttool get test-results summary --path <bundle>`, which is the modern
+    /// (Xcode 16+) replacement for the legacy object graph. Returns nil if xcresulttool
+    /// fails or the JSON cannot be decoded.
+    package func extractTestSummary(resultBundlePath: String) async -> XCTestSummary? {
+        guard let result = try? await shell.xcrun("xcresulttool", arguments: [
+            "get", "test-results", "summary",
+            "--path", resultBundlePath,
+            "--compact",
+        ]),
+        result.succeeded,
+        let data = result.stdout.data(using: .utf8),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        let total = json["totalTestCount"] as? Int ?? 0
+        let passed = json["passedTests"] as? Int ?? 0
+        let failed = json["failedTests"] as? Int ?? 0
+        let skipped = json["skippedTests"] as? Int ?? 0
+
+        var failures: [XCTestSummary.Failure] = []
+        if let failureList = json["testFailures"] as? [[String: Any]] {
+            for entry in failureList {
+                let name = entry["testName"] as? String ?? "unknown test"
+                let target = entry["targetName"] as? String ?? ""
+                let text = entry["failureText"] as? String ?? "unknown failure"
+                failures.append(.init(testName: name, targetName: target, failureText: text))
+            }
+        }
+
+        return XCTestSummary(
+            totalTests: total,
+            passedTests: passed,
+            failedTests: failed,
+            skippedTests: skipped,
+            failures: failures
+        )
+    }
 
     /// Extract test failure summaries from a result bundle.
     /// Queries `xcresulttool get object --legacy` and parses `testFailureSummaries`.

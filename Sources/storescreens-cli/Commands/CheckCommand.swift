@@ -62,7 +62,7 @@ struct CheckCommand: AsyncParsableCommand {
             ) {
                 logger.log(
                     "\(expandedPath)  [stale-derived-data]\n    Test source files are newer than the compiled test binary. " +
-                    "Next capture will clean and rebuild automatically, or run: rm -rf \"\(expandedPath)/Build/Products\"",
+                    "xcodebuild may produce a stale test binary. To force a clean rebuild, run: rm -rf \"\(expandedPath)/Build/Products\"",
                     level: .warning
                 )
             }

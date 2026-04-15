@@ -357,6 +357,19 @@ enum CLIError: LocalizedError {
     case xctestrunNotFound(derivedDataPath: String)
     case resultBundleNotFound(path: String)
     case noScreenshotsFound(device: String)
+    /// 0 PNGs reached the cache dir AND at least one test failed in the xcresult.
+    case noScreenshotsTestFailures(
+        device: String,
+        totalTests: Int,
+        failedTests: Int,
+        failureSummaries: [String]
+    )
+    /// 0 PNGs reached the cache dir but all tests passed. Points at the breadcrumb path.
+    case noScreenshotsAllTestsPassed(
+        device: String,
+        totalTests: Int,
+        cacheDir: String
+    )
     case screenshotExtractionFailed(reason: String)
     case outputDirectoryNotWritable(path: String)
     case localeSetFailed(reason: String)
@@ -397,7 +410,22 @@ enum CLIError: LocalizedError {
         case .resultBundleNotFound(let path):
             return "Result bundle not found at \(path)."
         case .noScreenshotsFound(let device):
-            return "No screenshots found for \(device). Ensure your UI tests use XCTAttachment."
+            return "No screenshots collected for \(device). Possible causes: simulator in bad state (try 'xcrun simctl shutdown all'), tests not saving screenshots, or test crash. Check logs/ for details."
+        case .noScreenshotsTestFailures(let device, let total, let failed, let summaries):
+            let failuresBlock = summaries.isEmpty
+                ? "(xcresulttool did not return failure details; inspect logs/ for the raw xcodebuild output)"
+                : summaries.map { "  - \($0)" }.joined(separator: "\n")
+            return """
+            No screenshots collected for \(device). \(failed) of \(total) tests failed, which is almost certainly why no PNGs were produced:
+            \(failuresBlock)
+            Fix the failing test(s) above, then rerun. If the test code looks correct but xcodebuild keeps running stale logic, the compiled test bundle in your persistent DerivedData is stale, see the '⚑ Test sources newer than compiled test bundle' warning earlier in this run.
+            """
+        case .noScreenshotsAllTestsPassed(let device, let total, let cacheDir):
+            return """
+            No screenshots collected for \(device). All \(total) test\(total == 1 ? "" : "s") passed but no PNGs reached the screenshot cache directory:
+              \(cacheDir)
+            The test target likely did not write any screenshots. Check that your test code reads the breadcrumb file at ~/.storescreens-cache-dir and writes PNGs to the path it contains. See logs/ for the raw xcodebuild output.
+            """
         case .screenshotExtractionFailed(let reason):
             return "Screenshot extraction failed: \(reason)"
         case .outputDirectoryNotWritable(let path):
