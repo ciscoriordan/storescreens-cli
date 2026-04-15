@@ -299,7 +299,7 @@ struct StorescreensMCP {
     static func handle(_ params: CallTool.Parameters, server: Server) async -> CallTool.Result {
         do {
             switch params.name {
-            case "capture":             return try await handleCapture(params, server: server)
+            case "capture":             return try await handleCapture(params)
             case "get_capture_status":  return await handleGetCaptureStatus(params)
             case "get_capture_result":  return try await handleGetCaptureResult(params)
             case "check":             return try await handleCheck(params)
@@ -319,7 +319,7 @@ struct StorescreensMCP {
 
     // MARK: - capture (non-blocking)
 
-    static func handleCapture(_ params: CallTool.Parameters, server: Server) async throws -> CallTool.Result {
+    static func handleCapture(_ params: CallTool.Parameters) async throws -> CallTool.Result {
         let configPath = params.arguments?["config_path"]?.stringValue ?? "storescreens.yml"
         if let dir = params.arguments?["directory"]?.stringValue {
             FileManager.default.changeCurrentDirectoryPath(dir)
@@ -333,8 +333,6 @@ struct StorescreensMCP {
             return .init(content: [.text("No project or workspace in \(configPath). Run write_config or check storescreens.yml.")], isError: true)
         }
 
-        let progressToken = params._meta?.progressToken
-
         let taskId = String(UUID().uuidString.prefix(8).lowercased())
         await AsyncTaskStore.shared.start(taskId: taskId)
 
@@ -342,9 +340,7 @@ struct StorescreensMCP {
         Task {
             actor EventCollector {
                 private(set) var events: [String] = []
-                private(set) var screenshotCount: Int = 0
                 func append(_ line: String) { events.append(line) }
-                func incrementScreenshots() -> Int { screenshotCount += 1; return screenshotCount }
             }
             let collector = EventCollector()
             let orchestrator = CaptureOrchestrator()
@@ -370,13 +366,6 @@ struct StorescreensMCP {
                         let line = "  ✓ \(device) [\(slot)] \(name)"
                         await collector.append(line)
                         await AsyncTaskStore.shared.appendEvent(taskId: taskId, line: line)
-                        let count = await collector.incrementScreenshots()
-                        if let token = progressToken {
-                            try? await server.notify(ProgressNotification.message(
-                                .init(progressToken: token, progress: Double(count),
-                                      message: "📷 \(device) [\(slot)] \(name)")
-                            ))
-                        }
                     case .deviceCompleted(let device, let count):
                         let line = "✓ \(device): \(count) screenshot\(count == 1 ? "" : "s")"
                         await collector.append(line)
