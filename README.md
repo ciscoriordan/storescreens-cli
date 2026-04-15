@@ -902,3 +902,7 @@ StoreScreens complements Xcode's built-in MCP server. When both are available, t
 ## Alternatives
 
 This tool is for native Apple platforms (iOS, iPadOS, watchOS). For cross-platform screenshot automation (Android, React Native, Flutter), use [fastlane](https://fastlane.tools/).
+
+## License
+
+[MIT](LICENSE) &copy; 2026 Francisco Riordan
