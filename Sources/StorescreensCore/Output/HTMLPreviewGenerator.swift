@@ -1,7 +1,11 @@
 import Foundation
 
 package struct HTMLPreviewGenerator {
-    package init() {}
+    private let localeFlags: [String: String]
+
+    package init(localeFlags: [String: String]? = nil) {
+        self.localeFlags = localeFlags ?? [:]
+    }
 
     /// Generates per-device/appearance HTML preview pages and an index linking them all.
     /// Old preview pages from previous runs are preserved and labeled with their timestamp.
@@ -407,8 +411,8 @@ package struct HTMLPreviewGenerator {
     /// Returns an svg-flags CDN URL for the given Xcode locale code.
     /// Falls back gracefully via onerror in HTML if the image can't be loaded.
     private func flagURL(for locale: String) -> String {
-        // Map Xcode locale codes to svg-flags language codes.
-        let overrides: [String: String] = [
+        // Built-in map: Xcode locale codes where the svg-flags filename differs.
+        let builtin: [String: String] = [
             "en-GB":   "en",
             "es-419":  "es-mx",
             "fr-CA":   "fr-ca-qc",
@@ -417,9 +421,14 @@ package struct HTMLPreviewGenerator {
             "zh-Hant": "zh",
             "zh-HK":   "zh",
         ]
+        // User overrides from config win over built-in on key collisions.
+        let merged = builtin.merging(localeFlags) { _, user in user }
+        let value = merged[locale] ?? locale.lowercased()
+        if value.hasPrefix("http://") || value.hasPrefix("https://") {
+            return value
+        }
         let base = "https://raw.githubusercontent.com/ciscoriordan/svg-flags/main/circle/languages"
-        let code = overrides[locale] ?? locale.lowercased()
-        return "\(base)/\(code).svg"
+        return "\(base)/\(value).svg"
     }
 
     private func escapeHTML(_ string: String) -> String {

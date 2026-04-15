@@ -138,6 +138,14 @@ struct InitCommand: AsyncParsableCommand {
         yaml += "#   - ja\n"
         yaml += "#   - de-DE\n\n"
 
+        yaml += "# Optional: custom flags for the HTML preview gallery.\n"
+        yaml += "# Keys are Xcode locale codes; values are either a filename (without .svg)\n"
+        yaml += "# from ciscoriordan/svg-flags/circle/languages/, or a full https:// URL.\n"
+        yaml += "# Merged with built-in defaults; these win on collisions.\n"
+        yaml += "# locale_flags:\n"
+        yaml += "#   en-IN: in-en\n"
+        yaml += "#   hi: in-hi\n\n"
+
         yaml += "# Appearances to capture (default: both light and dark)\n"
         yaml += "# appearances:\n"
         yaml += "#   - light\n"

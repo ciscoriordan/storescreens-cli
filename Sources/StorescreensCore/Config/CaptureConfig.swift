@@ -52,6 +52,13 @@ package struct CaptureConfig: Codable {
     /// Default: false. Set to true to enable.
     package var upload: Bool?
 
+    /// Custom locale-to-flag mappings for the HTML preview gallery.
+    /// Keys are Xcode locale codes (e.g., "en-GB", "es-419"). Values are either:
+    ///   - A filename (without .svg) from ciscoriordan/svg-flags/circle/languages/, e.g. "in-en"
+    ///   - A full https:// URL, used as-is
+    /// Merged with built-in defaults; user values win over built-in on key collisions.
+    package var localeFlags: [String: String]?
+
     package init(scheme: String, devices: [DeviceConfig], outputDir: String) {
         self.scheme = scheme
         self.devices = devices
@@ -73,6 +80,7 @@ package struct CaptureConfig: Codable {
         case logLevel = "log_level"
         case derivedDataPath = "derived_data_path"
         case upload
+        case localeFlags = "locale_flags"
     }
 }
 

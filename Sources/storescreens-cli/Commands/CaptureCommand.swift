@@ -396,7 +396,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
-            try HTMLPreviewGenerator().generate(manifest: manifest, outputDir: effectiveOutputDir)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
 
             // Extract app icon from the built .app bundle
             if let appPath = builtAppPath {
@@ -811,7 +811,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
-            try HTMLPreviewGenerator().generate(manifest: manifest, outputDir: effectiveOutputDir)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
 
             // Extract app icon from the built .app bundle
             if AppIconExtractor.extract(appBundlePath: appPath, to: effectiveOutputDir) != nil {
