@@ -84,12 +84,57 @@ struct DeviceConfig: Codable, Sendable {
     /// Platform for this device: "iOS" (default) or "macOS".
     /// When "macOS", tests run natively on the Mac instead of in a simulator.
     var platform: String?
+    /// Per-device test selection. When non-nil, xcodebuild runs only these
+    /// tests on this device, overriding the top-level `test_class` filter.
+    ///
+    /// Each entry is interpreted relative to the top-level `test_target`:
+    ///   - "testFoo"         -> `test_target/test_class/testFoo`
+    ///   - "ClassName/test"  -> `test_target/ClassName/test`
+    ///   - "ClassName"       -> `test_target/ClassName`
+    ///   - "Target/Cls/test" -> passed through verbatim
+    ///
+    /// Use this to restrict iPad-only or iPhone-only test methods to their
+    /// platform, so a test that only renders meaningfully on one form factor
+    /// doesn't run on the other and produce a degraded screenshot. When nil,
+    /// the device inherits the top-level test_target/test_class behavior.
+    var tests: [String]?
 
     var isMacOS: Bool {
         platform?.lowercased() == "macos"
     }
 
     enum CodingKeys: String, CodingKey {
-        case simulator, size, platform
+        case simulator, size, platform, tests
+    }
+}
+
+/// Turn a per-device `tests:` list into fully-qualified xcodebuild
+/// `-only-testing` selectors, using the top-level test_target/test_class as
+/// defaults for short-form entries. Matches the StorescreensCore resolver so
+/// both capture paths behave identically.
+func resolvedTestSelectors(
+    entries: [String]?,
+    testTarget: String?,
+    testClass: String?
+) -> [String]? {
+    guard let entries, !entries.isEmpty else { return nil }
+    return entries.map { entry in
+        let slashCount = entry.filter { $0 == "/" }.count
+        switch slashCount {
+        case 0:
+            if let target = testTarget, let cls = testClass {
+                return "\(target)/\(cls)/\(entry)"
+            } else if let target = testTarget {
+                return "\(target)/\(entry)"
+            }
+            return entry
+        case 1:
+            if let target = testTarget {
+                return "\(target)/\(entry)"
+            }
+            return entry
+        default:
+            return entry
+        }
     }
 }

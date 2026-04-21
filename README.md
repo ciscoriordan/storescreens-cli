@@ -609,6 +609,14 @@ devices:
   # macOS: tests run natively, no simulator needed
   # - simulator: "Mac 2560x1600"
   #   platform: macOS
+  # Per-device test selection: restrict a device to specific test methods,
+  # overriding the top-level test_class. Useful for iPad-only or iPhone-only
+  # screenshots that render poorly on the other form factor.
+  #   - simulator: "iPad Pro 13-inch (M5)"
+  #     tests:
+  #       - testLandscapePolytonic   # shorthand, expanded to test_target/test_class/method
+  #       - LandscapeTests/testFoo   # class-qualified, expanded to test_target/LandscapeTests/testFoo
+  #       - MyAppUITests/Other/testBar  # fully qualified, passed through verbatim
 
 # Locales - runs full capture once per locale
 locales:

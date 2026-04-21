@@ -94,7 +94,11 @@ struct OutputOrganizer {
     }
 
     /// Collect screenshots written directly to the filesystem by the test code (fastlane-style).
-    /// Files are named "{SimulatorName}-{screenshotName}.png".
+    /// Supports both plain names ("01_Home.png") and the legacy prefixed format
+    /// ("iPhone 17 Pro Max-01_Home.png"). Modern tests are expected to write plain
+    /// names into a per-simulator subdirectory (the orchestrator passes one via
+    /// `screenshotsDir`), which is already namespaced. The prefix form is kept
+    /// working for older test templates that prepend the simulator name.
     func organizeFromFilesystem(
         screenshotsDir: String,
         simulatorName: String,
@@ -111,18 +115,18 @@ struct OutputOrganizer {
 
         var screenshots: [CaptureManifest.Screenshot] = []
 
-        // Find all PNG files matching this device's simulator name
         let prefix = "\(simulatorName)-"
         let allFiles = (try? fm.contentsOfDirectory(atPath: screenshotsDir)) ?? []
         let matchingFiles = allFiles
-            .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".png") }
+            .filter { $0.hasSuffix(".png") }
             .sorted()
 
         for filename in matchingFiles {
-            // Extract screenshot name: "iPhone 17 Pro-01_DeckSelection.png" → "01_DeckSelection"
-            let name = String(filename
-                .dropFirst(prefix.count)
-                .dropLast(4)) // remove .png
+            // Strip the optional "SimulatorName-" prefix, then ".png"
+            let nameWithoutExt = String(filename.dropLast(4)) // remove .png
+            let name = nameWithoutExt.hasPrefix(prefix)
+                ? String(nameWithoutExt.dropFirst(prefix.count))
+                : nameWithoutExt
 
             // Filter by name if specified
             if let filter = screenshotFilter, !filter.contains(name) {

@@ -500,6 +500,15 @@ struct CaptureCommand: AsyncParsableCommand {
         let resultPath = tempDir
             .appendingPathComponent("\(device.udid)\(localeSuffix)-\(appearance).xcresult").path
 
+        // Per-device tests filter overrides the top-level target/class collapse
+        // when set. The shared resolver turns bare method names into fully
+        // qualified Target/Class/method selectors.
+        let testSelectors = resolvedTestSelectors(
+            entries: device.tests,
+            testTarget: testTarget,
+            testClass: testClass
+        )
+
         // If warmupRun is enabled, run the test once as a warmup (discard screenshots),
         // then run again for real captures.
         if config.warmupRun == true {
@@ -511,6 +520,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 resultBundlePath: resultPath,
                 testTarget: testTarget,
                 testClass: testClass,
+                testSelectors: testSelectors,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
                 isMacOS: device.isMacOS
@@ -529,6 +539,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 resultBundlePath: resultPath,
                 testTarget: testTarget,
                 testClass: testClass,
+                testSelectors: testSelectors,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
                 isMacOS: device.isMacOS

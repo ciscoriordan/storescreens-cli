@@ -90,11 +90,31 @@ package struct DeviceConfig: Codable, Sendable {
     /// Platform for this device: "iOS" (default) or "macOS".
     /// When "macOS", tests run natively on the Mac instead of in a simulator.
     package var platform: String?
+    /// Per-device test selection. When non-nil, xcodebuild runs only these
+    /// tests on this device, overriding the top-level `test_class` filter.
+    ///
+    /// Each entry is interpreted relative to the top-level `test_target`:
+    ///   - "testFoo"         -> `test_target/test_class/testFoo` (needs test_class set)
+    ///   - "ClassName/test"  -> `test_target/ClassName/test` (explicit class override)
+    ///   - "ClassName"       -> `test_target/ClassName` (whole class)
+    ///   - "Target/Cls/test" -> passed through verbatim (fully qualified)
+    ///
+    /// Use this to restrict iPad-only or iPhone-only test methods to their
+    /// platform, so a test that only renders meaningfully on one form factor
+    /// doesn't run on the other and produce a degraded screenshot. When nil,
+    /// the device inherits the top-level test_target/test_class behavior.
+    package var tests: [String]?
 
-    package init(simulator: String, size: String? = nil, platform: String? = nil) {
+    package init(
+        simulator: String,
+        size: String? = nil,
+        platform: String? = nil,
+        tests: [String]? = nil
+    ) {
         self.simulator = simulator
         self.size = size
         self.platform = platform
+        self.tests = tests
     }
 
     package var isMacOS: Bool {
@@ -102,6 +122,46 @@ package struct DeviceConfig: Codable, Sendable {
     }
 
     package enum CodingKeys: String, CodingKey {
-        case simulator, size, platform
+        case simulator, size, platform, tests
+    }
+}
+
+/// Turn a per-device `tests:` list into fully-qualified xcodebuild
+/// `-only-testing` selectors, using the top-level test_target/test_class as
+/// defaults for short-form entries. Shared by the CLI and the core
+/// orchestrator so both capture paths resolve the same way.
+///
+/// Entry forms:
+///   - "testFoo"          -> `<target>/<class>/testFoo` (both defaults required)
+///   - "Class/test"       -> `<target>/Class/test`
+///   - "Class"            -> `<target>/Class`
+///   - "Target/Cls/test"  -> passed through verbatim
+///
+/// Returns nil when `entries` is nil or empty, so callers fall back to the
+/// top-level target/class collapse.
+package func resolvedTestSelectors(
+    entries: [String]?,
+    testTarget: String?,
+    testClass: String?
+) -> [String]? {
+    guard let entries, !entries.isEmpty else { return nil }
+    return entries.map { entry in
+        let slashCount = entry.filter { $0 == "/" }.count
+        switch slashCount {
+        case 0:
+            if let target = testTarget, let cls = testClass {
+                return "\(target)/\(cls)/\(entry)"
+            } else if let target = testTarget {
+                return "\(target)/\(entry)"
+            }
+            return entry
+        case 1:
+            if let target = testTarget {
+                return "\(target)/\(entry)"
+            }
+            return entry
+        default:
+            return entry
+        }
     }
 }

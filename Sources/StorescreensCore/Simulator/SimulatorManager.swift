@@ -164,7 +164,8 @@ package actor SimulatorManager {
                     udid: device.udid,
                     deviceTypeIdentifier: device.deviceTypeIdentifier,
                     appStoreSize: size,
-                    isMacOS: false
+                    isMacOS: false,
+                    tests: config.tests
                 ))
             }
         }
@@ -177,7 +178,8 @@ package actor SimulatorManager {
                 udid: "mac-native",
                 deviceTypeIdentifier: "com.apple.platform.macosx",
                 appStoreSize: size,
-                isMacOS: true
+                isMacOS: true,
+                tests: config.tests
             ))
         }
 

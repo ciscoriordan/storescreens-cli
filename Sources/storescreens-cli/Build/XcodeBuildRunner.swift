@@ -61,12 +61,18 @@ actor XcodeBuildRunner {
 
     /// Run tests without building on a specific simulator (or natively for macOS).
     /// Returns the path to the .xcresult bundle.
+    ///
+    /// When `testSelectors` is non-empty, each entry becomes its own
+    /// `-only-testing <selector>` arg, taking precedence over the target/class
+    /// collapse. Used by per-device `tests:` config. Selectors must be
+    /// pre-resolved to fully-qualified `Target/Class/method` form by the caller.
     func testWithoutBuilding(
         xctestrunPath: String,
         destinationUDID: String,
         resultBundlePath: String,
         testTarget: String? = nil,
         testClass: String? = nil,
+        testSelectors: [String]? = nil,
         testLanguage: String? = nil,
         testRegion: String? = nil,
         isMacOS: Bool = false
@@ -82,7 +88,11 @@ actor XcodeBuildRunner {
             "-parallel-testing-enabled", "NO",
         ]
 
-        if let target = testTarget, let cls = testClass {
+        if let selectors = testSelectors, !selectors.isEmpty {
+            for selector in selectors {
+                args += ["-only-testing", selector]
+            }
+        } else if let target = testTarget, let cls = testClass {
             args += ["-only-testing", "\(target)/\(cls)"]
         } else if let target = testTarget {
             args += ["-only-testing", target]

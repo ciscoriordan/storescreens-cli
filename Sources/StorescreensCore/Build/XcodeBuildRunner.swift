@@ -124,6 +124,12 @@ package actor XcodeBuildRunner {
     /// simulator for a clean state (no stale data, no hardware keyboard issues).
     /// For macOS, tests run natively on the host Mac (no simulator needed).
     /// Returns the path to the .xcresult bundle.
+    ///
+    /// When `testSelectors` is non-empty, each entry becomes its own
+    /// `-only-testing <selector>` pair, replacing the target/class collapse. Used
+    /// by per-device `tests:` config so e.g. an iPad-only landscape test doesn't
+    /// run on the iPhone simulator. Selectors are pre-resolved to fully
+    /// qualified `Target/Class/method` strings by the orchestrator.
     package func test(
         project: String?,
         workspace: String?,
@@ -133,6 +139,7 @@ package actor XcodeBuildRunner {
         resultBundlePath: String,
         testTarget: String? = nil,
         testClass: String? = nil,
+        testSelectors: [String]? = nil,
         testLanguage: String? = nil,
         testRegion: String? = nil,
         isMacOS: Bool = false,
@@ -165,7 +172,11 @@ package actor XcodeBuildRunner {
             ]
         }
 
-        if let target = testTarget, let cls = testClass {
+        if let selectors = testSelectors, !selectors.isEmpty {
+            for selector in selectors {
+                args += ["-only-testing", selector]
+            }
+        } else if let target = testTarget, let cls = testClass {
             args += ["-only-testing", "\(target)/\(cls)"]
         } else if let target = testTarget {
             args += ["-only-testing", target]

@@ -22,12 +22,22 @@ struct ResolvedDevice: Sendable {
     let appStoreSize: AppStoreScreenSize
     /// True when this device targets macOS (tests run natively, not in a simulator).
     let isMacOS: Bool
+    /// Per-device test selection carried from DeviceConfig, see CaptureConfig.
+    let tests: [String]?
 
-    init(simulatorName: String, udid: String, deviceTypeIdentifier: String, appStoreSize: AppStoreScreenSize, isMacOS: Bool = false) {
+    init(
+        simulatorName: String,
+        udid: String,
+        deviceTypeIdentifier: String,
+        appStoreSize: AppStoreScreenSize,
+        isMacOS: Bool = false,
+        tests: [String]? = nil
+    ) {
         self.simulatorName = simulatorName
         self.udid = udid
         self.deviceTypeIdentifier = deviceTypeIdentifier
         self.appStoreSize = appStoreSize
         self.isMacOS = isMacOS
+        self.tests = tests
     }
 }

@@ -512,6 +512,15 @@ package struct CaptureOrchestrator: Sendable {
             }
         } : nil
 
+        // Per-device test filter overrides the top-level target/class collapse
+        // when set. The shared resolver turns bare method names into fully
+        // qualified Target/Class/method selectors.
+        let testSelectors = resolvedTestSelectors(
+            entries: device.tests,
+            testTarget: testTarget,
+            testClass: testClass
+        )
+
         // If warmupRun is enabled, run the test once as a warmup (discard screenshots),
         // then run again for real captures.
         if config.warmupRun == true {
@@ -526,6 +535,7 @@ package struct CaptureOrchestrator: Sendable {
                 resultBundlePath: resultPath,
                 testTarget: testTarget,
                 testClass: testClass,
+                testSelectors: testSelectors,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
                 isMacOS: device.isMacOS,
@@ -548,6 +558,7 @@ package struct CaptureOrchestrator: Sendable {
                 resultBundlePath: resultPath,
                 testTarget: testTarget,
                 testClass: testClass,
+                testSelectors: testSelectors,
                 testLanguage: testLanguage,
                 testRegion: testRegion,
                 isMacOS: device.isMacOS,
