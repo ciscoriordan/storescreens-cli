@@ -95,6 +95,62 @@ final class HTMLPreviewGeneratorTests: XCTestCase {
         XCTAssertTrue(devicePage.contains("framed/en-US/iPhone_6.9_01_home.png"))
     }
 
+    func testScreenshotOrderReordersGalleryFigures() throws {
+        // Two captures with alphabetical manifest order; expect the
+        // gallery to emit figures in the config-list order instead.
+        let captureAtZero = Date(timeIntervalSince1970: 0)
+        let m = CaptureManifest(
+            version: 1,
+            generatedAt: captureAtZero,
+            generatedBy: "test",
+            appName: "MyApp",
+            displayName: nil,
+            scheme: "MyApp",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"",
+                    simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US",
+                    appearance: "light",
+                    screenshots: [
+                        CaptureManifest.Screenshot(
+                            name: "alpha_first",
+                            filename: "en-US/iPhone_6.9_alpha_first.png",
+                            capturedAt: captureAtZero
+                        ),
+                        CaptureManifest.Screenshot(
+                            name: "hero",
+                            filename: "en-US/iPhone_6.9_hero.png",
+                            capturedAt: captureAtZero
+                        )
+                    ]
+                )
+            ]
+        )
+        try writePlaceholder(at: tmp.appendingPathComponent("en-US/iPhone_6.9_alpha_first.png"))
+        try writePlaceholder(at: tmp.appendingPathComponent("en-US/iPhone_6.9_hero.png"))
+
+        try HTMLPreviewGenerator().generate(
+            manifest: m,
+            outputDir: tmp.path,
+            screenshotOrder: ["hero", "alpha_first"]
+        )
+
+        let devicePage = try String(
+            contentsOf: tmp.appendingPathComponent("preview_iPhone_6.9_light.html"),
+            encoding: .utf8
+        )
+        let heroRange = devicePage.range(of: "iPhone_6.9_hero.png")
+        let alphaRange = devicePage.range(of: "iPhone_6.9_alpha_first.png")
+        XCTAssertNotNil(heroRange)
+        XCTAssertNotNil(alphaRange)
+        // In the gallery order, hero's <img> tag must appear before
+        // alpha_first's, even though alpha_first comes first
+        // alphabetically.
+        XCTAssertLessThan(heroRange!.lowerBound, alphaRange!.lowerBound,
+                          "screenshotOrder should place 'hero' ahead of 'alpha_first' in the gallery")
+    }
+
     func testOldPreviewsWipedByDefault() throws {
         // Simulate a prior run having written a preview page for a
         // device/appearance combo that isn't in this manifest.

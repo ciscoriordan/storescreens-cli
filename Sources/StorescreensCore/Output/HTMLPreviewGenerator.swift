@@ -24,11 +24,19 @@ package struct HTMLPreviewGenerator {
     /// on the index under a "From older runs" heading with their
     /// original timestamp. Default false: stale `preview_*.html` files
     /// are deleted so the index reflects the latest run only.
+    ///
+    /// When `screenshotOrder` is non-nil, each device's screenshots are
+    /// reordered in the gallery to match the list (same semantics as
+    /// `RenderPipeline.render`'s `screenshotOrder`). Without this, the
+    /// manifest-on-disk order (alphabetical by filename) wins and the
+    /// gallery disagrees with the render's slide sequence — the user
+    /// sees their hero slide in some other spot.
     package func generate(
         manifest: CaptureManifest,
         outputDir: String,
         framedDir: String? = nil,
-        keepOldPreviews: Bool = false
+        keepOldPreviews: Bool = false,
+        screenshotOrder: [String]? = nil
     ) throws {
         let fm = FileManager.default
 
@@ -64,7 +72,21 @@ package struct HTMLPreviewGenerator {
         var currentPages: [IndexEntry] = []
 
         for key in sortedKeys {
-            let captures = pages[key]!
+            // Apply the screenshots-list order here so the gallery's
+            // slide sequence matches render's. RenderPipeline.applyOrder
+            // is the single source of truth for both; the two places
+            // where slide order matters (render loop + preview gallery)
+            // run through the same helper so they can't drift.
+            let captures = pages[key]!.map { dev -> CaptureManifest.DeviceCapture in
+                let ordered = RenderPipeline.applyOrder(dev.screenshots, order: screenshotOrder)
+                return CaptureManifest.DeviceCapture(
+                    deviceType: dev.deviceType,
+                    simulatorName: dev.simulatorName,
+                    locale: dev.locale,
+                    appearance: dev.appearance,
+                    screenshots: ordered
+                )
+            }
             let filename = pageFilename(deviceType: key.deviceType, appearance: key.appearance)
             currentFilenames.insert(filename)
             let html = buildDevicePage(

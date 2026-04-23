@@ -239,7 +239,8 @@ struct CaptureCommand: AsyncParsableCommand {
                     manifest: manifest,
                     outputDir: capturedRoot.path,
                     framedDir: framedRelative,
-                    keepOldPreviews: captureConfig.keepOldPreviews ?? false
+                    keepOldPreviews: captureConfig.keepOldPreviews ?? false,
+                    screenshotOrder: captureConfig.screenshots
                 )
         } catch {
             logger.log("preview regeneration failed: \(error)", level: .warning)
@@ -513,7 +514,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
-            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false, screenshotOrder: config.screenshots)
 
             // Extract app icon from the built .app bundle
             if let appPath = builtAppPath {
@@ -998,7 +999,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
-            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false, screenshotOrder: config.screenshots)
 
             // Extract app icon from the built .app bundle
             if AppIconExtractor.extract(appBundlePath: appPath, to: effectiveOutputDir) != nil {

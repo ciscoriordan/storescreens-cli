@@ -100,7 +100,8 @@ struct RenderCommand: AsyncParsableCommand {
                     manifest: manifest,
                     outputDir: capturedRoot.path,
                     framedDir: framedRelative,
-                    keepOldPreviews: captureConfig.keepOldPreviews ?? false
+                    keepOldPreviews: captureConfig.keepOldPreviews ?? false,
+                    screenshotOrder: captureConfig.screenshots
                 )
         } catch {
             logger.log("preview regeneration failed: \(error)", level: .warning)
