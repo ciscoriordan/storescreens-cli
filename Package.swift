@@ -49,5 +49,10 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
+
+        .testTarget(
+            name: "StorescreensCoreTests",
+            dependencies: ["StorescreensCore"]
+        ),
     ]
 )

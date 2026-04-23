@@ -659,9 +659,257 @@ test_class: ScreenshotTests
 
 # Upload after capture (default: false)
 # upload: true
+
+# Render pass (optional) — composites captioned images from captures
+# render:
+#   enabled: true
+#   output_dir: ./storescreens-framed
+#   caption:
+#     title:
+#       font: system
+#       weight: bold
+#       font_size_pct: 5.5
+#       color: "#ffffff"
+#     min_height_pct: 22
+#   chrome:
+#     style: bezel
+#   slides:
+#     "01_Home":
+#       caption: "Your recipes, organized."
 ```
 
 </details>
+
+## Rendering captioned screenshots
+
+`storescreens` can post-process captured screenshots into framed, captioned images suitable for App Store Connect uploads. Add a `render:` block to `storescreens.yml` and run `storescreens render` (or let it run automatically after `storescreens capture`).
+
+### Quick start
+
+```yaml
+render:
+  enabled: true
+  output_dir: ./storescreens-framed
+
+  background:
+    color: "#1a1a2e"
+
+  caption:
+    title:
+      font: system
+      weight: bold
+      font_size_pct: 5.5
+      color: "#ffffff"
+    min_height_pct: 22
+
+  chrome:
+    style: stroke
+    stroke_color: "#ffffff"
+    stroke_width: 3
+
+  slides:
+    "01_Home":
+      caption: "Your recipes, organized."
+    "02_Search":
+      caption:
+        - Find anything
+        - in *seconds*.
+    "03_Detail":
+      caption:
+        title: Every **detail**, at a glance.
+        subtitle: Powered by AI
+        highlights:
+          - { match: detail, color: "#feb909", weight: heavy }
+```
+
+Run the render independently:
+
+```bash
+storescreens render
+```
+
+Or run capture with the render pass included (auto-enabled by `render.enabled: true`):
+
+```bash
+storescreens capture
+```
+
+Use `--no-render` to skip the render pass on a given capture run.
+
+### Chrome styles
+
+- `none` — no chrome; screenshot drawn at the padded rect.
+- `stroke` — rounded-rect clip with device-derived corner radius + optional colored border and drop shadow. Zero asset download.
+- `bezel` — screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels).
+
+### Fonts
+
+Four forms for `font:`:
+
+```yaml
+font: system                        # SF Pro / system font
+font: "Helvetica Neue"              # installed font family
+font: "./assets/Inter-Bold.otf"     # local file
+font:                               # bundle for correct bold/italic
+  regular: ./Inter-Regular.otf
+  bold: ./Inter-Bold.otf
+  italic: ./Inter-Italic.otf
+font:                               # Google Fonts auto-download
+  google: Inter
+  version: "3.19"                   # optional version pin
+```
+
+Google Fonts are cached to `~/Library/Caches/storescreens/fonts/`.
+
+### Captions
+
+- Bare string → single title, wraps at canvas width.
+- Array of strings → strict line breaks (never wrapped inside an array item).
+- Object → `title:`, `subtitle:`, optional `highlights:` for per-word color/weight.
+- Markdown supported inline: `**bold**`, `*italic*`, `` `code` ``.
+- `highlights:` overrides color / weight / italic on literal substring matches (case-sensitive, all occurrences).
+
+## Device bezels
+
+The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple licenses these for use with Apple products; we don't redistribute.
+
+### Install
+
+1. Download DMGs from https://developer.apple.com/design/resources/ (Product Bezels section — iPhone, iPad, MacBook as needed).
+2. Double-click each DMG to mount.
+3. Run:
+
+```bash
+storescreens bezels import
+```
+
+This auto-scans `/Volumes/` for Apple Design Resource DMGs, classifies PSDs by screen pixel dimensions, applies your colorway preferences, and exports transparent-screen PNGs + JSON sidecars to `~/Library/Application Support/storescreens/bezels/`.
+
+### Inspect
+
+```bash
+storescreens bezels check   # list installed bezels
+storescreens bezels path    # print the install directory
+```
+
+### Override per project
+
+Drop bezel PNGs + their JSON sidecars into `./bezels/` next to `storescreens.yml` to override the user-global set for that project only.
+
+### Colorway / model preference
+
+By default the importer picks "Space Black" when available, else Silver / Natural Titanium. Override per project:
+
+```yaml
+render:
+  chrome:
+    style: bezel
+    model_preference: [Pro Max, Pro, Air]
+    colorway_preference: ["Cosmic Orange", Silver]
+```
+
+## Uploading to App Store Connect
+
+`storescreens submit` pushes rendered screenshots and per-locale metadata (description, what's new, keywords, etc.) to App Store Connect via Apple's official API.
+
+### Prerequisites
+
+1. Create an **App Store Connect API key** at https://appstoreconnect.apple.com/access/api. Choose either Admin or App Manager access. Download the `AuthKey_XXXXXX.p8` file and keep it safe; Apple only lets you download it once.
+2. Record the **Key ID** (10-character alphanumeric) and **Issuer ID** (a UUID) from the same page.
+
+### Configure credentials
+
+Either set environment variables (CI-friendly):
+
+```bash
+export ASC_KEY_ID=ABCDE12345
+export ASC_ISSUER_ID=69a6de84-03c8-47e3-e053-5b8c7c11a4d1
+export ASC_KEY_PATH=~/.appstoreconnect/AuthKey_ABCDE12345.p8
+```
+
+Or run the interactive login and save credentials to `~/.storescreens/asc-credentials.yml` (perms 0600):
+
+```bash
+storescreens auth login
+```
+
+Verify with:
+
+```bash
+storescreens auth status
+```
+
+This mints a JWT and hits `/v1/users` to confirm the key works.
+
+### Add an `app_store_connect:` block
+
+```yaml
+app_store_connect:
+  # One of app_id or bundle_id is required. bundle_id is resolved via the API.
+  bundle_id: com.example.recipes
+  # app_id: "1234567890"
+
+  metadata_dir: ./metadata    # default: ./metadata
+
+  submit:
+    create_version: "1.2.0"   # creates the version if it doesn't exist
+    screenshots: true
+    metadata: true
+    submit_for_review: false  # hard default; review submission is manual
+```
+
+### Metadata directory layout
+
+Fastlane convention. One folder per locale, one file per field:
+
+```
+metadata/
+  en-US/
+    name.txt
+    subtitle.txt
+    description.txt
+    keywords.txt
+    promotional_text.txt
+    release_notes.txt
+    support_url.txt
+    marketing_url.txt
+  es-ES/
+    description.txt
+    release_notes.txt
+    ...
+```
+
+Any field you don't want to change: leave the file out. Present files replace whatever's currently in App Store Connect. Trailing whitespace and newlines are trimmed.
+
+### Upload
+
+Dry run first to validate everything without pushing:
+
+```bash
+storescreens submit --dry-run
+```
+
+It checks credentials, app lookup, metadata directory, and confirms every rendered PNG maps to a valid App Store display type and stays under Apple's 8 MB size cap.
+
+Live upload:
+
+```bash
+storescreens submit
+```
+
+Flags:
+- `--skip-screenshots` / `--skip-metadata` to upload only one side
+- `--version-override 1.2.1` overrides `submit.create_version`
+- `--render-dir` / `--metadata-dir` override config paths
+
+Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
+
+### Troubleshooting
+
+- **"credentials not configured"**: run `storescreens auth login` or check the `ASC_*` env vars.
+- **"no App Store Connect app matched"**: the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
+- **"no ASC display type for WxH"**: the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
+- **"8MB limit exceeded"**: Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
 
 ## App Store Connect Screenshot Sizes
 

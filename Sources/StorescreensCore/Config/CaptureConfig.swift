@@ -59,6 +59,15 @@ package struct CaptureConfig: Codable {
     /// Merged with built-in defaults; user values win over built-in on key collisions.
     package var localeFlags: [String: String]?
 
+    /// Optional rendering pipeline config. When set with `enabled: true`,
+    /// captured screenshots are post-processed into captioned images with
+    /// background, logo, and device chrome.
+    package var render: RenderConfig?
+
+    /// Optional App Store Connect upload config. Consumed by
+    /// `storescreens submit` to push screenshots + metadata.
+    package var appStoreConnect: AppStoreConnectConfig?
+
     package init(scheme: String, devices: [DeviceConfig], outputDir: String) {
         self.scheme = scheme
         self.devices = devices
@@ -81,6 +90,8 @@ package struct CaptureConfig: Codable {
         case derivedDataPath = "derived_data_path"
         case upload
         case localeFlags = "locale_flags"
+        case render
+        case appStoreConnect = "app_store_connect"
     }
 }
 

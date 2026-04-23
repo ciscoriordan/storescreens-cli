@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StorescreensCore
 
 struct InitCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

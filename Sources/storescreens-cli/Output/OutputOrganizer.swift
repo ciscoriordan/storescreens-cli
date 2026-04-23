@@ -1,4 +1,5 @@
 import Foundation
+import StorescreensCore
 
 struct OutputOrganizer {
 
@@ -18,11 +19,10 @@ struct OutputOrganizer {
         let baseDir = qualifiedBaseDir(outputDir: outputDir, locale: locale, appearance: appearance)
         try fm.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
 
-        var screenshots: [CaptureManifest.Screenshot] = []
-
+        // Build a name → attachment lookup so we can emit in filter order.
+        var byName: [String: (attachment: Attachment, timestamp: Double?)] = [:]
         for testDetail in attachments {
             for attachment in testDetail.attachments {
-                // Skip system-generated attachments (screen recordings, synthesized events, failure artifacts, etc.)
                 let rawName = attachment.suggestedHumanReadableName
                 if rawName.hasPrefix("Synthesized Event") || rawName.hasPrefix("Screen Recording")
                     || rawName.hasPrefix("kXCTAttachment")
@@ -33,34 +33,40 @@ struct OutputOrganizer {
                     || rawName.hasPrefix("Screenshot") {
                     continue
                 }
-
-                // suggestedHumanReadableName format: "01_home_empty_0_UUID.png"
-                // Strip the _N_UUID.png suffix to get the original attachment name
                 let name = Self.cleanAttachmentName(rawName)
-
-                // Filter by name if specified
-                if let filter = screenshotFilter, !filter.contains(name) {
-                    continue
-                }
-
-                let srcPath = (rawExportDir as NSString)
-                    .appendingPathComponent(attachment.exportedFileName)
-
-                guard fm.fileExists(atPath: srcPath) else { continue }
-
-                let destFilename = "\(devicePrefix)_\(name).png"
-                let destPath = (baseDir as NSString).appendingPathComponent(destFilename)
-
-                // Remove existing file if present
-                try? fm.removeItem(atPath: destPath)
-                try fm.copyItem(atPath: srcPath, toPath: destPath)
-
-                screenshots.append(CaptureManifest.Screenshot(
-                    name: name,
-                    filename: relativeFilename(devicePrefix: devicePrefix, screenshotName: name, locale: locale, appearance: appearance),
-                    capturedAt: attachment.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
-                ))
+                byName[name] = (attachment, attachment.timestamp)
             }
+        }
+
+        // Iterate in filter order when a filter is present, else in the
+        // order attachments came back from xcresult.
+        let orderedNames: [String] = {
+            if let filter = screenshotFilter {
+                return filter.filter { byName[$0] != nil }
+            }
+            // No filter: preserve arrival order by rebuilding a flat list
+            return attachments.flatMap { $0.attachments }
+                .map { Self.cleanAttachmentName($0.suggestedHumanReadableName) }
+                .filter { byName[$0] != nil }
+        }()
+
+        var screenshots: [CaptureManifest.Screenshot] = []
+        for name in orderedNames {
+            guard let entry = byName[name] else { continue }
+            let srcPath = (rawExportDir as NSString)
+                .appendingPathComponent(entry.attachment.exportedFileName)
+            guard fm.fileExists(atPath: srcPath) else { continue }
+
+            let destFilename = "\(devicePrefix)_\(name).png"
+            let destPath = (baseDir as NSString).appendingPathComponent(destFilename)
+            try? fm.removeItem(atPath: destPath)
+            try fm.copyItem(atPath: srcPath, toPath: destPath)
+
+            screenshots.append(CaptureManifest.Screenshot(
+                name: name,
+                filename: relativeFilename(devicePrefix: devicePrefix, screenshotName: name, locale: locale, appearance: appearance),
+                capturedAt: entry.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+            ))
         }
 
         return screenshots
@@ -113,26 +119,38 @@ struct OutputOrganizer {
         let baseDir = qualifiedBaseDir(outputDir: outputDir, locale: locale, appearance: appearance)
         try fm.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
 
-        var screenshots: [CaptureManifest.Screenshot] = []
-
+        // Build a name → filename map so we can iterate in filter order.
         let prefix = "\(simulatorName)-"
         let allFiles = (try? fm.contentsOfDirectory(atPath: screenshotsDir)) ?? []
-        let matchingFiles = allFiles
-            .filter { $0.hasSuffix(".png") }
-            .sorted()
-
-        for filename in matchingFiles {
-            // Strip the optional "SimulatorName-" prefix, then ".png"
-            let nameWithoutExt = String(filename.dropLast(4)) // remove .png
+        var fileByName: [String: String] = [:]
+        for filename in allFiles where filename.hasSuffix(".png") {
+            let nameWithoutExt = String(filename.dropLast(4))
             let name = nameWithoutExt.hasPrefix(prefix)
                 ? String(nameWithoutExt.dropFirst(prefix.count))
                 : nameWithoutExt
+            fileByName[name] = filename
+        }
 
-            // Filter by name if specified
-            if let filter = screenshotFilter, !filter.contains(name) {
-                continue
+        // Iterate in filter order when a filter is present; else preserve
+        // whatever order the filesystem returned (no alphabetical sort).
+        let orderedNames: [String] = {
+            if let filter = screenshotFilter {
+                return filter.filter { fileByName[$0] != nil }
             }
+            return allFiles
+                .filter { $0.hasSuffix(".png") }
+                .map { f -> String in
+                    let nameWithoutExt = String(f.dropLast(4))
+                    return nameWithoutExt.hasPrefix(prefix)
+                        ? String(nameWithoutExt.dropFirst(prefix.count))
+                        : nameWithoutExt
+                }
+                .filter { fileByName[$0] != nil }
+        }()
 
+        var screenshots: [CaptureManifest.Screenshot] = []
+        for name in orderedNames {
+            guard let filename = fileByName[name] else { continue }
             let srcPath = (screenshotsDir as NSString).appendingPathComponent(filename)
             let destFilename = "\(devicePrefix)_\(name).png"
             let destPath = (baseDir as NSString).appendingPathComponent(destFilename)

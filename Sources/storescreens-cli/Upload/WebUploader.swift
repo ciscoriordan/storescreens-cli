@@ -1,4 +1,5 @@
 import Foundation
+import StorescreensCore
 
 struct WebUploader {
     let baseURL: String

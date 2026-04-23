@@ -1,4 +1,5 @@
 import Foundation
+import StorescreensCore
 
 actor SimulatorManager {
     private let shell = ShellRunner()

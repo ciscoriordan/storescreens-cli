@@ -1,4 +1,5 @@
 import Foundation
+import StorescreensCore
 
 struct SimulatorDeviceList: Codable {
     let devices: [String: [SimulatorDevice]]

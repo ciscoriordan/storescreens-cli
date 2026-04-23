@@ -56,6 +56,9 @@ struct CaptureCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Skip the post-capture upload prompt.")
     var noUpload: Bool = false
 
+    @Flag(name: .long, help: "Skip the post-capture render pass.")
+    var noRender: Bool = false
+
     @Option(name: .long, help: "Persistent DerivedData directory for faster incremental builds. Reused across runs; created on first use.")
     var derivedDataPath: String?
 
@@ -138,6 +141,18 @@ struct CaptureCommand: AsyncParsableCommand {
             result = try await captureSimple(config: captureConfig, logger: logger)
         }
 
+        // Render pass — composites captioned screenshots when enabled.
+        // Runs after capture succeeds; render failures don't destroy the raw captures.
+        if !noRender && (captureConfig.render?.enabled ?? false), let render = captureConfig.render {
+            await runRender(
+                renderConfig: render,
+                captureConfig: captureConfig,
+                capturedRoot: result.outputDir,
+                manifest: result.manifest,
+                logger: logger
+            )
+        }
+
         // Offer to upload to storescreens.app (opt-in via config, override with --no-upload)
         if !noUpload && captureConfig.upload == true {
             let prompt = UploadPrompt(
@@ -146,6 +161,44 @@ struct CaptureCommand: AsyncParsableCommand {
                 logger: logger
             )
             await prompt.run()
+        }
+    }
+
+    /// Runs the render pipeline as a post-capture step. Non-fatal on error.
+    private func runRender(
+        renderConfig: RenderConfig,
+        captureConfig: CaptureConfig,
+        capturedRoot: URL,
+        manifest: CaptureManifest,
+        logger: Logger
+    ) async {
+        let renderRoot: URL = {
+            if let configured = renderConfig.outputDir { return URL(fileURLWithPath: configured) }
+            return URL(fileURLWithPath: "./storescreens-framed")
+        }()
+        let baseDirectory = URL(fileURLWithPath: self.config).deletingLastPathComponent().standardized
+
+        logger.header("Rendering")
+        print("  output:  \(renderRoot.path)")
+
+        let pipeline = RenderPipeline(config: renderConfig, baseDirectory: baseDirectory)
+        do {
+            let out = try await pipeline.render(
+                manifest: manifest,
+                capturedRoot: capturedRoot,
+                renderRoot: renderRoot
+            )
+            for w in out.warnings { logger.log(w, level: .warning) }
+            if out.failures.isEmpty {
+                logger.log("rendered \(out.renderedSlides) slide(s)", level: .success)
+            } else {
+                logger.log("rendered \(out.renderedSlides) slide(s); \(out.failures.count) failure(s)", level: .error)
+                for (slide, err) in out.failures {
+                    print("  ✗ \(slide): \(err)")
+                }
+            }
+        } catch {
+            logger.log("render failed: \(error)", level: .error)
         }
     }
 

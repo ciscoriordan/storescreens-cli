@@ -1,4 +1,5 @@
 import Foundation
+import StorescreensCore
 
 struct UploadPrompt {
     let manifest: CaptureManifest
