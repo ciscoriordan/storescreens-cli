@@ -186,7 +186,8 @@ struct CaptureCommand: AsyncParsableCommand {
             let out = try await pipeline.render(
                 manifest: manifest,
                 capturedRoot: capturedRoot,
-                renderRoot: renderRoot
+                renderRoot: renderRoot,
+                screenshotOrder: captureConfig.screenshots
             )
             for w in out.warnings { logger.log(w, level: .warning) }
             if out.failures.isEmpty {

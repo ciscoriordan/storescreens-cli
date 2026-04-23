@@ -42,12 +42,22 @@ package struct RenderPipeline {
 
     /// Renders every screenshot from `manifest`. `capturedRoot` holds the
     /// raw captured PNGs. `renderRoot` is where framed PNGs are written.
-    /// The manifest's screenshot order is authoritative — we render in that
-    /// order, no re-sorting.
+    ///
+    /// If `screenshotOrder` is non-nil, each device's screenshots are
+    /// reordered so entries whose `name` appears in the list come first
+    /// in list order; any extras not in the list keep their original
+    /// manifest position at the end. This lets the top-level
+    /// `screenshots:` config key drive render order (hero slide first,
+    /// panoramic background left-edge pinned to the first entry,
+    /// `logo.placement: first_only` landing where the user expects),
+    /// matching the capture-time filter behavior — a single list is the
+    /// canonical source for slide order across the whole pipeline.
+    /// When nil, manifest order is preserved as before.
     package func render(
         manifest: CaptureManifest,
         capturedRoot: URL,
-        renderRoot: URL
+        renderRoot: URL,
+        screenshotOrder: [String]? = nil
     ) async throws -> Output {
         let fm = FileManager.default
         try? fm.createDirectory(at: renderRoot, withIntermediateDirectories: true)
@@ -58,9 +68,10 @@ package struct RenderPipeline {
 
         for device in manifest.devices {
             let pf = productFamilyFromDeviceType(device.deviceType)
-            let slidesInCombo = device.screenshots.count
+            let orderedScreenshots = Self.applyOrder(device.screenshots, order: screenshotOrder)
+            let slidesInCombo = orderedScreenshots.count
 
-            for (slideIndex, shot) in device.screenshots.enumerated() {
+            for (slideIndex, shot) in orderedScreenshots.enumerated() {
                 do {
                     let sourceURL = capturedRoot.appendingPathComponent(shot.filename)
                     let outputURL = renderRoot.appendingPathComponent(shot.filename)
@@ -83,6 +94,35 @@ package struct RenderPipeline {
         }
 
         return Output(renderedSlides: renderedCount, failures: failures, warnings: warnings)
+    }
+
+    /// Reorder `shots` so entries whose `name` is in `order` come first,
+    /// in the order specified; any shots not in the list keep their
+    /// relative manifest order after the ordered prefix. When `order`
+    /// is nil or empty the input is returned unchanged.
+    ///
+    /// Exposed for tests; not expected to be called directly by normal
+    /// render clients (the public `render` method dispatches through it).
+    package static func applyOrder(
+        _ shots: [CaptureManifest.Screenshot],
+        order: [String]?
+    ) -> [CaptureManifest.Screenshot] {
+        guard let order, !order.isEmpty else { return shots }
+        var byName: [String: CaptureManifest.Screenshot] = [:]
+        for s in shots { byName[s.name] = s }
+        var ordered: [CaptureManifest.Screenshot] = []
+        ordered.reserveCapacity(shots.count)
+        var taken = Set<String>()
+        for name in order where !taken.contains(name) {
+            if let s = byName[name] {
+                ordered.append(s)
+                taken.insert(name)
+            }
+        }
+        for s in shots where !taken.contains(s.name) {
+            ordered.append(s)
+        }
+        return ordered
     }
 
     /// Renders a single slide. Creates a pixel-dim CGContext, walks the

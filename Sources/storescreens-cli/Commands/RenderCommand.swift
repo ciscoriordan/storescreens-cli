@@ -70,7 +70,8 @@ struct RenderCommand: AsyncParsableCommand {
         let out = try await pipeline.render(
             manifest: manifest,
             capturedRoot: capturedRoot,
-            renderRoot: renderRoot
+            renderRoot: renderRoot,
+            screenshotOrder: captureConfig.screenshots
         )
         let elapsed = Date().timeIntervalSince(start)
 
