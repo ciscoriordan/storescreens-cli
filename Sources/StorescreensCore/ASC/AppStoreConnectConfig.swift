@@ -14,17 +14,22 @@ package struct AppStoreConnectConfig: Codable, Sendable {
     /// resolve against the directory containing the project YML.
     package var metadataDir: String?
     package var submit: SubmitConfig?
+    /// Configuration for `storescreens upload-build`: archive + export + upload
+    /// a fresh `.ipa` via `xcrun altool`.
+    package var uploadBuild: UploadBuildConfig?
 
     package init(
         appID: String? = nil,
         bundleID: String? = nil,
         metadataDir: String? = nil,
-        submit: SubmitConfig? = nil
+        submit: SubmitConfig? = nil,
+        uploadBuild: UploadBuildConfig? = nil
     ) {
         self.appID = appID
         self.bundleID = bundleID
         self.metadataDir = metadataDir
         self.submit = submit
+        self.uploadBuild = uploadBuild
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -32,6 +37,7 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         case bundleID = "bundle_id"
         case metadataDir = "metadata_dir"
         case submit
+        case uploadBuild = "upload_build"
     }
 }
 
@@ -69,5 +75,97 @@ package struct SubmitConfig: Codable, Sendable {
         case metadata
         case submitForReview = "submit_for_review"
         case platform
+    }
+}
+
+/// Configuration for `storescreens upload-build`. Drives `xcodebuild archive`
+/// -> `xcodebuild -exportArchive` -> `xcrun altool --upload-app`.
+///
+/// Most fields have sensible defaults; the minimum required config is the
+/// `app_store_connect:` block itself (for credentials + bundle/app id).
+/// Scheme falls back to `CaptureConfig.scheme` when omitted.
+package struct UploadBuildConfig: Codable, Sendable {
+    /// Scheme to archive. Defaults to top-level `scheme:` if unset.
+    package var scheme: String?
+    /// Configuration name. Default "Release".
+    package var configuration: String?
+    /// Export method: "app-store" (default), "ad-hoc", "enterprise", "development".
+    package var exportMethod: String?
+    /// Apple Developer Team ID, e.g. "ABCDE12345". Auto-detected from the
+    /// archive when possible; set explicitly for manual signing.
+    package var teamID: String?
+    /// "automatic" (default) or "manual".
+    package var signingStyle: String?
+    /// Bundle-id -> provisioning profile name, for manual signing.
+    package var provisioningProfiles: [String: String]?
+    /// Upload dSYMs for symbolication. Default true.
+    package var includeSymbols: Bool?
+    /// Strip Swift symbols from the binary. Default true.
+    package var stripSwiftSymbols: Bool?
+    /// Override the auto-selected non-beta Xcode. Accepts either the
+    /// `.app` bundle path or the `Contents/Developer` dir.
+    package var xcodePath: String?
+    /// Path to a user-provided ExportOptions.plist. When set, storescreens
+    /// skips generating one from the other fields in this block.
+    package var exportOptionsPlist: String?
+    /// Pass `-allowProvisioningUpdates` at export time. Default true so Xcode
+    /// can create/download missing profiles during export.
+    package var allowProvisioningUpdates: Bool?
+    /// Archive destination. Default "generic/platform=iOS".
+    package var destination: String?
+    /// Directory to write the exported `.ipa` to. Default "./build".
+    /// Relative paths resolve against the YML directory.
+    package var outputDir: String?
+    /// Archive + export + stop. Skips the altool upload step.
+    /// Default false.
+    package var skipUpload: Bool?
+
+    package init(
+        scheme: String? = nil,
+        configuration: String? = nil,
+        exportMethod: String? = nil,
+        teamID: String? = nil,
+        signingStyle: String? = nil,
+        provisioningProfiles: [String: String]? = nil,
+        includeSymbols: Bool? = nil,
+        stripSwiftSymbols: Bool? = nil,
+        xcodePath: String? = nil,
+        exportOptionsPlist: String? = nil,
+        allowProvisioningUpdates: Bool? = nil,
+        destination: String? = nil,
+        outputDir: String? = nil,
+        skipUpload: Bool? = nil
+    ) {
+        self.scheme = scheme
+        self.configuration = configuration
+        self.exportMethod = exportMethod
+        self.teamID = teamID
+        self.signingStyle = signingStyle
+        self.provisioningProfiles = provisioningProfiles
+        self.includeSymbols = includeSymbols
+        self.stripSwiftSymbols = stripSwiftSymbols
+        self.xcodePath = xcodePath
+        self.exportOptionsPlist = exportOptionsPlist
+        self.allowProvisioningUpdates = allowProvisioningUpdates
+        self.destination = destination
+        self.outputDir = outputDir
+        self.skipUpload = skipUpload
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case scheme
+        case configuration
+        case exportMethod = "export_method"
+        case teamID = "team_id"
+        case signingStyle = "signing_style"
+        case provisioningProfiles = "provisioning_profiles"
+        case includeSymbols = "include_symbols"
+        case stripSwiftSymbols = "strip_swift_symbols"
+        case xcodePath = "xcode_path"
+        case exportOptionsPlist = "export_options_plist"
+        case allowProvisioningUpdates = "allow_provisioning_updates"
+        case destination
+        case outputDir = "output_dir"
+        case skipUpload = "skip_upload"
     }
 }

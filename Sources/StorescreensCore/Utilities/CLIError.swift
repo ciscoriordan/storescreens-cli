@@ -43,6 +43,10 @@ package enum CLIError: LocalizedError {
     case unsupportedDestinations(devices: [String], supportedFamilies: [Int])
     case noBootedSimulator
     case simulatorNotBooted(name: String)
+    case xcodeNotFound(reason: String)
+    case archiveFailed(output: String)
+    case exportFailed(reason: String)
+    case uploadFailed(output: String)
 
     private func familyName(_ id: Int) -> String {
         switch id {
@@ -125,6 +129,14 @@ package enum CLIError: LocalizedError {
             let familyNames = families.map { familyName($0) }.joined(separator: "+")
             let deviceList = devices.joined(separator: ", ")
             return "unsupported-destination: \(deviceList) - app only supports \(familyNames). Remove these devices from storescreens.yml, or add the missing device family in Xcode (General -> Supported Destinations)."
+        case .xcodeNotFound(let reason):
+            return "Could not locate a production Xcode: \(reason). Install a non-beta Xcode in /Applications, or set `app_store_connect.upload_build.xcode_path` / pass --xcode-path."
+        case .archiveFailed(let output):
+            return "xcodebuild archive failed:\n\(String(output.suffix(800)))"
+        case .exportFailed(let reason):
+            return "xcodebuild -exportArchive failed: \(reason)"
+        case .uploadFailed(let output):
+            return "altool upload failed:\n\(String(output.suffix(800)))"
         }
     }
 }

@@ -388,6 +388,11 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens check` | Scan source for iPad-unsafe patterns and device assumptions |
 | `storescreens list` | Show available simulators and App Store size mappings |
 | `storescreens screenshot` | Take a quick screenshot of a running simulator |
+| `storescreens render` | Render captioned/framed screenshots from an existing capture |
+| `storescreens auth` | Manage App Store Connect API credentials |
+| `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
+| `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
+| `storescreens upload-build` | Archive, export, and upload the `.ipa` to App Store Connect / TestFlight |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
@@ -946,6 +951,34 @@ Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create 
 - **"no App Store Connect app matched"**: the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
 - **"no ASC display type for WxH"**: the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
 - **"8MB limit exceeded"**: Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
+
+## Archiving + uploading the app binary
+
+`storescreens submit` ships screenshots and text metadata. To also archive the `.ipa` and upload it to App Store Connect / TestFlight, use `storescreens upload-build`:
+
+```bash
+storescreens upload-build init   # scaffold upload_build: block, open in editor
+storescreens upload-build        # xcodebuild archive + exportArchive + altool upload-app
+```
+
+Reuses the same ASC API credentials as `submit`. Pins `DEVELOPER_DIR` to a production Xcode (auto-detected from `/Applications/Xcode*.app`, excluding Xcode-beta) so a beta `xcode-select -p` can't taint the archive; override with `xcode_path:` or `--xcode-path`.
+
+Minimum config:
+
+```yaml
+app_store_connect:
+  bundle_id: com.example.app
+  upload_build: {}   # defaults: scheme from top-level, Release, app-store, auto Xcode, ./build
+```
+
+Useful flags:
+
+- `--dry-run` prints the plan (which Xcode, scheme, destination, output paths) without running xcodebuild.
+- `--skip-upload` archives + exports but keeps the `.ipa` local (use `skip_upload: true` in yml for the same effect).
+- `--xcode-path /Applications/Xcode.app` forces a specific Xcode.
+- `--verbose` streams full xcodebuild output instead of filtered progress.
+
+Full schema (every field + defaults, ExportOptions.plist generation, altool flow, troubleshooting): run `storescreens upload-build --help` and `storescreens upload-build init --help`.
 
 ## App Store Connect Screenshot Sizes
 
