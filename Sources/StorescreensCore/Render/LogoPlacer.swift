@@ -56,7 +56,6 @@ package struct LogoPlacer {
         let maxHeightPct = CGFloat(config.maxHeightPct ?? 8)
         let topPaddingPct = CGFloat(config.topPaddingPct ?? 4)
         let maxHeight = canvasSize.height * maxHeightPct / 100.0
-        let topPadding = canvasSize.height * topPaddingPct / 100.0
 
         let iw = CGFloat(image.width)
         let ih = CGFloat(image.height)
@@ -64,11 +63,17 @@ package struct LogoPlacer {
         let drawW = iw * scale
         let drawH = ih * scale
 
-        // CGContext has bottom-left origin. Top of canvas is y = canvasSize.height.
-        // Top padding means logo's top edge is at (canvasSize.height - topPadding);
-        // its bottom edge is at (canvasSize.height - topPadding - drawH).
+        // Center the logo vertically within its reservation band (the
+        // top `maxHeightPct + topPaddingPct` percent of the canvas).
+        // Matches CaptionLayouter, which already centers caption text
+        // in its band, so the logo slide and caption slides share the
+        // same "equidistant from top edge and from device" feel.
+        // CGContext has bottom-left origin: y = canvasSize.height is
+        // the top of the canvas.
+        let reservedHeight = canvasSize.height * (maxHeightPct + topPaddingPct) / 100.0
+        let bandCenterY = canvasSize.height - reservedHeight / 2
         let x = (canvasSize.width - drawW) / 2
-        let yBottom = canvasSize.height - topPadding - drawH
+        let yBottom = bandCenterY - drawH / 2
 
         ctx.draw(image, in: CGRect(x: x, y: yBottom, width: drawW, height: drawH))
     }

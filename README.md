@@ -973,12 +973,24 @@ app_store_connect:
 
 Useful flags:
 
-- `--dry-run` prints the plan (which Xcode, scheme, destination, output paths) without running xcodebuild.
-- `--skip-upload` archives + exports but keeps the `.ipa` local (use `skip_upload: true` in yml for the same effect).
+- `--dry-run` prints the plan (which Xcode, scheme, destination, output paths, resolved version + build) without running xcodebuild.
+- `--skip-upload` archives + exports but keeps the `.ipa` local (use `skip_upload: true` in yml for the same effect). Also skips the pre-archive version check.
 - `--xcode-path /Applications/Xcode.app` forces a specific Xcode.
+- `--marketing-version 1.2.0` / `--build 3` force a specific version and/or build number (overrides what's in the project).
+- `--no-auto-bump` errors out instead of rewriting the pbxproj when a bump is required.
 - `--verbose` streams full xcodebuild output instead of filtered progress.
 
-Full schema (every field + defaults, ExportOptions.plist generation, altool flow, troubleshooting): run `storescreens upload-build --help` and `storescreens upload-build init --help`.
+### Automatic version + build resolution
+
+Before archiving, `upload-build` queries App Store Connect for your app and decides whether your current `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` will produce a legal upload:
+
+- Marketing version already shipped -> bump patch (`1.1.7` -> `1.1.8`), reset build to `1`.
+- Marketing version is editable but TestFlight already has builds -> bump build number past `max(existing)`.
+- Fresh version -> keep what you have.
+
+When a bump is required, it rewrites the `project.pbxproj` in place (every config of every target, matching `agvtool new-version -all` / `new-marketing-version`) and syncs `submit.create_version` in `storescreens.yml` so the next `storescreens submit` picks up the right version. Opt out with `upload_build.auto_bump: false` or `--no-auto-bump`.
+
+Full schema (every field + defaults, ExportOptions.plist generation, altool flow, version resolver rules, troubleshooting): run `storescreens upload-build --help` and `storescreens upload-build init --help`.
 
 ## App Store Connect Screenshot Sizes
 

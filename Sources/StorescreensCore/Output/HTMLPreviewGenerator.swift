@@ -101,8 +101,25 @@ package struct HTMLPreviewGenerator {
             let path = (outputDir as NSString).appendingPathComponent(filename)
             try html.write(toFile: path, atomically: true, encoding: .utf8)
             let count = captures.reduce(0) { $0 + $1.screenshots.count }
-            // Find thumbnail from manifest
-            let thumb = captures.first?.screenshots.first?.filename
+            // Prefer the framed variant as the card thumbnail when
+            // render has produced one on disk, so the index reflects
+            // the final App Store look rather than the bare capture.
+            // Falls back to the raw capture when no framed PNG exists
+            // for the first slide (render hasn't run, or only ran for
+            // some slides) — same graceful-degrade behaviour as the
+            // per-device figures.
+            let rawThumb = captures.first?.screenshots.first?.filename
+            let thumb: String? = {
+                guard let rawThumb, let framedDir else { return rawThumb }
+                let full = (outputDir as NSString)
+                    .appendingPathComponent(framedDir)
+                let framedAbs = (full as NSString)
+                    .appendingPathComponent(rawThumb)
+                if FileManager.default.fileExists(atPath: framedAbs) {
+                    return (framedDir as NSString).appendingPathComponent(rawThumb)
+                }
+                return rawThumb
+            }()
             currentPages.append(IndexEntry(
                 deviceType: key.deviceType,
                 appearance: key.appearance,

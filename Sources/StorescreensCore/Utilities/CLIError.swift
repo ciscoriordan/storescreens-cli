@@ -47,6 +47,7 @@ package enum CLIError: LocalizedError {
     case archiveFailed(output: String)
     case exportFailed(reason: String)
     case uploadFailed(output: String)
+    case versionProbeFailed(reason: String)
 
     private func familyName(_ id: Int) -> String {
         switch id {
@@ -137,6 +138,8 @@ package enum CLIError: LocalizedError {
             return "xcodebuild -exportArchive failed: \(reason)"
         case .uploadFailed(let output):
             return "altool upload failed:\n\(String(output.suffix(800)))"
+        case .versionProbeFailed(let reason):
+            return "Could not read version from Xcode project: \(reason)"
         }
     }
 }

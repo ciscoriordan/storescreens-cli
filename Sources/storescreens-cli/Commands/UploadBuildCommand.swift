@@ -56,6 +56,15 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Stream full xcodebuild output instead of filtered progress lines.")
     var verbose: Bool = false
 
+    @Option(name: .long, help: "Force a specific marketing version (e.g. 1.2.0). Still validates build number against App Store Connect.")
+    var marketingVersion: String?
+
+    @Option(name: .long, help: "Force a specific build number (e.g. 3).")
+    var build: String?
+
+    @Flag(name: .long, help: "Error out instead of auto-bumping the project when ASC state requires a version/build change.")
+    var noAutoBump: Bool = false
+
     func run() async throws {
         var logger = Logger()
         logger.isVerbose = verbose
@@ -67,18 +76,21 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
         }
 
         // Merge flags over config. Flags win.
-        var build = asc.uploadBuild ?? UploadBuildConfig()
-        if let scheme { build.scheme = scheme }
-        if let configuration { build.configuration = configuration }
-        if let xcodePath { build.xcodePath = xcodePath }
-        if let outputDir { build.outputDir = outputDir }
-        if skipUpload { build.skipUpload = true }
+        var buildCfg = asc.uploadBuild ?? UploadBuildConfig()
+        if let scheme { buildCfg.scheme = scheme }
+        if let configuration { buildCfg.configuration = configuration }
+        if let xcodePath { buildCfg.xcodePath = xcodePath }
+        if let outputDir { buildCfg.outputDir = outputDir }
+        if skipUpload { buildCfg.skipUpload = true }
+        if let marketingVersion { buildCfg.marketingVersion = marketingVersion }
+        if let build { buildCfg.buildNumber = build }
+        if noAutoBump { buildCfg.autoBump = false }
 
-        let resolvedScheme = build.scheme ?? captureConfig.scheme
-        let resolvedConfig = build.configuration ?? "Release"
-        let resolvedDestination = build.destination ?? "generic/platform=iOS"
-        let resolvedExportMethod = build.exportMethod ?? "app-store"
-        let shouldAllowProvUpdates = build.allowProvisioningUpdates ?? true
+        let resolvedScheme = buildCfg.scheme ?? captureConfig.scheme
+        let resolvedConfig = buildCfg.configuration ?? "Release"
+        let resolvedDestination = buildCfg.destination ?? "generic/platform=iOS"
+        let resolvedExportMethod = buildCfg.exportMethod ?? "app-store"
+        let shouldAllowProvUpdates = buildCfg.allowProvisioningUpdates ?? true
 
         let baseDir = URL(fileURLWithPath: config)
             .deletingLastPathComponent()
@@ -86,7 +98,7 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
 
         // Pick Xcode.
         let xcode: XcodeInstall
-        if let path = build.xcodePath {
+        if let path = buildCfg.xcodePath {
             xcode = try XcodeLocator.atPath(path)
         } else {
             xcode = try XcodeLocator.findProduction()
@@ -106,7 +118,7 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
 
         // Resolve output dir + derived temp paths.
         let outputRoot: URL = {
-            let raw = build.outputDir ?? "build"
+            let raw = buildCfg.outputDir ?? "build"
             return URL(fileURLWithPath: raw, relativeTo: baseDir).standardized
         }()
         try FileManager.default.createDirectory(at: outputRoot, withIntermediateDirectories: true)
@@ -117,13 +129,13 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
         // User-provided plist wins over generated.
         let exportOptionsPath: String
         var generatedPlistURL: URL? = nil
-        if let userPlist = build.exportOptionsPlist {
+        if let userPlist = buildCfg.exportOptionsPlist {
             exportOptionsPath = URL(fileURLWithPath: userPlist, relativeTo: baseDir)
                 .standardized.path
         } else {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ExportOptions-\(UUID().uuidString).plist")
-            try ExportOptionsWriter.write(from: build, to: tmp)
+            try ExportOptionsWriter.write(from: buildCfg, to: tmp)
             generatedPlistURL = tmp
             exportOptionsPath = tmp.path
         }
@@ -133,15 +145,45 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
             }
         }
 
+        // Pre-archive version resolution. When uploading, the build must
+        // have a marketing version + build number that don't collide with
+        // anything already in App Store Connect. Skipped when there's no
+        // Xcode project (workspace-only exotic setups) or when the user
+        // opted out of upload.
+        var versionState: XcodeVersion.State? = nil
+        var resolvedVersion: VersionResolver.Resolution? = nil
+        if let project {
+            versionState = try? XcodeVersion.read(projectPath: project)
+        }
+
+        if buildCfg.skipUpload != true, let xcState = versionState {
+            resolvedVersion = try await resolveAndMaybeBumpVersion(
+                xcodeState: xcState,
+                project: project!,
+                yamlPath: config,
+                asc: asc,
+                buildCfg: buildCfg,
+                dryRun: dryRun,
+                logger: logger
+            )
+        }
+
         logger.header(dryRun ? "Dry run" : "Upload build")
         print("  scheme:        \(resolvedScheme)")
         print("  configuration: \(resolvedConfig)")
         print("  destination:   \(resolvedDestination)")
         print("  export method: \(resolvedExportMethod)")
         print("  xcode:         \(xcode.appPath) (\(xcode.version)\(xcode.isBeta ? ", BETA" : ""))")
+        if let v = resolvedVersion {
+            print("  version:       \(v.marketingVersion) (\(v.reason))")
+            print("  build:         \(v.buildNumber)")
+        } else if let s = versionState {
+            print("  version:       \(s.marketingVersion)")
+            print("  build:         \(s.buildNumber)")
+        }
         print("  archive:       \(archivePath)")
         print("  export dir:    \(exportPath)")
-        print("  upload:        \(build.skipUpload == true ? "skipped" : "altool --upload-app")")
+        print("  upload:        \(buildCfg.skipUpload == true ? "skipped" : "altool --upload-app")")
 
         if dryRun {
             logger.log("dry run OK", level: .success)
@@ -188,7 +230,7 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
         )
         logger.log("exported -> \(ipaPath)", level: .success)
 
-        if build.skipUpload == true {
+        if buildCfg.skipUpload == true {
             print("")
             logger.log("upload skipped (--skip-upload). ipa ready at \(ipaPath)", level: .success)
             return
@@ -223,6 +265,128 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
         if d.contains("macos") || d.contains("mac os") { return .macOS }
         if d.contains("visionos") || d.contains("xros") { return .visionOS }
         return .iOS
+    }
+
+    /// Queries App Store Connect for the app's version + build state, computes
+    /// the next legal tuple via `VersionResolver`, and either rewrites the
+    /// Xcode project + yml (auto-bump on, default) or throws a
+    /// `versionBumpNeeded` error (auto-bump off).
+    ///
+    /// Returns nil when creds are missing (degrade gracefully in dry-run),
+    /// but throws in live mode since you can't upload without creds anyway.
+    private func resolveAndMaybeBumpVersion(
+        xcodeState: XcodeVersion.State,
+        project: String,
+        yamlPath: String,
+        asc: AppStoreConnectConfig,
+        buildCfg: UploadBuildConfig,
+        dryRun: Bool,
+        logger: Logger
+    ) async throws -> VersionResolver.Resolution? {
+        let creds: ASCCredentials
+        do {
+            creds = try ASCCredentialResolver.resolve()
+        } catch {
+            if dryRun {
+                logger.log(
+                    "skipping version check (credentials not configured)",
+                    level: .warning
+                )
+                return nil
+            }
+            logger.log("credentials not configured: \(error)", level: .error)
+            print("  run `storescreens auth init` or set ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH")
+            throw ExitCode(1)
+        }
+
+        // Resolve the ASC app record.
+        let client = ASCClient(credentials: creds)
+        let appsAPI = AppsAPI(client: client)
+        let appID: String
+        if let id = asc.appID {
+            appID = id
+        } else if let bundle = asc.bundleID {
+            guard let app = try await appsAPI.lookupApp(bundleID: bundle) else {
+                logger.log("no App Store Connect app matches bundle_id \(bundle)", level: .error)
+                throw ExitCode(1)
+            }
+            appID = app.id
+        } else {
+            logger.log("app_store_connect needs app_id or bundle_id", level: .error)
+            throw ExitCode(1)
+        }
+
+        let resolver = VersionResolver(
+            appsAPI: appsAPI,
+            buildsAPI: BuildsAPI(client: client)
+        )
+        let override = VersionResolver.Override(
+            marketingVersion: buildCfg.marketingVersion,
+            buildNumber: buildCfg.buildNumber
+        )
+        let resolution = try await resolver.resolve(
+            appID: appID,
+            current: xcodeState,
+            override: (override.marketingVersion == nil && override.buildNumber == nil) ? nil : override
+        )
+
+        // No-op: Xcode project is already on the right tuple.
+        guard resolution.changed else {
+            return resolution
+        }
+
+        // Decide whether to rewrite.
+        let autoBump = buildCfg.autoBump ?? true
+        if !autoBump {
+            let fixCmd: String
+            if resolution.marketingVersion != xcodeState.marketingVersion {
+                fixCmd = "agvtool new-marketing-version \(resolution.marketingVersion) && agvtool new-version -all \(resolution.buildNumber)"
+            } else {
+                fixCmd = "agvtool new-version -all \(resolution.buildNumber)"
+            }
+            logger.log(
+                """
+                Version/build bump required before archive.
+                  Current in Xcode project: \(xcodeState.marketingVersion) (\(xcodeState.buildNumber))
+                  Next legal:                \(resolution.marketingVersion) (\(resolution.buildNumber))
+                  Reason: \(resolution.reason)
+                Fix: drop --no-auto-bump to have storescreens do it, or run:
+                  \(fixCmd)
+                """,
+                level: .error
+            )
+            throw ExitCode(1)
+        }
+
+        // Dry run stops short of actually writing.
+        if dryRun {
+            print("  (would bump: \(xcodeState.marketingVersion) (\(xcodeState.buildNumber)) -> \(resolution.marketingVersion) (\(resolution.buildNumber)))")
+            return resolution
+        }
+
+        // Auto-bump: rewrite pbxproj, then yml.
+        logger.header("Bumping version")
+        print("  \(resolution.reason)")
+        let changes = try XcodeVersion.write(
+            projectPath: project,
+            marketingVersion: resolution.marketingVersion != xcodeState.marketingVersion
+                ? resolution.marketingVersion : nil,
+            buildNumber: resolution.buildNumber != xcodeState.buildNumber
+                ? resolution.buildNumber : nil
+        )
+        for change in changes {
+            print("  \(change.setting): \(change.oldValue) -> \(change.newValue)")
+        }
+        // Sync submit.create_version in the yml so `storescreens submit`
+        // stays aligned without a second manual edit.
+        let yamlChanged = (try? YAMLVersionPatcher.syncCreateVersion(
+            yamlPath: yamlPath, to: resolution.marketingVersion
+        )) ?? false
+        if yamlChanged {
+            print("  synced submit.create_version in \(yamlPath)")
+        }
+
+        return resolution
     }
 }
 
@@ -413,6 +577,20 @@ struct UploadBuildInitCommand: AsyncParsableCommand {
 
             # Archive + export + stop (skip altool upload). Default false.
             # skip_upload: false
+
+            # Before archiving, storescreens queries ASC to check whether the
+            # MARKETING_VERSION in the Xcode project is already shipped and
+            # whether the build number collides with an existing TestFlight
+            # build. If so, it auto-bumps the pbxproj (and syncs
+            # submit.create_version). Set to false to error out instead.
+            # auto_bump: true
+
+            # Force a specific marketing version (overrides Xcode project).
+            # Still validates build number against ASC TestFlight history.
+            # marketing_version: "1.2.0"
+
+            # Force a specific build number.
+            # build_number: "3"
         """
     }
 

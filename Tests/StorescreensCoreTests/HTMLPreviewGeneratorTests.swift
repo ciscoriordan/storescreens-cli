@@ -151,6 +151,54 @@ final class HTMLPreviewGeneratorTests: XCTestCase {
                           "screenshotOrder should place 'hero' ahead of 'alpha_first' in the gallery")
     }
 
+    func testIndexThumbnailPrefersFramedWhenAvailable() throws {
+        // Both raw and framed placeholders exist → card thumbnail on
+        // the index page should point at the framed PNG so the gallery
+        // landing reflects the final App Store look, not the bare
+        // capture.
+        let filename = "en-US/iPhone_6.9_polytonic.png"
+        let m = manifest(filename: filename)
+        try writePlaceholder(at: tmp.appendingPathComponent(filename))
+        try writePlaceholder(at: tmp.appendingPathComponent("framed/\(filename)"))
+
+        try HTMLPreviewGenerator().generate(
+            manifest: m,
+            outputDir: tmp.path,
+            framedDir: "framed"
+        )
+
+        let index = try String(
+            contentsOf: tmp.appendingPathComponent("preview.html"),
+            encoding: .utf8
+        )
+        // Card <img src> should be the framed variant.
+        XCTAssertTrue(index.contains("src=\"framed/en-US/iPhone_6.9_polytonic.png\""),
+                      "index card should reference the framed thumbnail")
+    }
+
+    func testIndexThumbnailFallsBackToRawWhenFramedMissing() throws {
+        // Only raw placeholder exists → card thumbnail should fall
+        // back to raw so the index isn't broken on a render-less run.
+        let filename = "en-US/iPhone_6.9_polytonic.png"
+        let m = manifest(filename: filename)
+        try writePlaceholder(at: tmp.appendingPathComponent(filename))
+
+        try HTMLPreviewGenerator().generate(
+            manifest: m,
+            outputDir: tmp.path,
+            framedDir: "framed"
+        )
+
+        let index = try String(
+            contentsOf: tmp.appendingPathComponent("preview.html"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(index.contains("src=\"en-US/iPhone_6.9_polytonic.png\""),
+                      "index card should fall back to the raw thumbnail when framed is missing")
+        XCTAssertFalse(index.contains("src=\"framed/en-US/iPhone_6.9_polytonic.png\""),
+                       "framed thumbnail must not be referenced when its file is absent")
+    }
+
     func testOldPreviewsWipedByDefault() throws {
         // Simulate a prior run having written a preview page for a
         // device/appearance combo that isn't in this manifest.

@@ -119,6 +119,17 @@ package struct UploadBuildConfig: Codable, Sendable {
     /// Archive + export + stop. Skips the altool upload step.
     /// Default false.
     package var skipUpload: Bool?
+    /// Auto-bump MARKETING_VERSION / CURRENT_PROJECT_VERSION before archive
+    /// when App Store Connect state requires it (marketing version already
+    /// shipped, or build number collides with an existing TestFlight build).
+    /// Default true; set false to error out instead of rewriting the
+    /// pbxproj.
+    package var autoBump: Bool?
+    /// Force a specific marketing version instead of what's in the Xcode
+    /// project. The resolver still validates the build number against ASC.
+    package var marketingVersion: String?
+    /// Force a specific build number.
+    package var buildNumber: String?
 
     package init(
         scheme: String? = nil,
@@ -134,7 +145,10 @@ package struct UploadBuildConfig: Codable, Sendable {
         allowProvisioningUpdates: Bool? = nil,
         destination: String? = nil,
         outputDir: String? = nil,
-        skipUpload: Bool? = nil
+        skipUpload: Bool? = nil,
+        autoBump: Bool? = nil,
+        marketingVersion: String? = nil,
+        buildNumber: String? = nil
     ) {
         self.scheme = scheme
         self.configuration = configuration
@@ -150,6 +164,9 @@ package struct UploadBuildConfig: Codable, Sendable {
         self.destination = destination
         self.outputDir = outputDir
         self.skipUpload = skipUpload
+        self.autoBump = autoBump
+        self.marketingVersion = marketingVersion
+        self.buildNumber = buildNumber
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -167,5 +184,8 @@ package struct UploadBuildConfig: Codable, Sendable {
         case destination
         case outputDir = "output_dir"
         case skipUpload = "skip_upload"
+        case autoBump = "auto_bump"
+        case marketingVersion = "marketing_version"
+        case buildNumber = "build_number"
     }
 }
