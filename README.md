@@ -827,13 +827,21 @@ export ASC_ISSUER_ID=69a6de84-03c8-47e3-e053-5b8c7c11a4d1
 export ASC_KEY_PATH=~/.appstoreconnect/AuthKey_ABCDE12345.p8
 ```
 
-Or run the interactive login and save credentials to `~/.storescreens/asc-credentials.yml` (perms 0600):
+Or generate a pre-filled credentials template and edit it:
+
+```bash
+storescreens auth init
+```
+
+This writes `~/.storescreens/asc-credentials.yml` (0600 perms) with commented placeholders for `key_id`, `issuer_id`, and `key_path`, and opens it in your editor. Replace the three `REPLACE_ME` values with your real credentials.
+
+Or run the interactive login that prompts for each value:
 
 ```bash
 storescreens auth login
 ```
 
-Verify with:
+Either way, verify with:
 
 ```bash
 storescreens auth status
@@ -859,6 +867,14 @@ app_store_connect:
 ```
 
 ### Metadata directory layout
+
+Scaffold a starting directory with:
+
+```bash
+storescreens metadata init --locales en-US es-ES ja
+```
+
+This creates `metadata/<locale>/` folders plus a `metadata/README.md` field reference. You create only the `.txt` files you want; missing files mean "don't touch that App Store field".
 
 Fastlane convention. One folder per locale, one file per field:
 
@@ -921,6 +937,8 @@ app_store_connect:
 ```
 
 Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID is included in the report output.
+
+Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create → attach version → finalize with `submitted:true`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
 
 ### Troubleshooting
 

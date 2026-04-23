@@ -133,7 +133,10 @@ package struct SubmitOrchestrator {
         // metadata so the version is complete when Apple picks it up.
         if config.submit?.submitForReview == true {
             do {
-                let submission = try await appsAPI.submitForReview(versionID: version.id)
+                // 3-step reviewSubmissions flow: create, add version, finalize.
+                let submission = try await appsAPI.submitForReview(
+                    appID: app.id, versionID: version.id, platform: platform
+                )
                 report.reviewSubmissionID = submission.id
                 progress?("Submitted for review (submission id \(submission.id))")
             } catch {

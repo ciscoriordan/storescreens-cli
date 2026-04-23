@@ -9,14 +9,113 @@ struct AuthCommand: AsyncParsableCommand {
         discussion: """
             Credentials are resolved in this order: (1) environment variables \
             ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH; (2) the config file at \
-            ~/.storescreens/asc-credentials.yml (created by `auth login`).
+            ~/.storescreens/asc-credentials.yml (created by `auth login` or `auth init`).
 
             Download your API key from https://appstoreconnect.apple.com/access/api \
             and keep the .p8 file safe; Apple only lets you download it once.
             """,
-        subcommands: [AuthLoginCommand.self, AuthLogoutCommand.self, AuthStatusCommand.self],
+        subcommands: [
+            AuthInitCommand.self,
+            AuthLoginCommand.self,
+            AuthLogoutCommand.self,
+            AuthStatusCommand.self,
+        ],
         defaultSubcommand: AuthStatusCommand.self
     )
+}
+
+// MARK: - init
+
+struct AuthInitCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "init",
+        abstract: "Write a boilerplate credentials file and open it in your editor.",
+        discussion: """
+            Creates ~/.storescreens/asc-credentials.yml (0600 perms) with \
+            commented placeholders. Opens the file in $EDITOR, or your \
+            default text editor if $EDITOR is unset. Fill in the three fields \
+            and verify with `storescreens auth status`.
+            """
+    )
+
+    @Flag(name: .shortAndLong, help: "Overwrite the existing credentials file if it exists.")
+    var force: Bool = false
+
+    @Flag(name: .long, help: "Skip opening the file in an editor after writing.")
+    var noOpen: Bool = false
+
+    func run() async throws {
+        let logger = Logger()
+        let path = ASCCredentialResolver.defaultFilePath
+        let url = URL(fileURLWithPath: path)
+
+        if FileManager.default.fileExists(atPath: path) && !force {
+            logger.log("credentials file already exists at \(path)", level: .warning)
+            print("  use `--force` to overwrite, or just edit the existing file.")
+            if !noOpen { openInEditor(path: path) }
+            return
+        }
+
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let template = """
+            # App Store Connect API credentials for storescreens.
+            #
+            # 1. Create an API key at https://appstoreconnect.apple.com/access/api
+            #    (Admin or App Manager access works)
+            # 2. Download the AuthKey_XXXXXX.p8 file; Apple lets you download it ONCE.
+            # 3. Fill in the three fields below and save.
+            #
+            # Verify with: storescreens auth status
+            #
+            # Want to keep credentials OUT of a file? Set these env vars instead:
+            #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH
+            # Env vars take priority over this file.
+
+            # 10-character alphanumeric key ID shown next to your key (e.g. ABCDE12345)
+            key_id: REPLACE_ME
+
+            # UUID shown at the top of the API Keys page
+            issuer_id: REPLACE_ME
+
+            # Absolute path to your downloaded AuthKey_XXXXXX.p8 file (~ is expanded)
+            key_path: ~/AuthKey_KEYID.p8
+            """
+        try template.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+
+        logger.log("wrote boilerplate to \(path) (perms 0600)", level: .success)
+        print("  fill in key_id, issuer_id, key_path, then run `storescreens auth status`")
+
+        if !noOpen { openInEditor(path: path) }
+    }
+
+    private func openInEditor(path: String) {
+        // Prefer $EDITOR if set, else the default macOS text editor.
+        let env = ProcessInfo.processInfo.environment
+        let task = Process()
+        if let editor = env["EDITOR"], !editor.isEmpty {
+            task.launchPath = "/bin/sh"
+            task.arguments = ["-c", "\(editor) \(path.shellQuoted)"]
+        } else {
+            task.launchPath = "/usr/bin/open"
+            task.arguments = ["-t", path]
+        }
+        do {
+            try task.run()
+        } catch {
+            print("  (could not open automatically: \(error.localizedDescription); open \(path) yourself)")
+        }
+    }
+}
+
+private extension String {
+    var shellQuoted: String {
+        "'" + self.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 }
 
 // MARK: - login

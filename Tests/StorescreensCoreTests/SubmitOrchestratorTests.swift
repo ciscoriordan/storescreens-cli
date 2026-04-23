@@ -420,7 +420,7 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
     }
 
-    func testSubmit_submitForReview_firesEndpoint() async throws {
+    func testSubmit_submitForReview_reviewSubmissionsFlow() async throws {
         let (client, _) = makeClient()
 
         ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
@@ -429,10 +429,21 @@ final class SubmitOrchestratorTests: XCTestCase {
         ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
             (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
         }
-        var submitHits = 0
-        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionSubmissions") { _ in
-            submitHits += 1
-            return (201, Data(#"{"data":{"id":"SUBM-1","type":"appStoreVersionSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        // 3-step reviewSubmissions flow: POST create, POST item, PATCH finalize.
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        var itemHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            itemHits += 1
+            return (201, Data(#"{"data":{"id":"RITEM-1","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-1") { _ in
+            finalizeHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
         }
 
         let config = AppStoreConnectConfig(
@@ -458,8 +469,10 @@ final class SubmitOrchestratorTests: XCTestCase {
             shouldUploadMetadata: false
         )
 
-        XCTAssertEqual(submitHits, 1, "should have POSTed to appStoreVersionSubmissions once")
-        XCTAssertEqual(report.reviewSubmissionID, "SUBM-1")
+        XCTAssertEqual(createHits, 1, "POST /reviewSubmissions once")
+        XCTAssertEqual(itemHits, 1, "POST /reviewSubmissionItems once to attach version")
+        XCTAssertEqual(finalizeHits, 1, "PATCH /reviewSubmissions/{id} once to set submitted:true")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-1")
         XCTAssertTrue(report.errors.isEmpty)
     }
 
@@ -471,10 +484,10 @@ final class SubmitOrchestratorTests: XCTestCase {
         ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
             (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
         }
-        var submitHits = 0
-        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionSubmissions") { _ in
-            submitHits += 1
-            return (201, Data(#"{"data":{"id":"X","type":"appStoreVersionSubmissions","attributes":{}}}"#.utf8))
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"reviewSubmissions","attributes":{}}}"#.utf8))
         }
 
         let config = AppStoreConnectConfig(
@@ -495,7 +508,7 @@ final class SubmitOrchestratorTests: XCTestCase {
             shouldUploadMetadata: false
         )
 
-        XCTAssertEqual(submitHits, 0, "submit-for-review must not fire when the flag is unset")
+        XCTAssertEqual(createHits, 0, "submit-for-review must not fire when the flag is unset")
         XCTAssertNil(report.reviewSubmissionID)
     }
 

@@ -351,7 +351,7 @@ package struct AppsAPI {
         return resp.data
     }
 
-    // MARK: - Submit for review
+    // MARK: - Submit for review (reviewSubmissions API)
 
     package struct ReviewSubmission: Codable, Sendable {
         package let id: String
@@ -359,41 +359,121 @@ package struct AppsAPI {
         package struct Attributes: Codable, Sendable {
             package let state: String?
             package let platform: String?
+            package let submittedDate: Date?
         }
     }
 
-    /// Submits a version to App Review. One-shot POST; Apple queues the
-    /// submission and returns the new record. No user-visible "Submit for
-    /// Review" click is needed after this call succeeds.
-    ///
-    /// Uses the `appStoreVersionSubmissions` endpoint (the per-version flow).
-    /// Apple's newer `reviewSubmissions` API is not yet used here.
-    @discardableResult
-    package func submitForReview(versionID: String) async throws -> ReviewSubmission {
+    package struct ReviewSubmissionItem: Codable, Sendable {
+        package let id: String
+    }
+
+    /// Creates a new `reviewSubmission` for an app on a given platform.
+    /// Step 1 of the 3-step submit flow.
+    package func createReviewSubmission(
+        appID: String,
+        platform: String = "IOS"
+    ) async throws -> ReviewSubmission {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "appStoreVersionSubmissions"
+                let type = "reviewSubmissions"
+                let attributes: Attrs
                 let relationships: Rels
             }
+            struct Attrs: Encodable { let platform: String }
             struct Rels: Encodable {
-                struct V: Encodable {
-                    struct Data: Encodable { let type = "appStoreVersions"; let id: String }
+                struct A: Encodable {
+                    struct Data: Encodable { let type = "apps"; let id: String }
                     let data: Data
                 }
-                let appStoreVersion: V
+                let app: A
             }
             let data: Data
         }
         let body = Body(data: .init(
-            relationships: .init(appStoreVersion: .init(data: .init(id: versionID)))
+            attributes: .init(platform: platform),
+            relationships: .init(app: .init(data: .init(id: appID)))
         ))
         struct Resp: Decodable { let data: ReviewSubmission }
         let resp: Resp = try await client.post(
-            path: "appStoreVersionSubmissions",
-            body: body,
-            as: Resp.self
+            path: "reviewSubmissions", body: body, as: Resp.self
         )
         return resp.data
+    }
+
+    /// Attaches an App Store Version to an in-progress reviewSubmission.
+    /// Step 2 of the 3-step submit flow.
+    @discardableResult
+    package func addVersionToReviewSubmission(
+        reviewSubmissionID: String,
+        versionID: String
+    ) async throws -> ReviewSubmissionItem {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "reviewSubmissionItems"
+                let relationships: Rels
+            }
+            struct Rels: Encodable {
+                struct Sub: Encodable {
+                    struct Data: Encodable { let type = "reviewSubmissions"; let id: String }
+                    let data: Data
+                }
+                struct Ver: Encodable {
+                    struct Data: Encodable { let type = "appStoreVersions"; let id: String }
+                    let data: Data
+                }
+                let reviewSubmission: Sub
+                let appStoreVersion: Ver
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            relationships: .init(
+                reviewSubmission: .init(data: .init(id: reviewSubmissionID)),
+                appStoreVersion: .init(data: .init(id: versionID))
+            )
+        ))
+        struct Resp: Decodable { let data: ReviewSubmissionItem }
+        let resp: Resp = try await client.post(
+            path: "reviewSubmissionItems", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// PATCH `submitted: true` to finalize a reviewSubmission. Step 3 of the
+    /// 3-step submit flow. After this call the submission's state transitions
+    /// to WAITING_FOR_REVIEW.
+    @discardableResult
+    package func finalizeReviewSubmission(id: String) async throws -> ReviewSubmission {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "reviewSubmissions"
+                let id: String
+                let attributes: Attrs
+            }
+            struct Attrs: Encodable { let submitted: Bool }
+            let data: Data
+        }
+        let body = Body(data: .init(id: id, attributes: .init(submitted: true)))
+        struct Resp: Decodable { let data: ReviewSubmission }
+        let resp: Resp = try await client.patch(
+            path: "reviewSubmissions/\(id)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// Convenience: runs all three steps and returns the finalized submission.
+    /// Matches the old `submitForReview` signature for callers.
+    @discardableResult
+    package func submitForReview(
+        appID: String,
+        versionID: String,
+        platform: String = "IOS"
+    ) async throws -> ReviewSubmission {
+        let submission = try await createReviewSubmission(appID: appID, platform: platform)
+        _ = try await addVersionToReviewSubmission(
+            reviewSubmissionID: submission.id, versionID: versionID
+        )
+        return try await finalizeReviewSubmission(id: submission.id)
     }
 
     // MARK: - Version localization update (original)
