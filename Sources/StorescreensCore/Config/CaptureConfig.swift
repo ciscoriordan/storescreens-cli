@@ -52,6 +52,17 @@ package struct CaptureConfig: Codable {
     /// Default: false. Set to true to enable.
     package var upload: Bool?
 
+    /// Keep older preview pages on the index card grid under a
+    /// "From older runs" heading. Older pages are the `preview_*.html`
+    /// files left behind by a previous capture whose device/appearance
+    /// combo isn't in the current run.
+    /// Default: false. A fresh capture wipes stale preview files so the
+    /// index is a clean picture of the latest run. Set to true when you
+    /// want the gallery to accumulate history across runs (e.g. you
+    /// captured an iPhone-only run yesterday and an iPad-only run today
+    /// and want to see both cards at once).
+    package var keepOldPreviews: Bool?
+
     /// Custom locale-to-flag mappings for the HTML preview gallery.
     /// Keys are Xcode locale codes (e.g., "en-GB", "es-419"). Values are either:
     ///   - A filename (without .svg) from ciscoriordan/svg-flags/circle/languages/, e.g. "in-en"
@@ -89,6 +100,7 @@ package struct CaptureConfig: Codable {
         case logLevel = "log_level"
         case derivedDataPath = "derived_data_path"
         case upload
+        case keepOldPreviews = "keep_old_previews"
         case localeFlags = "locale_flags"
         case render
         case appStoreConnect = "app_store_connect"

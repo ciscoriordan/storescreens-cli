@@ -95,6 +95,53 @@ final class HTMLPreviewGeneratorTests: XCTestCase {
         XCTAssertTrue(devicePage.contains("framed/en-US/iPhone_6.9_01_home.png"))
     }
 
+    func testOldPreviewsWipedByDefault() throws {
+        // Simulate a prior run having written a preview page for a
+        // device/appearance combo that isn't in this manifest.
+        let stale = "preview_iPad_13_dark.html"
+        let stalePath = tmp.appendingPathComponent(stale)
+        try "stale content".write(to: stalePath, atomically: true, encoding: .utf8)
+
+        let m = manifest(filename: "en-US/iPhone_6.9_01_home.png")
+        try writePlaceholder(at: tmp.appendingPathComponent(m.devices[0].screenshots[0].filename))
+
+        try HTMLPreviewGenerator().generate(manifest: m, outputDir: tmp.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stalePath.path),
+                       "default keepOldPreviews=false should wipe stale preview files")
+        let index = try String(
+            contentsOf: tmp.appendingPathComponent("preview.html"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(index.contains("From older runs"),
+                       "wiped stale -> no 'From older runs' section on the index")
+    }
+
+    func testOldPreviewsKeptWhenOptedIn() throws {
+        // Same setup, but now caller asks to keep stale pages.
+        let stale = "preview_iPad_13_dark.html"
+        let stalePath = tmp.appendingPathComponent(stale)
+        try "stale content".write(to: stalePath, atomically: true, encoding: .utf8)
+
+        let m = manifest(filename: "en-US/iPhone_6.9_01_home.png")
+        try writePlaceholder(at: tmp.appendingPathComponent(m.devices[0].screenshots[0].filename))
+
+        try HTMLPreviewGenerator().generate(
+            manifest: m,
+            outputDir: tmp.path,
+            keepOldPreviews: true
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stalePath.path),
+                      "keepOldPreviews=true preserves stale preview files")
+        let index = try String(
+            contentsOf: tmp.appendingPathComponent("preview.html"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(index.contains("From older runs"),
+                      "keepOldPreviews=true surfaces a 'From older runs' section")
+    }
+
     func testFramedDirButNoMatchingFileOmitsToggle() throws {
         // framedDir provided, but the render never wrote this slide.
         // Page should degrade gracefully to raw-only (no broken <img>).

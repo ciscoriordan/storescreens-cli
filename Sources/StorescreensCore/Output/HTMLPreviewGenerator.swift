@@ -8,7 +8,6 @@ package struct HTMLPreviewGenerator {
     }
 
     /// Generates per-device/appearance HTML preview pages and an index linking them all.
-    /// Old preview pages from previous runs are preserved and labeled with their timestamp.
     ///
     /// When `framedDir` is non-nil, the per-device pages also show the
     /// rendered (captioned/framed) PNGs alongside the raw captures with a
@@ -19,14 +18,24 @@ package struct HTMLPreviewGenerator {
     /// screenshots whose framed file is missing silently fall back to
     /// raw-only. When no screenshot has a framed variant the toggle is
     /// omitted and the page reads identically to the raw-only case.
+    ///
+    /// When `keepOldPreviews` is true, preview pages from earlier runs
+    /// (device/appearance combos not in the current manifest) are kept
+    /// on the index under a "From older runs" heading with their
+    /// original timestamp. Default false: stale `preview_*.html` files
+    /// are deleted so the index reflects the latest run only.
     package func generate(
         manifest: CaptureManifest,
         outputDir: String,
-        framedDir: String? = nil
+        framedDir: String? = nil,
+        keepOldPreviews: Bool = false
     ) throws {
         let fm = FileManager.default
 
-        // Snapshot existing preview_*.html files and their mod dates before we overwrite any
+        // Snapshot existing preview_*.html files and their mod dates
+        // before we overwrite any. Used either to enumerate old pages
+        // for the "From older runs" section (keepOldPreviews = true) or
+        // to identify files to delete (keepOldPreviews = false).
         var oldFiles: [String: Date] = [:] // filename -> modification date
         if let existing = try? fm.contentsOfDirectory(atPath: outputDir) {
             for file in existing where file.hasPrefix("preview_") && file.hasSuffix(".html") {
@@ -82,11 +91,15 @@ package struct HTMLPreviewGenerator {
             ))
         }
 
-        // Collect old pages that weren't overwritten by this run
+        // Handle old pages (files from previous runs that weren't
+        // overwritten this time): keep them as stale cards, or delete
+        // them outright so the index reflects only the current run.
         var olderPages: [IndexEntry] = []
-        for (filename, modDate) in oldFiles where !currentFilenames.contains(filename) {
-            // Parse device type and appearance from filename
-            if let parsed = parsePageFilename(filename) {
+        let staleFilenames = oldFiles.keys.filter { !currentFilenames.contains($0) }
+        if keepOldPreviews {
+            for filename in staleFilenames {
+                guard let modDate = oldFiles[filename],
+                      let parsed = parsePageFilename(filename) else { continue }
                 olderPages.append(IndexEntry(
                     deviceType: parsed.deviceType,
                     appearance: parsed.appearance,
@@ -96,10 +109,18 @@ package struct HTMLPreviewGenerator {
                     olderRunDate: modDate
                 ))
             }
-        }
-        olderPages.sort {
-            if $0.deviceType != $1.deviceType { return $0.deviceType < $1.deviceType }
-            return ($0.appearance ?? "") < ($1.appearance ?? "")
+            olderPages.sort {
+                if $0.deviceType != $1.deviceType { return $0.deviceType < $1.deviceType }
+                return ($0.appearance ?? "") < ($1.appearance ?? "")
+            }
+        } else {
+            // Default: wipe stale preview files. Non-fatal on error so
+            // a permissions glitch on one file doesn't block the index
+            // from being written.
+            for filename in staleFilenames {
+                let path = (outputDir as NSString).appendingPathComponent(filename)
+                try? fm.removeItem(atPath: path)
+            }
         }
 
         // Generate index with both current and older entries
