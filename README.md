@@ -873,11 +873,14 @@ metadata/
     release_notes.txt
     support_url.txt
     marketing_url.txt
+    privacy_url.txt
   es-ES/
     description.txt
     release_notes.txt
     ...
 ```
+
+`privacy_url.txt` is stored on the App Info record (not the version), which is where App Store Connect keeps privacy URLs. The submit command patches the right endpoint automatically.
 
 Any field you don't want to change: leave the file out. Present files replace whatever's currently in App Store Connect. Trailing whitespace and newlines are trimmed.
 
@@ -903,6 +906,21 @@ Flags:
 - `--render-dir` / `--metadata-dir` override config paths
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
+
+### Submit for review
+
+Set `submit_for_review: true` in the `submit:` block to automatically send the version to App Review after uploads finish. This posts to Apple's `appStoreVersionSubmissions` endpoint; no manual "Submit for Review" click in the web UI is needed.
+
+```yaml
+app_store_connect:
+  submit:
+    create_version: "1.2.0"
+    screenshots: true
+    metadata: true
+    submit_for_review: true   # default false
+```
+
+Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID is included in the report output.
 
 ### Troubleshooting
 

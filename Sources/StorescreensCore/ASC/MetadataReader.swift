@@ -32,6 +32,7 @@ package enum MetadataReader {
         "release_notes.txt":     \.whatsNew,
         "support_url.txt":       \.supportURL,
         "marketing_url.txt":     \.marketingURL,
+        "privacy_url.txt":       \.privacyPolicyURL,
     ]
 
     /// Reads every `<locale>/` subdirectory and returns one LocalizationFields
@@ -106,6 +107,10 @@ package struct LocalizationFields: Sendable, Equatable {
     package var whatsNew: String?
     package var supportURL: String?
     package var marketingURL: String?
+    /// Privacy policy URL lives on the App resource (not the version
+    /// localization) and has its own per-locale endpoint in ASC.
+    /// Read from `privacy_url.txt`.
+    package var privacyPolicyURL: String?
 
     package init(
         name: String? = nil,
@@ -115,7 +120,8 @@ package struct LocalizationFields: Sendable, Equatable {
         promotionalText: String? = nil,
         whatsNew: String? = nil,
         supportURL: String? = nil,
-        marketingURL: String? = nil
+        marketingURL: String? = nil,
+        privacyPolicyURL: String? = nil
     ) {
         self.name = name
         self.subtitle = subtitle
@@ -125,11 +131,13 @@ package struct LocalizationFields: Sendable, Equatable {
         self.whatsNew = whatsNew
         self.supportURL = supportURL
         self.marketingURL = marketingURL
+        self.privacyPolicyURL = privacyPolicyURL
     }
 
     /// True when at least one field is present.
     package var hasAnyField: Bool {
-        [name, subtitle, description, keywords, promotionalText, whatsNew, supportURL, marketingURL]
+        [name, subtitle, description, keywords, promotionalText, whatsNew,
+         supportURL, marketingURL, privacyPolicyURL]
             .contains(where: { $0 != nil })
     }
 }

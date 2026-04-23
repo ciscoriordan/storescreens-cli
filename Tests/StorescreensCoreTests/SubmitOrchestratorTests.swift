@@ -327,6 +327,178 @@ final class SubmitOrchestratorTests: XCTestCase {
         }
     }
 
+    // MARK: - Privacy URL + submit-for-review
+
+    func testSubmit_privacyURL_patchesAppInfoLocalization() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-priv-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("https://example.com/privacy", to: metaRoot.appendingPathComponent("en-US/privacy_url.txt"))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "App", displayName: nil, scheme: "App", devices: []
+        )
+
+        // App lookup + version flow.
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersions") { _ in
+            (201, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        // Version localization flow.
+        let localizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            let json = try! JSONSerialization.data(withJSONObject: ["data": localizations])
+            return (200, json)
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "LOC-en-US", "type": "appStoreVersionLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            localizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+        // App info + app info localization flow — the new privacy URL path.
+        var listAppInfosHitCount = 0
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            listAppInfosHitCount += 1
+            let body = """
+            {"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}
+            """
+            return (200, Data(body.utf8))
+        }
+        let appInfoLocalizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/appInfoLocalizations") { _ in
+            let json = try! JSONSerialization.data(withJSONObject: ["data": appInfoLocalizations])
+            return (200, json)
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appInfoLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "AIL-en-US", "type": "appInfoLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            appInfoLocalizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        var appInfoPatchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfoLocalizations/AIL-en-US") { req in
+            appInfoPatchHits += 1
+            return (200, Data(#"{"data":{"id":"AIL-en-US","type":"appInfoLocalizations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.2.0", metadata: true)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(listAppInfosHitCount, 1, "should have fetched appInfos once for the editable record")
+        XCTAssertEqual(appInfoPatchHits, 1, "should have PATCHed the app info localization with privacyPolicyUrl")
+        XCTAssertEqual(report.privacyURLUpdates, ["en-US"])
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    func testSubmit_submitForReview_firesEndpoint() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        var submitHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionSubmissions") { _ in
+            submitHits += 1
+            return (201, Data(#"{"data":{"id":"SUBM-1","type":"appStoreVersionSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                screenshots: false,
+                metadata: false,
+                submitForReview: true
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(submitHits, 1, "should have POSTed to appStoreVersionSubmissions once")
+        XCTAssertEqual(report.reviewSubmissionID, "SUBM-1")
+        XCTAssertTrue(report.errors.isEmpty)
+    }
+
+    func testSubmit_submitForReview_defaultsFalse_noPost() async throws {
+        let (client, _) = makeClient()
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        var submitHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionSubmissions") { _ in
+            submitHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"appStoreVersionSubmissions","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.2.0")   // submitForReview default nil = false
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(submitHits, 0, "submit-for-review must not fire when the flag is unset")
+        XCTAssertNil(report.reviewSubmissionID)
+    }
+
     func testSubmit_bundleIDNotFound_throws() async throws {
         let (client, baseConfig) = makeClient()
         ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in

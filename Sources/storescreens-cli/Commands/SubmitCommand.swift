@@ -141,6 +141,12 @@ struct SubmitCommand: AsyncParsableCommand {
                 print("    \(s.locale) / \(s.displayType): \(s.count) file(s)")
             }
         }
+        if !report.privacyURLUpdates.isEmpty {
+            print("  privacy URL updated for: \(report.privacyURLUpdates.joined(separator: ", "))")
+        }
+        if let submissionID = report.reviewSubmissionID {
+            print("  submitted for review: \(submissionID)")
+        }
         if !report.errors.isEmpty {
             logger.log("\(report.errors.count) error(s):", level: .error)
             for e in report.errors { print("    \(e)") }

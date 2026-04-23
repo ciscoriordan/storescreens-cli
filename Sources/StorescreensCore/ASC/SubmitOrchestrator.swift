@@ -28,6 +28,8 @@ package struct SubmitOrchestrator {
         package var versionString: String
         package var metadataUpdates: [MetadataUpdate]
         package var screenshotUploads: [ScreenshotUpload]
+        package var privacyURLUpdates: [String]       // locales where privacy URL was set
+        package var reviewSubmissionID: String?
         package var errors: [String]
 
         package struct MetadataUpdate: Sendable {
@@ -99,6 +101,8 @@ package struct SubmitOrchestrator {
             versionString: createVersion,
             metadataUpdates: [],
             screenshotUploads: [],
+            privacyURLUpdates: [],
+            reviewSubmissionID: nil,
             errors: []
         )
 
@@ -123,6 +127,18 @@ package struct SubmitOrchestrator {
                 report: &report,
                 progress: progress
             )
+        }
+
+        // 5. Submit for review if requested. Must run after screenshots +
+        // metadata so the version is complete when Apple picks it up.
+        if config.submit?.submitForReview == true {
+            do {
+                let submission = try await appsAPI.submitForReview(versionID: version.id)
+                report.reviewSubmissionID = submission.id
+                progress?("Submitted for review (submission id \(submission.id))")
+            } catch {
+                report.errors.append("submit for review: \(error)")
+            }
         }
 
         return report
@@ -162,23 +178,63 @@ package struct SubmitOrchestrator {
         }
         for warning in readWarnings { progress?("  warn: \(warning)") }
 
+        // Privacy URL lives on App Info, not the version. Resolve the
+        // editable AppInfo lazily — only when at least one locale has a
+        // privacy URL set.
+        var editableAppInfo: AppsAPI.AppInfo?
+        let anyPrivacyURLSet = byLocale.values.contains { $0.privacyPolicyURL != nil }
+        if anyPrivacyURLSet {
+            do {
+                editableAppInfo = try await appsAPI.findEditableAppInfo(appID: report.appID)
+                if editableAppInfo == nil {
+                    report.errors.append("privacy URL: no editable appInfo for app \(report.appID)")
+                }
+            } catch {
+                report.errors.append("privacy URL: failed to list appInfos: \(error)")
+            }
+        }
+
         for (locale, fields) in byLocale.sorted(by: { $0.key < $1.key }) {
             guard fields.hasAnyField else { continue }
+
+            // Version localization PATCH — covers description / keywords /
+            // whatsNew / support / marketing / promotional / subtitle / name.
             do {
                 let localization = try await appsAPI.findOrCreateLocalization(
                     versionID: versionID, locale: locale
                 )
                 _ = try await appsAPI.updateLocalization(id: localization.id, fields: fields)
                 let names = updatedFieldNames(fields)
-                report.metadataUpdates.append(.init(locale: locale, fieldsUpdated: names))
-                progress?("metadata \(locale): updated \(names.joined(separator: ", "))")
+                if !names.isEmpty {
+                    report.metadataUpdates.append(.init(locale: locale, fieldsUpdated: names))
+                    progress?("metadata \(locale): updated \(names.joined(separator: ", "))")
+                }
             } catch {
                 report.errors.append("metadata \(locale): \(error)")
+            }
+
+            // AppInfo localization PATCH — privacy URL only.
+            if let privacyURL = fields.privacyPolicyURL, let appInfo = editableAppInfo {
+                do {
+                    let ail = try await appsAPI.findOrCreateAppInfoLocalization(
+                        appInfoID: appInfo.id, locale: locale
+                    )
+                    _ = try await appsAPI.updateAppInfoLocalization(
+                        id: ail.id, privacyPolicyURL: privacyURL
+                    )
+                    report.privacyURLUpdates.append(locale)
+                    progress?("privacy \(locale): updated privacyPolicyUrl")
+                } catch {
+                    report.errors.append("privacy URL \(locale): \(error)")
+                }
             }
         }
     }
 
     private func updatedFieldNames(_ fields: LocalizationFields) -> [String] {
+        // Privacy URL is deliberately excluded — it's patched on the
+        // appInfoLocalization, not the version localization, and reported
+        // separately via `report.privacyURLUpdates`.
         var names: [String] = []
         if fields.name != nil { names.append("name") }
         if fields.subtitle != nil { names.append("subtitle") }

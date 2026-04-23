@@ -211,6 +211,193 @@ package struct AppsAPI {
         return try await createLocalization(versionID: versionID, locale: locale)
     }
 
+    // MARK: - App info + localization (privacy URL lives here)
+
+    /// App-level info record. Has its own localizations that hold privacy
+    /// URLs, subtitle, and name for the currently editable app-info version.
+    package struct AppInfo: Codable, Sendable {
+        package let id: String
+        package let attributes: Attributes?
+        package struct Attributes: Codable, Sendable {
+            package let appStoreState: String?
+            package let state: String?
+        }
+    }
+
+    /// Lists appInfos for a given app. Usually returns one editable + one
+    /// live record. The editable one is the target for PATCHing per-locale
+    /// privacy URLs.
+    package func listAppInfos(appID: String) async throws -> [AppInfo] {
+        struct Resp: Decodable { let data: [AppInfo] }
+        let resp: Resp = try await client.get(
+            path: "apps/\(appID)/appInfos",
+            query: ["limit": "10"],
+            as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// Finds the editable AppInfo for an app. The editable record has state
+    /// like "PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", etc. Apple also
+    /// reports the same status under `appStoreState` on older API versions.
+    package func findEditableAppInfo(appID: String) async throws -> AppInfo? {
+        let editableStates: Set<String> = [
+            "PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "REJECTED",
+            "METADATA_REJECTED", "INVALID_BINARY", "WAITING_FOR_REVIEW",
+            "IN_REVIEW",
+        ]
+        let infos = try await listAppInfos(appID: appID)
+        // Prefer entries in an editable state; if nothing matches, fall back
+        // to the first entry (Apple still accepts PATCH on some transient
+        // states we may not have listed).
+        if let editable = infos.first(where: {
+            let s = $0.attributes?.state ?? $0.attributes?.appStoreState ?? ""
+            return editableStates.contains(s)
+        }) {
+            return editable
+        }
+        return infos.first
+    }
+
+    package struct AppInfoLocalization: Codable, Sendable {
+        package let id: String
+        package let attributes: Attributes?
+        package struct Attributes: Codable, Sendable {
+            package let locale: String?
+            package let name: String?
+            package let subtitle: String?
+            package let privacyPolicyUrl: String?
+        }
+    }
+
+    package func listAppInfoLocalizations(appInfoID: String) async throws -> [AppInfoLocalization] {
+        struct Resp: Decodable { let data: [AppInfoLocalization] }
+        let resp: Resp = try await client.get(
+            path: "appInfos/\(appInfoID)/appInfoLocalizations",
+            query: ["limit": "200"],
+            as: Resp.self
+        )
+        return resp.data
+    }
+
+    package func findAppInfoLocalization(
+        appInfoID: String, locale: String
+    ) async throws -> AppInfoLocalization? {
+        let all = try await listAppInfoLocalizations(appInfoID: appInfoID)
+        return all.first { $0.attributes?.locale == locale }
+    }
+
+    package func createAppInfoLocalization(
+        appInfoID: String, locale: String
+    ) async throws -> AppInfoLocalization {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appInfoLocalizations"
+                let attributes: Attrs
+                let relationships: Rels
+            }
+            struct Attrs: Encodable { let locale: String }
+            struct Rels: Encodable {
+                struct I: Encodable {
+                    struct Data: Encodable { let type = "appInfos"; let id: String }
+                    let data: Data
+                }
+                let appInfo: I
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            attributes: .init(locale: locale),
+            relationships: .init(appInfo: .init(data: .init(id: appInfoID)))
+        ))
+        struct Resp: Decodable { let data: AppInfoLocalization }
+        let resp: Resp = try await client.post(
+            path: "appInfoLocalizations", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    package func findOrCreateAppInfoLocalization(
+        appInfoID: String, locale: String
+    ) async throws -> AppInfoLocalization {
+        if let existing = try await findAppInfoLocalization(appInfoID: appInfoID, locale: locale) {
+            return existing
+        }
+        return try await createAppInfoLocalization(appInfoID: appInfoID, locale: locale)
+    }
+
+    /// PATCH the app-info localization's privacy URL. Nil leaves the existing
+    /// value untouched.
+    @discardableResult
+    package func updateAppInfoLocalization(
+        id: String, privacyPolicyURL: String?
+    ) async throws -> AppInfoLocalization {
+        struct AttrsPatch: Encodable { var privacyPolicyUrl: String? }
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appInfoLocalizations"
+                let id: String
+                let attributes: AttrsPatch
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            id: id, attributes: .init(privacyPolicyUrl: privacyPolicyURL)
+        ))
+        struct Resp: Decodable { let data: AppInfoLocalization }
+        let resp: Resp = try await client.patch(
+            path: "appInfoLocalizations/\(id)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    // MARK: - Submit for review
+
+    package struct ReviewSubmission: Codable, Sendable {
+        package let id: String
+        package let attributes: Attributes?
+        package struct Attributes: Codable, Sendable {
+            package let state: String?
+            package let platform: String?
+        }
+    }
+
+    /// Submits a version to App Review. One-shot POST; Apple queues the
+    /// submission and returns the new record. No user-visible "Submit for
+    /// Review" click is needed after this call succeeds.
+    ///
+    /// Uses the `appStoreVersionSubmissions` endpoint (the per-version flow).
+    /// Apple's newer `reviewSubmissions` API is not yet used here.
+    @discardableResult
+    package func submitForReview(versionID: String) async throws -> ReviewSubmission {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appStoreVersionSubmissions"
+                let relationships: Rels
+            }
+            struct Rels: Encodable {
+                struct V: Encodable {
+                    struct Data: Encodable { let type = "appStoreVersions"; let id: String }
+                    let data: Data
+                }
+                let appStoreVersion: V
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            relationships: .init(appStoreVersion: .init(data: .init(id: versionID)))
+        ))
+        struct Resp: Decodable { let data: ReviewSubmission }
+        let resp: Resp = try await client.post(
+            path: "appStoreVersionSubmissions",
+            body: body,
+            as: Resp.self
+        )
+        return resp.data
+    }
+
+    // MARK: - Version localization update (original)
+
     /// PATCH the localization with any non-nil fields. Nil fields are omitted
     /// so existing values stay untouched.
     @discardableResult

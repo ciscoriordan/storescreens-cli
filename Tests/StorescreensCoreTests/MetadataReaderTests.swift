@@ -100,5 +100,19 @@ final class MetadataReaderTests: XCTestCase {
     func testHasAnyField_reflectsPresence() {
         XCTAssertFalse(LocalizationFields().hasAnyField)
         XCTAssertTrue(LocalizationFields(description: "x").hasAnyField)
+        XCTAssertTrue(LocalizationFields(privacyPolicyURL: "https://example.com/privacy").hasAnyField)
+    }
+
+    func testRead_privacyURL_parsed() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(tmp.appendingPathComponent("en-US/privacy_url.txt"), "https://example.com/privacy")
+        try write(tmp.appendingPathComponent("ja/privacy_url.txt"), "https://example.com/privacy/ja\n")
+
+        let result = try MetadataReader.read(dir: tmp)
+        XCTAssertEqual(result["en-US"]?.privacyPolicyURL, "https://example.com/privacy")
+        XCTAssertEqual(result["ja"]?.privacyPolicyURL, "https://example.com/privacy/ja")
+        XCTAssertTrue(result["en-US"]?.hasAnyField ?? false)
     }
 }
