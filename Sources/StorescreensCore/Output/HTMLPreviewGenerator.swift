@@ -9,7 +9,21 @@ package struct HTMLPreviewGenerator {
 
     /// Generates per-device/appearance HTML preview pages and an index linking them all.
     /// Old preview pages from previous runs are preserved and labeled with their timestamp.
-    package func generate(manifest: CaptureManifest, outputDir: String) throws {
+    ///
+    /// When `framedDir` is non-nil, the per-device pages also show the
+    /// rendered (captioned/framed) PNGs alongside the raw captures with a
+    /// CSS-only radio toggle at the top of the page. `framedDir` is the
+    /// path to the render output directory relative to `outputDir` (so
+    /// relative `<img src>`s continue to work). Each screenshot's framed
+    /// variant is looked up at `<outputDir>/<framedDir>/<screenshot.filename>`;
+    /// screenshots whose framed file is missing silently fall back to
+    /// raw-only. When no screenshot has a framed variant the toggle is
+    /// omitted and the page reads identically to the raw-only case.
+    package func generate(
+        manifest: CaptureManifest,
+        outputDir: String,
+        framedDir: String? = nil
+    ) throws {
         let fm = FileManager.default
 
         // Snapshot existing preview_*.html files and their mod dates before we overwrite any
@@ -49,7 +63,9 @@ package struct HTMLPreviewGenerator {
                 deviceType: key.deviceType,
                 appearance: key.appearance,
                 captures: captures,
-                indexFilename: "preview.html"
+                indexFilename: "preview.html",
+                framedDir: framedDir,
+                outputDirPath: outputDir
             )
             let path = (outputDir as NSString).appendingPathComponent(filename)
             try html.write(toFile: path, atomically: true, encoding: .utf8)
@@ -116,7 +132,9 @@ package struct HTMLPreviewGenerator {
         deviceType: String,
         appearance: String?,
         captures: [CaptureManifest.DeviceCapture],
-        indexFilename: String
+        indexFilename: String,
+        framedDir: String?,
+        outputDirPath: String
     ) -> String {
         var title = deviceType
         if let appearance { title += " - \(appearance)" }
@@ -136,6 +154,25 @@ package struct HTMLPreviewGenerator {
 
         let totalScreenshots = captures.reduce(0) { $0 + $1.screenshots.count }
 
+        // Determine whether any screenshot on this page has a framed
+        // variant on disk. When none do, the toggle is omitted entirely
+        // so a capture-only flow reads identically to before.
+        let fm = FileManager.default
+        let anyFramed: Bool
+        if let framedDir {
+            anyFramed = captures.contains { capture in
+                capture.screenshots.contains { shot in
+                    let path = (outputDirPath as NSString)
+                        .appendingPathComponent(framedDir)
+                    let full = (path as NSString)
+                        .appendingPathComponent(shot.filename)
+                    return fm.fileExists(atPath: full)
+                }
+            }
+        } else {
+            anyFramed = false
+        }
+
         var body = ""
         for group in localeGroups {
             if let locale = group.locale {
@@ -145,15 +182,59 @@ package struct HTMLPreviewGenerator {
             for capture in group.captures {
                 body += "        <div class=\"screenshots\">\n"
                 for screenshot in capture.screenshots {
+                    let rawSrc = escapeHTML(screenshot.filename)
+                    // Framed variant path is `<framedDir>/<filename>`,
+                    // checked against disk so missing variants fall back
+                    // to raw-only figures without a broken <img>.
+                    let framedSrc: String? = {
+                        guard let framedDir, anyFramed else { return nil }
+                        let path = (outputDirPath as NSString)
+                            .appendingPathComponent(framedDir)
+                        let full = (path as NSString)
+                            .appendingPathComponent(screenshot.filename)
+                        guard fm.fileExists(atPath: full) else { return nil }
+                        return (framedDir as NSString)
+                            .appendingPathComponent(screenshot.filename)
+                    }()
+
                     body += "          <figure>\n"
-                    body += "            <a href=\"\(escapeHTML(screenshot.filename))\" target=\"_blank\">"
-                    body += "<img src=\"\(escapeHTML(screenshot.filename))\" loading=\"lazy\" alt=\"\(escapeHTML(screenshot.name))\">"
-                    body += "</a>\n"
+                    if let framedSrc {
+                        let framedEsc = escapeHTML(framedSrc)
+                        body += "            <a class=\"variant-raw\" href=\"\(rawSrc)\" target=\"_blank\">"
+                        body += "<img src=\"\(rawSrc)\" loading=\"lazy\" alt=\"\(escapeHTML(screenshot.name))\">"
+                        body += "</a>\n"
+                        body += "            <a class=\"variant-framed\" href=\"\(framedEsc)\" target=\"_blank\">"
+                        body += "<img src=\"\(framedEsc)\" loading=\"lazy\" alt=\"\(escapeHTML(screenshot.name)) (framed)\">"
+                        body += "</a>\n"
+                    } else {
+                        body += "            <a href=\"\(rawSrc)\" target=\"_blank\">"
+                        body += "<img src=\"\(rawSrc)\" loading=\"lazy\" alt=\"\(escapeHTML(screenshot.name))\">"
+                        body += "</a>\n"
+                    }
                     body += "            <figcaption>\(escapeHTML(screenshot.name))</figcaption>\n"
                     body += "          </figure>\n"
                 }
                 body += "        </div>\n"
             }
+        }
+
+        // CSS-only toggle: two hidden radio inputs at the root of <body>
+        // drive visibility of `.variant-raw` / `.variant-framed` via
+        // sibling selectors. `framed` is the default checked state
+        // because users most often open the preview to inspect the
+        // final App Store output; raw is one click away.
+        let toggleHTML: String
+        if anyFramed {
+            toggleHTML = """
+                <input type="radio" name="view" id="view-framed" class="view-toggle" checked>
+                <input type="radio" name="view" id="view-raw" class="view-toggle">
+                <div class="view-picker">
+                  <label for="view-framed">Framed</label>
+                  <label for="view-raw">Raw</label>
+                </div>
+            """
+        } else {
+            toggleHTML = ""
         }
 
         let isDark = appearance == "dark"
@@ -168,6 +249,7 @@ package struct HTMLPreviewGenerator {
           \(styleTag(darkBackground: isDark))
         </head>
         <body>
+        \(toggleHTML)
           <header>
             <div>
               <a class="back" href="\(escapeHTML(indexFilename))">&larr; All Devices</a>
@@ -353,6 +435,32 @@ package struct HTMLPreviewGenerator {
               transition: transform 0.15s ease;
             }
             figure img:hover { transform: scale(1.02); }
+
+            /* Raw/framed toggle. Hidden radios drive sibling visibility
+               so no JS is needed and the choice stays sticky while the
+               page is open. */
+            .view-toggle { position: absolute; left: -9999px; }
+            .view-picker {
+              position: sticky; top: 0; z-index: 10;
+              max-width: 1400px; margin: 0 auto 1rem;
+              display: inline-flex; gap: 0; padding: 0.25rem;
+              background: rgba(20, 20, 20, 0.9); border: 1px solid #2a2a2a;
+              border-radius: 8px; backdrop-filter: blur(8px);
+            }
+            .view-picker label {
+              padding: 0.35rem 0.85rem; font-size: 0.75rem; color: #888;
+              cursor: pointer; border-radius: 5px;
+              transition: background 0.12s, color 0.12s;
+            }
+            .view-picker label:hover { color: #ccc; }
+            #view-framed:checked ~ .view-picker label[for="view-framed"],
+            #view-raw:checked    ~ .view-picker label[for="view-raw"] {
+              background: #2d2d2d; color: #fff;
+            }
+            /* Default: framed shown, raw hidden. Flip on when raw is
+               selected instead. */
+            #view-framed:checked ~ .screenshots .variant-raw { display: none; }
+            #view-raw:checked    ~ .screenshots .variant-framed { display: none; }
             figcaption {
               margin-top: 0.4rem; font-size: 0.75rem; color: #888;
               max-width: 200px; text-align: center;

@@ -151,6 +151,16 @@ struct CaptureCommand: AsyncParsableCommand {
                 manifest: result.manifest,
                 logger: logger
             )
+            // Regenerate the capture's preview.html now that framed PNGs
+            // exist on disk, so the per-device pages pick up the raw/
+            // framed toggle instead of showing raw-only.
+            regeneratePreview(
+                manifest: result.manifest,
+                captureConfig: captureConfig,
+                capturedRoot: result.outputDir,
+                renderConfig: render,
+                logger: logger
+            )
         }
 
         // Offer to upload to storescreens.app (opt-in via config, override with --no-upload)
@@ -201,6 +211,52 @@ struct CaptureCommand: AsyncParsableCommand {
         } catch {
             logger.log("render failed: \(error)", level: .error)
         }
+    }
+
+    /// Rewrite `<outputDir>/preview.html` + `preview_*.html` so the
+    /// per-device pages surface the just-rendered framed PNGs alongside
+    /// the raw captures. Derives the render output directory the same
+    /// way `runRender` does, then computes its path relative to the
+    /// capture directory (so the HTML's `<img src>`s stay relative and
+    /// portable).
+    private func regeneratePreview(
+        manifest: CaptureManifest,
+        captureConfig: CaptureConfig,
+        capturedRoot: URL,
+        renderConfig: RenderConfig,
+        logger: Logger
+    ) {
+        let renderRoot: URL = {
+            if let configured = renderConfig.outputDir {
+                return URL(fileURLWithPath: configured).standardized
+            }
+            return URL(fileURLWithPath: "./storescreens-framed").standardized
+        }()
+        let framedRelative = relativePath(from: capturedRoot, to: renderRoot)
+        do {
+            try HTMLPreviewGenerator(localeFlags: captureConfig.localeFlags)
+                .generate(
+                    manifest: manifest,
+                    outputDir: capturedRoot.path,
+                    framedDir: framedRelative
+                )
+        } catch {
+            logger.log("preview regeneration failed: \(error)", level: .warning)
+        }
+    }
+
+    /// POSIX-style relative path from one absolute URL to another.
+    /// Used so the preview's framed `<img src>`s resolve regardless of
+    /// whether the user opened preview.html via file:// or served it.
+    private func relativePath(from base: URL, to target: URL) -> String {
+        let b = base.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let t = target.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        var i = 0
+        while i < b.count && i < t.count && b[i] == t[i] { i += 1 }
+        let ups = Array(repeating: "..", count: b.count - i)
+        let downs = Array(t[i...])
+        let parts = ups + downs
+        return parts.isEmpty ? "." : parts.joined(separator: "/")
     }
 
     /// Project-local cache directory for screenshots and named pipes.

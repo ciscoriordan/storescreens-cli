@@ -88,6 +88,38 @@ struct RenderCommand: AsyncParsableCommand {
             }
             throw ExitCode(1)
         }
+
+        // Refresh the capture's preview.html so the per-device pages
+        // pick up a raw/framed toggle pointing at the PNGs we just
+        // wrote. Non-fatal: a stale preview is still usable for the
+        // raw captures.
+        let framedRelative = relativePathString(from: capturedRoot, to: renderRoot)
+        do {
+            try HTMLPreviewGenerator(localeFlags: captureConfig.localeFlags)
+                .generate(
+                    manifest: manifest,
+                    outputDir: capturedRoot.path,
+                    framedDir: framedRelative
+                )
+        } catch {
+            logger.log("preview regeneration failed: \(error)", level: .warning)
+        }
+    }
+
+    /// POSIX-style relative path from one absolute URL to another. Used
+    /// so the preview's framed `<img src>`s resolve whether the user
+    /// opened preview.html via file:// or served it. Kept in-file (and
+    /// duplicated across commands) because the logic is three lines and
+    /// doesn't earn its own module yet.
+    private func relativePathString(from base: URL, to target: URL) -> String {
+        let b = base.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let t = target.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        var i = 0
+        while i < b.count && i < t.count && b[i] == t[i] { i += 1 }
+        let ups = Array(repeating: "..", count: b.count - i)
+        let downs = Array(t[i...])
+        let parts = ups + downs
+        return parts.isEmpty ? "." : parts.joined(separator: "/")
     }
 }
 
