@@ -50,6 +50,57 @@ package final class ASCClient: @unchecked Sendable {
             let lines = details.map { "[\($0.code)] \($0.title): \($0.detail)" }
             return "App Store Connect API error \(statusCode)\n  " + lines.joined(separator: "\n  ")
         }
+
+        /// True when ASC rejected a PATCH because the value the
+        /// caller asked for is effectively already in place — either
+        /// because the attribute matches what's stored, or because
+        /// the target resource has advanced into a state that no
+        /// longer accepts this edit (version locked in review,
+        /// build already attached, etc.). Apple returns these as 409s
+        /// with a few different shapes and the decisive part lives in
+        /// the `detail` text rather than the `code`, so we
+        /// pattern-match on message fragments. Callers in the submit
+        /// flow use this to treat a re-run as a no-op success.
+        ///
+        /// Real payloads this matches (observed in the wild):
+        ///   - `ENTITY_ERROR.ATTRIBUTE.INVALID` + "you cannot update
+        ///     when the value is already set" (PATCH
+        ///     usesNonExemptEncryption on a build where it was set)
+        ///   - `ENTITY_ERROR.RELATIONSHIP.INVALID.INVALID_STATE` +
+        ///     "The specified pre-release build could not be added"
+        ///     (PATCH build relationship on a version already in
+        ///     review)
+        ///   - `STATE_ERROR.ENTITY_STATE_INVALID` + "this resource
+        ///     cannot be reviewed" (POST reviewSubmissions for a
+        ///     version that's already submitted)
+        package var isAlreadySetConflict: Bool {
+            guard statusCode == 409 else { return false }
+            return details.contains { d in
+                let msg = d.detail.lowercased()
+                let code = d.code
+                // Attribute / relationship patches whose target is
+                // already what we're asking for.
+                if msg.contains("already set")
+                    || msg.contains("already attached")
+                    || msg.contains("could not be added") {
+                    return true
+                }
+                if code.hasPrefix("ENTITY_ERROR.ATTRIBUTE")
+                    && msg.contains("cannot update") {
+                    return true
+                }
+                // Version / resource has advanced past an editable
+                // state. For submit's purposes, "version already in
+                // review" counts as a success outcome of the step
+                // that was trying to put it in review.
+                if code == "STATE_ERROR.ENTITY_STATE_INVALID"
+                    && (msg.contains("cannot be reviewed")
+                        || msg.contains("not in valid state")) {
+                    return true
+                }
+                return false
+            }
+        }
     }
 
     package struct ErrorDetail: Codable, Sendable {

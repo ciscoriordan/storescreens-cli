@@ -168,26 +168,41 @@ package struct SubmitOrchestrator {
         // cryptography covered by Apple's exemption).
         let attachBuildEnabled = config.submit?.attachBuild ?? true
         if attachBuildEnabled {
+            let buildsAPI = BuildsAPI(client: client)
             do {
-                let buildsAPI = BuildsAPI(client: client)
                 if let build = try await buildsAPI.latestValidBuild(
                     appID: app.id,
                     marketingVersion: createVersion,
                     platform: platform
                 ) {
-                    try await appsAPI.attachBuild(versionID: version.id, buildID: build.id)
+                    // Both PATCHes are idempotent from the user's
+                    // perspective: re-running submit after values are
+                    // already on the version/build should be a no-op,
+                    // not a noisy 409 error. ASC returns a 409 with
+                    // "already set" / "already attached" text when the
+                    // attribute already matches; `isAlreadySetConflict`
+                    // detects that and we swallow it as success.
+                    do {
+                        try await appsAPI.attachBuild(versionID: version.id, buildID: build.id)
+                        progress?("attached build \(build.attributes?.version ?? build.id) to version \(createVersion)")
+                    } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                        progress?("build \(build.attributes?.version ?? build.id) already attached to version \(createVersion)")
+                    }
                     report.attachedBuildNumber = build.attributes?.version
-                    progress?("attached build \(build.attributes?.version ?? build.id) to version \(createVersion)")
 
                     // Set export compliance on the attached build.
                     let complianceSetting = config.submit?.exportCompliance ?? .none
                     if let answer = complianceSetting.usesNonExemptEncryption {
-                        try await buildsAPI.setExportCompliance(
-                            buildID: build.id,
-                            usesNonExemptEncryption: answer
-                        )
+                        do {
+                            try await buildsAPI.setExportCompliance(
+                                buildID: build.id,
+                                usesNonExemptEncryption: answer
+                            )
+                            progress?("export compliance set: usesNonExemptEncryption=\(answer)")
+                        } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                            progress?("export compliance already set for build \(build.attributes?.version ?? build.id)")
+                        }
                         report.exportComplianceSet = true
-                        progress?("export compliance set: usesNonExemptEncryption=\(answer)")
                     }
                 } else {
                     report.errors.append("attach build: no VALID build found for \(createVersion) — wait for Apple's processing to finish (usually 10-30 min after upload-build), then re-run submit")
@@ -199,6 +214,11 @@ package struct SubmitOrchestrator {
 
         // 5. Submit for review if requested. Must run after screenshots +
         // metadata so the version is complete when Apple picks it up.
+        // Idempotent on the version-already-submitted path: ASC returns
+        // 409 STATE_ERROR.ENTITY_STATE_INVALID when the version is no
+        // longer editable, which from submit's perspective means "the
+        // thing you asked for has already happened" — surface as a
+        // progress line, not a failure.
         if config.submit?.submitForReview == true {
             do {
                 // 3-step reviewSubmissions flow: create, add version, finalize.
@@ -207,6 +227,8 @@ package struct SubmitOrchestrator {
                 )
                 report.reviewSubmissionID = submission.id
                 progress?("Submitted for review (submission id \(submission.id))")
+            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                progress?("version \(createVersion) is already submitted for review")
             } catch {
                 report.errors.append("submit for review: \(error)")
             }
