@@ -957,6 +957,7 @@ storescreens submit
 Flags:
 - `--skip-screenshots` / `--skip-metadata` to upload only one side
 - `--version-override 1.2.1` overrides `submit.create_version`
+- `--submit-for-review` / `--no-submit-for-review` overrides `submit.submit_for_review` for one run without touching the yml
 - `--render-dir` / `--metadata-dir` override config paths
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
@@ -977,6 +978,8 @@ app_store_connect:
 Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID is included in the report output.
 
 Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create → attach version → finalize with `submitted:true`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
+
+Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version.
 
 ### Troubleshooting
 

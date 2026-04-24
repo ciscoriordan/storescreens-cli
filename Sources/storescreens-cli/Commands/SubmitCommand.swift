@@ -35,6 +35,13 @@ struct SubmitCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Skip metadata upload (screenshots only).")
     var skipMetadata: Bool = false
 
+    @Flag(
+        name: .long,
+        inversion: .prefixedNo,
+        help: "Override app_store_connect.submit.submit_for_review. Use --submit-for-review to auto-submit the version for App Review after uploads; --no-submit-for-review to leave it off even if the yml sets it true."
+    )
+    var submitForReview: Bool?
+
     func run() async throws {
         let logger = Logger()
         let loader = ConfigLoader()
@@ -56,11 +63,16 @@ struct SubmitCommand: AsyncParsableCommand {
         }
         print("  credentials: \(creds.source.rawValue) (keyID \(creds.keyID))")
 
-        // Apply version override.
+        // Apply CLI overrides onto the yml config.
         var effectiveConfig = ascConfig
         if let v = versionOverride {
             var submit = effectiveConfig.submit ?? SubmitConfig()
             submit.createVersion = v
+            effectiveConfig.submit = submit
+        }
+        if let sfr = submitForReview {
+            var submit = effectiveConfig.submit ?? SubmitConfig()
+            submit.submitForReview = sfr
             effectiveConfig.submit = submit
         }
 
