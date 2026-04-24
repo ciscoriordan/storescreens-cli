@@ -1313,8 +1313,8 @@ Releases are driven entirely by pushing a semver tag. `.github/workflows/release
 
 ```bash
 # Bump VERSION to match the new tag, commit, then:
-git tag v2.0.7
-git push origin v2.0.7
+git tag v2.0.8
+git push origin v2.0.8
 ```
 
 That one push triggers, in order:
