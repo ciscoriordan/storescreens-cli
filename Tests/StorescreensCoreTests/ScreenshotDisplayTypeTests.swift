@@ -4,15 +4,18 @@ import XCTest
 final class ScreenshotDisplayTypeTests: XCTestCase {
 
     func testIPhone_portraitAndLandscape_sameDisplayType() {
-        // Portrait dims for iPhone 17 Pro Max.
+        // iPhone 17 Pro Max 1320x2868 routes to APP_IPHONE_67 until
+        // Apple ships a real APP_IPHONE_69 enum value (the ASC gallery
+        // auto-fills the 6.9" slot from 6.7" uploads). See
+        // ScreenshotDisplayType.resolveIPhone for the rationale.
         XCTAssertEqual(
             ScreenshotDisplayType.resolve(productFamily: 1, width: 1320, height: 2868),
-            "APP_IPHONE_69"
+            "APP_IPHONE_67"
         )
         // Landscape dims (swap w/h) should resolve to the same slot.
         XCTAssertEqual(
             ScreenshotDisplayType.resolve(productFamily: 1, width: 2868, height: 1320),
-            "APP_IPHONE_69"
+            "APP_IPHONE_67"
         )
     }
 
@@ -62,12 +65,15 @@ final class ScreenshotDisplayTypeTests: XCTestCase {
     }
 
     func testDimensionsMatch_true_and_false() {
+        // 1320x2868 is iPhone 17 Pro Max. Until Apple ships
+        // APP_IPHONE_69 in the ASC enum these go in the APP_IPHONE_67
+        // slot (see comment on resolveIPhone).
         XCTAssertTrue(ScreenshotDisplayType.dimensionsMatch(
-            displayType: "APP_IPHONE_69",
+            displayType: "APP_IPHONE_67",
             pixelWidth: 1320, pixelHeight: 2868, productFamily: 1
         ))
         XCTAssertFalse(ScreenshotDisplayType.dimensionsMatch(
-            displayType: "APP_IPHONE_69",
+            displayType: "APP_IPHONE_67",
             pixelWidth: 1170, pixelHeight: 2532, productFamily: 1
         ))
     }

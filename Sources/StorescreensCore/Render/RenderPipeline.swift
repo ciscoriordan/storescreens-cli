@@ -82,6 +82,7 @@ package struct RenderPipeline {
                         outputURL: outputURL,
                         productFamily: pf,
                         appearance: device.appearance ?? "light",
+                        locale: device.locale,
                         slideIndex: slideIndex,
                         slidesInCombo: slidesInCombo
                     )
@@ -133,6 +134,7 @@ package struct RenderPipeline {
         outputURL: URL,
         productFamily: Int,
         appearance: String,
+        locale: String? = nil,
         slideIndex: Int,
         slidesInCombo: Int
     ) async throws -> [String] {
@@ -213,7 +215,9 @@ package struct RenderPipeline {
             canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
 
-        let captionResolved = RenderResolver.resolvedCaption(config: config, slideName: slideName)
+        let captionResolved = RenderResolver.resolvedCaption(
+            config: config, slideName: slideName, locale: locale
+        )
         let hasCaption: Bool = {
             guard let cr = captionResolved else { return false }
             return cr.title != nil || cr.subtitle != nil

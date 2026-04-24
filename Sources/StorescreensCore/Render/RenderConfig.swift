@@ -51,18 +51,39 @@ package struct SlideOverride: Codable, Sendable {
     package var caption: SlideCaption?
     package var chrome: ChromeConfig?
 
+    /// Per-locale title overrides. Keyed by Xcode locale code
+    /// (`en-US`, `el`, `ja`, `zh-Hans`, …). When the current render's
+    /// locale is in this map its entry wins over the `caption.title`
+    /// fallback. Keeping the slide's `caption:` as the default means
+    /// unlisted locales still get the shared caption with the same
+    /// style, spacing, and highlights.
+    ///
+    /// Example YAML:
+    ///   "spellcheck":
+    ///     caption: "Auto-corrections"
+    ///     caption_locales:
+    ///       el: "Αυτόματες διορθώσεις"
+    package var captionLocales: [String: CaptionText]?
+
     package init(
         background: BackgroundConfig? = nil,
         scrim: ScrimConfig? = nil,
         logo: LogoConfig? = nil,
         caption: SlideCaption? = nil,
-        chrome: ChromeConfig? = nil
+        chrome: ChromeConfig? = nil,
+        captionLocales: [String: CaptionText]? = nil
     ) {
         self.background = background
         self.scrim = scrim
         self.logo = logo
         self.caption = caption
         self.chrome = chrome
+        self.captionLocales = captionLocales
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case background, scrim, logo, caption, chrome
+        case captionLocales = "caption_locales"
     }
 }
 

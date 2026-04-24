@@ -77,6 +77,7 @@ package struct SubmitOrchestrator {
         metadataRoot: URL?,
         shouldUploadScreenshots: Bool,
         shouldUploadMetadata: Bool,
+        screenshotOrder: [String]? = nil,
         progress: ((String) -> Void)? = nil
     ) async throws -> Report {
         guard let createVersion = config.submit?.createVersion, !createVersion.isEmpty else {
@@ -117,12 +118,37 @@ package struct SubmitOrchestrator {
             )
         }
 
-        // 4. Screenshots.
+        // 4. Screenshots. Apply the top-level `screenshots:` list order
+        // before upload so the App Store Connect gallery matches the
+        // render + preview gallery. The manifest is still alpha-sorted
+        // from the capture step; applyOrder reshuffles to match the
+        // config list, with anything unlisted appended at the end.
         if shouldUploadScreenshots {
+            let orderedManifest: CaptureManifest = {
+                guard let order = screenshotOrder, !order.isEmpty else { return manifest }
+                let reorderedDevices = manifest.devices.map { dev in
+                    CaptureManifest.DeviceCapture(
+                        deviceType: dev.deviceType,
+                        simulatorName: dev.simulatorName,
+                        locale: dev.locale,
+                        appearance: dev.appearance,
+                        screenshots: RenderPipeline.applyOrder(dev.screenshots, order: order)
+                    )
+                }
+                return CaptureManifest(
+                    version: manifest.version,
+                    generatedAt: manifest.generatedAt,
+                    generatedBy: manifest.generatedBy,
+                    appName: manifest.appName,
+                    displayName: manifest.displayName,
+                    scheme: manifest.scheme,
+                    devices: reorderedDevices
+                )
+            }()
             try await uploadScreenshots(
                 appsAPI: appsAPI,
                 versionID: version.id,
-                manifest: manifest,
+                manifest: orderedManifest,
                 renderRoot: renderRoot,
                 report: &report,
                 progress: progress

@@ -266,7 +266,9 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertEqual(report.versionID, "VER-1")
         XCTAssertEqual(report.versionString, "1.2.0")
         XCTAssertEqual(report.metadataUpdates.count, 2, "expected en-US + ja metadata updates, got \(report.metadataUpdates)")
-        XCTAssertTrue(report.screenshotUploads.contains { $0.locale == "en-US" && $0.displayType == "APP_IPHONE_69" && $0.count == 2 })
+        // 1320x2868 iPhone 17 Pro Max routes to APP_IPHONE_67 until
+        // Apple ships a native APP_IPHONE_69 enum value.
+        XCTAssertTrue(report.screenshotUploads.contains { $0.locale == "en-US" && $0.displayType == "APP_IPHONE_67" && $0.count == 2 })
         XCTAssertTrue(report.errors.isEmpty, "expected no errors, got: \(report.errors)")
 
         // Verify each screenshot upload was a full reserve→chunks→confirm sequence.

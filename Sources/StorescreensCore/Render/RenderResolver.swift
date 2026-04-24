@@ -60,15 +60,23 @@ package enum RenderResolver {
 
     package static func resolvedCaption(
         config: RenderConfig,
-        slideName: String
+        slideName: String,
+        locale: String? = nil
     ) -> ResolvedCaption? {
         let defaults = config.caption
-        let slide = config.slides?[slideName]?.caption
+        let slideOverride = config.slides?[slideName]
+        let slide = slideOverride?.caption
 
         // If both are nil and we'd produce nothing meaningful, skip rendering captions entirely.
-        if defaults == nil && slide == nil { return nil }
+        if defaults == nil && slide == nil && slideOverride?.captionLocales == nil { return nil }
 
-        let title = slide?.title
+        // Resolve title: per-locale override takes precedence over the
+        // slide's fallback caption.title.
+        let localeTitle: CaptionText? = {
+            guard let locale, let map = slideOverride?.captionLocales else { return nil }
+            return map[locale]
+        }()
+        let title = localeTitle ?? slide?.title
         let subtitle = slide?.subtitle
 
         // Style merging: slide-level style overrides win field-by-field over defaults.

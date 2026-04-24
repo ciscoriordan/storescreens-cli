@@ -122,6 +122,7 @@ struct SubmitCommand: AsyncParsableCommand {
             metadataRoot: metadataURL,
             shouldUploadScreenshots: !skipScreenshots,
             shouldUploadMetadata: !skipMetadata && metadataURL != nil,
+            screenshotOrder: captureConfig.screenshots,
             progress: { line in print("  \(line)") }
         )
 
