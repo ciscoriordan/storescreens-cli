@@ -140,12 +140,37 @@ jobs:
             exit 0
           fi
           cd "$RUNNER_TEMP/skill"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Sync the XCUITest starter template from the CLI's Resources
+          # into the skill's assets/. SKILL.md step-7 tells agents to copy
+          # `assets/ScreenshotTests.swift.template` into the user's project,
+          # so the skill needs its own current copy after `npx skills add`.
+          # The CLI repo is the canonical source (the template is coupled
+          # to internal cache-path contracts), so we mirror on every release.
+          TEMPLATE_SRC="$GITHUB_WORKSPACE/Sources/storescreens-cli/Resources/ScreenshotTests.swift.template"
+          TEMPLATE_DST="assets/ScreenshotTests.swift.template"
+          if [ -f "$TEMPLATE_SRC" ]; then
+            mkdir -p assets
+            cp "$TEMPLATE_SRC" "$TEMPLATE_DST"
+            if ! git diff --quiet "$TEMPLATE_DST" 2>/dev/null; then
+              git add "$TEMPLATE_DST"
+              git commit -m "chore: sync ScreenshotTests.swift.template from storescreens-cli v${VERSION}"
+              if ! git push origin main; then
+                echo "::warning::Template sync commit failed to push; continuing to tag."
+              else
+                echo "synced ScreenshotTests.swift.template into storescreens-skill"
+              fi
+            fi
+          else
+            echo "::warning::Template source not found at $TEMPLATE_SRC; skipping sync."
+          fi
+
           if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
             echo "v${VERSION} already exists on storescreens-skill; skipping"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "v${VERSION}"
           if ! git push origin "v${VERSION}"; then
             echo "::warning::Push of v${VERSION} to storescreens-skill failed. Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"

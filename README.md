@@ -666,6 +666,38 @@ test_class: ScreenshotTests
 # Upload after capture (default: false)
 # upload: true
 
+# Advanced: run the test suite twice per device (discard first, capture
+# second). Useful when the app needs one full launch to finish seeding
+# data (CloudKit, ODR, etc.). Default: false.
+# warmup_run: true
+
+# Advanced: override the simulator status bar (9:41 AM, full signal, full
+# battery) for clean screenshots. Default: true. Set to false to leave
+# the live status bar alone.
+# status_bar: false
+
+# Advanced: custom args passed to `xcrun simctl status_bar override` when
+# status_bar is true. Default covers time, cellular mode, battery, and
+# operator; override when a specific screenshot needs different values.
+# status_bar_arguments: "--time 9:41 --batteryLevel 100"
+
+# Advanced: auto-dismiss system alerts (App Store review prompts, etc.)
+# during tests. Default: true.
+# dismiss_system_alerts: false
+
+# Advanced: log verbosity. "quiet" (errors/warnings only), "normal"
+# (default), or "verbose" (full xcodebuild output).
+# log_level: verbose
+
+# Advanced: persistent DerivedData directory for faster incremental
+# builds. When unset, a per-run temp dir is used and cleaned up after.
+# derived_data_path: .derivedData
+
+# Advanced: keep older `preview_*.html` pages on the gallery index under
+# a "From older runs" heading. Default: false (a fresh capture wipes
+# previews whose device/appearance isn't in the current run).
+# keep_old_previews: true
+
 # Render pass (optional) — composites captioned images from captures
 # render:
 #   enabled: true
@@ -1240,6 +1272,24 @@ storescreens check                          # uses storescreens.yml for device c
 storescreens check --directory ./MyApp      # scan a specific directory
 ```
 
+## MCP tools
+
+`storescreens-mcp` is installed alongside the CLI by `brew install storescreens`. Point your AI assistant at it (e.g. add an entry under `mcpServers` in `.mcp.json`) and the following tools become available:
+
+| Tool | Description |
+|------|-------------|
+| `capture` | Start full App Store screenshot capture in background (returns a `taskId` to poll). |
+| `get_capture_status` | Poll progress for a running capture. Streams per-screenshot updates as PNGs land. |
+| `get_capture_result` | Fetch the full manifest once a capture is complete. |
+| `take_screenshot` | Capture the current simulator screen and return the image inline in under a second. No build or test run. |
+| `check` | Run the preflight scan for iPad-unsafe patterns and device assumptions without starting a capture. |
+| `list_simulators` | List available simulators grouped by App Store size slot. |
+| `list_screenshots` | List screenshots from the last capture. |
+| `get_screenshot` | Load a saved PNG as an inline image. |
+| `read_config` / `write_config` | Read or update `storescreens.yml`. |
+
+The agent skill at [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) wraps these tools with the end-to-end workflow (detect project, scaffold UI tests, configure devices, run capture, render, submit).
+
 ## Agent Skill
 
 Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports **targeted screenshots** for quick visual checks during development.
@@ -1251,6 +1301,25 @@ StoreScreens complements Xcode's built-in MCP server. When both are available, t
 - **Xcode `RenderPreview`** - check a single SwiftUI `#Preview` in isolation (no simulator needed)
 - **StoreScreens `take_screenshot`** - capture the full running app in a simulator (<1 second)
 - **StoreScreens `capture`** - full App Store screenshot suite across multiple devices, locales, and appearances
+
+## Releasing
+
+Releases are driven entirely by pushing a semver tag. `.github/workflows/release.yml` does the rest.
+
+```bash
+# Bump VERSION to match the new tag, commit, then:
+git tag v2.0.7
+git push origin v2.0.7
+```
+
+That one push triggers, in order:
+
+1. **Build + GitHub Release**: compiles `storescreens` and `storescreens-mcp` in release mode, tars them under `storescreens-v<version>-macos.tar.gz`, and attaches the tarball to a new GitHub Release whose notes are auto-generated from merged PRs.
+2. **Homebrew tap bump**: rewrites `Formula/storescreens.rb` in [`ciscoriordan/homebrew-tap`](https://github.com/ciscoriordan/homebrew-tap) with the new URL and SHA256 so `brew upgrade storescreens` picks up the release. Requires the `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, `Contents: Write` on the tap).
+3. **Skill tag + template sync**: syncs `Sources/storescreens-cli/Resources/ScreenshotTests.swift.template` into `ciscoriordan/storescreens-skill`'s `assets/`, commits the diff if any, and mirrors the same `v<version>` tag onto the skill so `npx skills add ciscoriordan/storescreens-skill@v<version>` and `brew install ciscoriordan/tap/storescreens@<version>` resolve to matching behavior. Requires `SKILL_REPO_TOKEN` (or falls back to `HOMEBREW_TAP_TOKEN` if that token's scope covers the skill repo).
+4. **Web rebuild**: fires a `repository_dispatch(cli-release)` at [`ciscoriordan/storescreens-web`](https://github.com/ciscoriordan/storescreens-web). Its `Hero.astro` fetches this repo's `releases/latest` at build time, so the site's "V X.Y.Z AVAILABLE NOW" eyebrow updates on the next deploy. Requires `WEB_REPO_TOKEN` (`Contents: Write` on storescreens-web).
+
+Steps 2-4 are `continue-on-error: true`. A missing or too-narrowly-scoped token emits a warning and a manual command to run, but does not fail the release. The GitHub Release itself (step 1) is fatal on error.
 
 ## Alternatives
 
