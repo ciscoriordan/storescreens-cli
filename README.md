@@ -389,6 +389,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens list` | Show available simulators and App Store size mappings |
 | `storescreens screenshot` | Take a quick screenshot of a running simulator |
 | `storescreens render` | Render captioned/framed screenshots from an existing capture |
+| `storescreens bezels` | Import / inspect Apple device bezel assets used by `render` |
 | `storescreens auth` | Manage App Store Connect API credentials |
 | `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
 | `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
@@ -930,7 +931,7 @@ Screenshot uploads are destructive: each App Store Connect screenshot set is wip
 
 ### Submit for review
 
-Set `submit_for_review: true` in the `submit:` block to automatically send the version to App Review after uploads finish. This posts to Apple's `appStoreVersionSubmissions` endpoint; no manual "Submit for Review" click in the web UI is needed.
+Set `submit_for_review: true` in the `submit:` block to automatically send the version to App Review after uploads finish. This posts to Apple's `reviewSubmissions` flow; no manual "Submit for Review" click in the web UI is needed.
 
 ```yaml
 app_store_connect:
