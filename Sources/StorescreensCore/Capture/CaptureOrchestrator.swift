@@ -363,7 +363,12 @@ package struct CaptureOrchestrator: Sendable {
                 outputDir: effectiveOutputDir,
                 order: config.screenshots
             )
-            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(
+                manifest: manifest,
+                outputDir: effectiveOutputDir,
+                keepOldPreviews: config.keepOldPreviews ?? false,
+                screenshotOrder: config.screenshots
+            )
 
             // Extract app icon from the built .app bundle
             if let appPath = builtAppPath {
@@ -914,7 +919,12 @@ package struct CaptureOrchestrator: Sendable {
                 outputDir: effectiveOutputDir,
                 order: config.screenshots
             )
-            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
+            try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(
+                manifest: manifest,
+                outputDir: effectiveOutputDir,
+                keepOldPreviews: config.keepOldPreviews ?? false,
+                screenshotOrder: config.screenshots
+            )
 
             AppIconExtractor.extract(appBundlePath: appPath, to: effectiveOutputDir)
 
