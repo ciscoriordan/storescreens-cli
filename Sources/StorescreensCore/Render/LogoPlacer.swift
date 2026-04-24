@@ -39,12 +39,21 @@ package struct LogoPlacer {
 
     /// Draws the logo into `ctx`. Safe to call unconditionally — returns
     /// without drawing when config / placement rules say no.
+    ///
+    /// `verticalCenterY` is the bottom-left-origin Y at which the logo
+    /// should be vertically centered. When non-nil the caller has
+    /// computed an "equidistant from canvas top and device top" target
+    /// Y (accounting for chrome padding below the caption reservation)
+    /// and we honor it. When nil we fall back to centering the logo
+    /// inside its own reservation band — same behavior as before the
+    /// caller-controlled override existed.
     package func drawLogo(
         _ config: LogoConfig?,
         appearance: String,
         isFirstInCombo: Bool,
         into ctx: CGContext,
-        canvasSize: CGSize
+        canvasSize: CGSize,
+        verticalCenterY: CGFloat? = nil
     ) {
         guard let config,
               shouldDraw(config: config, isFirstInCombo: isFirstInCombo),
@@ -63,17 +72,21 @@ package struct LogoPlacer {
         let drawW = iw * scale
         let drawH = ih * scale
 
-        // Center the logo vertically within its reservation band (the
-        // top `maxHeightPct + topPaddingPct` percent of the canvas).
-        // Matches CaptionLayouter, which already centers caption text
-        // in its band, so the logo slide and caption slides share the
-        // same "equidistant from top edge and from device" feel.
         // CGContext has bottom-left origin: y = canvasSize.height is
         // the top of the canvas.
-        let reservedHeight = canvasSize.height * (maxHeightPct + topPaddingPct) / 100.0
-        let bandCenterY = canvasSize.height - reservedHeight / 2
+        let centerY: CGFloat
+        if let verticalCenterY {
+            centerY = verticalCenterY
+        } else {
+            // Center the logo vertically within its reservation band
+            // (the top `maxHeightPct + topPaddingPct` percent of the
+            // canvas) — default behavior when the caller hasn't
+            // computed an equidistant target.
+            let reservedHeight = canvasSize.height * (maxHeightPct + topPaddingPct) / 100.0
+            centerY = canvasSize.height - reservedHeight / 2
+        }
         let x = (canvasSize.width - drawW) / 2
-        let yBottom = bandCenterY - drawH / 2
+        let yBottom = centerY - drawH / 2
 
         ctx.draw(image, in: CGRect(x: x, y: yBottom, width: drawW, height: drawH))
     }

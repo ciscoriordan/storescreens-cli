@@ -187,25 +187,71 @@ package struct RenderPipeline {
         let scrimConfig = RenderResolver.resolvedScrim(config: config, slideName: slideName)
         bg.drawScrim(scrimConfig, into: ctx, canvasSize: canvasSize)
 
-        // --- Layer 3: logo (first-slide only, per combo) ---
+        // --- Pre-compute the layout spine -----------------------------------
+        //
+        // The pre-2.1 pipeline drew logo → caption → chrome in order,
+        // computing `reservedTop` (= logoBand + captionBand) only at
+        // chrome time. That meant logo and caption centered inside
+        // their own reservation bands and the chrome inset below
+        // (`chrome.padding_pct × (canvas - reservedTop)`) silently
+        // pushed the device down below those bands — so the vertical
+        // gap between text/logo and the device was always the
+        // in-band gap PLUS the chrome inset, and equidistant
+        // placement was literally impossible.
+        //
+        // The fix: measure the full layout spine upfront. `deviceTopY`
+        // (screen coords, measured from canvas top) is where the
+        // visible device edge lands after chrome insets. Logo and
+        // caption then center vertically in the [canvas top,
+        // deviceTopY] range (or in its logo/caption split when both
+        // are present), making each one literally equidistant from
+        // the canvas top and the device top.
         let logoPlacer = LogoPlacer(baseDirectory: baseDirectory)
         let logoConfig = RenderResolver.resolvedLogo(config: config, slideName: slideName)
         let logoReservedH = logoPlacer.reservedHeight(
             logoConfig, appearance: appearance,
             canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
+
+        let captionResolved = RenderResolver.resolvedCaption(config: config, slideName: slideName)
+        let hasCaption: Bool = {
+            guard let cr = captionResolved else { return false }
+            return cr.title != nil || cr.subtitle != nil
+        }()
+        let captionReservedH: CGFloat = {
+            guard hasCaption, let cr = captionResolved else { return 0 }
+            let minHeightPct = CGFloat(cr.minHeightPct ?? 22)
+            return canvasSize.height * minHeightPct / 100.0
+        }()
+
+        let reservedTop = logoReservedH + captionReservedH
+        let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
+        let chromePaddingPct = CGFloat(chromeConfig?.paddingPct ?? 4)
+        let chromeInsetDy = (canvasSize.height - reservedTop) * chromePaddingPct / 100.0
+        // Top of the visible device in screen coordinates (distance
+        // from canvas top). In bottom-left Core Graphics coordinates
+        // this corresponds to `canvasSize.height - deviceTopY`.
+        let deviceTopY = reservedTop + chromeInsetDy
+        let deviceTopBL = canvasSize.height - deviceTopY
+
+        // --- Layer 3: logo (first-slide only, per combo) ---
+        //
+        // Logo's centering range: the portion of [canvas top, device
+        // top] above the caption's space. When no caption exists on
+        // this slide the range collapses to [canvas top, device top],
+        // which is what the "equidistant" spec asks for on hero
+        // slides.
+        let logoBandBottomBL = deviceTopBL + captionReservedH
+        let logoCenterBL = (canvasSize.height + logoBandBottomBL) / 2
         logoPlacer.drawLogo(
             logoConfig, appearance: appearance,
             isFirstInCombo: isFirstInCombo,
-            into: ctx, canvasSize: canvasSize
+            into: ctx, canvasSize: canvasSize,
+            verticalCenterY: logoCenterBL
         )
 
         // --- Layer 4: caption ---
-        let captionResolved = RenderResolver.resolvedCaption(config: config, slideName: slideName)
-        let captionReservedH: CGFloat
-        if let cr = captionResolved, (cr.title != nil || cr.subtitle != nil) {
-            let minHeightPct = CGFloat(cr.minHeightPct ?? 22)
-            captionReservedH = canvasSize.height * minHeightPct / 100.0
+        if hasCaption, let cr = captionResolved {
             let paddingPct = CGFloat(cr.paddingPct ?? 4)
             let spacingPct = CGFloat(cr.spacingPct ?? 1.2)
             let padding = canvasSize.width * paddingPct / 100.0
@@ -226,23 +272,20 @@ package struct RenderPipeline {
             )
             for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
 
-            // Caption sits under the logo reservation, centered vertically in
-            // its reserved band. `topLeft` is in bottom-left coord system.
-            let captionTopInset = logoReservedH
-            let captionBandTop = canvasSize.height - captionTopInset
-            let captionBandBottom = canvasSize.height - captionTopInset - captionReservedH
-            let textCenteredY = (captionBandTop + captionBandBottom) / 2
+            // Caption centered vertically between the bottom of the
+            // logo band (canvasHeight - logoReservedH in bottom-left)
+            // and the top of the visible device (deviceTopBL). When no
+            // logo is present the upper bound is simply the canvas top.
+            let captionBandTopBL = canvasSize.height - logoReservedH
+            let captionBandBottomBL = deviceTopBL
+            let textCenteredY = (captionBandTopBL + captionBandBottomBL) / 2
             let topLeftY = textCenteredY - out.measuredHeight / 2
 
             out.drawable.draw(into: ctx, topLeft: CGPoint(x: padding, y: topLeftY))
-        } else {
-            captionReservedH = 0
         }
 
         // --- Layer 5: chrome + screenshot ---
-        let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
         let chromeRenderer = ChromeRenderer(bezelStore: bezelStore)
-        let reservedTop = logoReservedH + captionReservedH
         let chromeRect = CGRect(
             x: 0,
             y: 0,

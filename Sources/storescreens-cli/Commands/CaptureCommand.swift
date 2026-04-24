@@ -143,25 +143,32 @@ struct CaptureCommand: AsyncParsableCommand {
 
         // Render pass — composites captioned screenshots when enabled.
         // Runs after capture succeeds; render failures don't destroy the raw captures.
-        if !noRender && (captureConfig.render?.enabled ?? false), let render = captureConfig.render {
-            await runRender(
-                renderConfig: render,
-                captureConfig: captureConfig,
-                capturedRoot: result.outputDir,
-                manifest: result.manifest,
-                logger: logger
-            )
-            // Regenerate the capture's preview.html now that framed PNGs
-            // exist on disk, so the per-device pages pick up the raw/
-            // framed toggle instead of showing raw-only.
-            regeneratePreview(
-                manifest: result.manifest,
-                captureConfig: captureConfig,
-                capturedRoot: result.outputDir,
-                renderConfig: render,
-                logger: logger
-            )
-        }
+        // Shared with the MCP server so both entry points produce
+        // identical framed PNGs + raw/framed preview toggle.
+        let baseDirectory = URL(fileURLWithPath: self.config).deletingLastPathComponent().standardized
+        await PostCaptureRunner().runIfEnabled(
+            captureConfig: captureConfig,
+            manifest: result.manifest,
+            capturedRoot: result.outputDir,
+            baseDirectory: baseDirectory,
+            skip: noRender,
+            logger: { msg in
+                // Map the runner's prefix convention back onto the
+                // CLI's Logger levels so the console output matches
+                // the pre-refactor behavior.
+                if msg.hasPrefix("● ") {
+                    logger.header(String(msg.dropFirst(2)))
+                } else if msg.hasPrefix("✓ ") {
+                    logger.log(String(msg.dropFirst(2)), level: .success)
+                } else if msg.hasPrefix("✗ ") {
+                    logger.log(String(msg.dropFirst(2)), level: .error)
+                } else if msg.hasPrefix("⚠ ") {
+                    logger.log(String(msg.dropFirst(2)), level: .warning)
+                } else {
+                    print(msg)
+                }
+            }
+        )
 
         // Offer to upload to storescreens.app (opt-in via config, override with --no-upload)
         if !noUpload && captureConfig.upload == true {
@@ -172,93 +179,6 @@ struct CaptureCommand: AsyncParsableCommand {
             )
             await prompt.run()
         }
-    }
-
-    /// Runs the render pipeline as a post-capture step. Non-fatal on error.
-    private func runRender(
-        renderConfig: RenderConfig,
-        captureConfig: CaptureConfig,
-        capturedRoot: URL,
-        manifest: CaptureManifest,
-        logger: Logger
-    ) async {
-        let renderRoot: URL = {
-            if let configured = renderConfig.outputDir { return URL(fileURLWithPath: configured) }
-            return URL(fileURLWithPath: "./storescreens-framed")
-        }()
-        let baseDirectory = URL(fileURLWithPath: self.config).deletingLastPathComponent().standardized
-
-        logger.header("Rendering")
-        print("  output:  \(renderRoot.path)")
-
-        let pipeline = RenderPipeline(config: renderConfig, baseDirectory: baseDirectory)
-        do {
-            let out = try await pipeline.render(
-                manifest: manifest,
-                capturedRoot: capturedRoot,
-                renderRoot: renderRoot,
-                screenshotOrder: captureConfig.screenshots
-            )
-            for w in out.warnings { logger.log(w, level: .warning) }
-            if out.failures.isEmpty {
-                logger.log("rendered \(out.renderedSlides) slide(s)", level: .success)
-            } else {
-                logger.log("rendered \(out.renderedSlides) slide(s); \(out.failures.count) failure(s)", level: .error)
-                for (slide, err) in out.failures {
-                    print("  ✗ \(slide): \(err)")
-                }
-            }
-        } catch {
-            logger.log("render failed: \(error)", level: .error)
-        }
-    }
-
-    /// Rewrite `<outputDir>/preview.html` + `preview_*.html` so the
-    /// per-device pages surface the just-rendered framed PNGs alongside
-    /// the raw captures. Derives the render output directory the same
-    /// way `runRender` does, then computes its path relative to the
-    /// capture directory (so the HTML's `<img src>`s stay relative and
-    /// portable).
-    private func regeneratePreview(
-        manifest: CaptureManifest,
-        captureConfig: CaptureConfig,
-        capturedRoot: URL,
-        renderConfig: RenderConfig,
-        logger: Logger
-    ) {
-        let renderRoot: URL = {
-            if let configured = renderConfig.outputDir {
-                return URL(fileURLWithPath: configured).standardized
-            }
-            return URL(fileURLWithPath: "./storescreens-framed").standardized
-        }()
-        let framedRelative = relativePath(from: capturedRoot, to: renderRoot)
-        do {
-            try HTMLPreviewGenerator(localeFlags: captureConfig.localeFlags)
-                .generate(
-                    manifest: manifest,
-                    outputDir: capturedRoot.path,
-                    framedDir: framedRelative,
-                    keepOldPreviews: captureConfig.keepOldPreviews ?? false,
-                    screenshotOrder: captureConfig.screenshots
-                )
-        } catch {
-            logger.log("preview regeneration failed: \(error)", level: .warning)
-        }
-    }
-
-    /// POSIX-style relative path from one absolute URL to another.
-    /// Used so the preview's framed `<img src>`s resolve regardless of
-    /// whether the user opened preview.html via file:// or served it.
-    private func relativePath(from base: URL, to target: URL) -> String {
-        let b = base.standardizedFileURL.resolvingSymlinksInPath().pathComponents
-        let t = target.standardizedFileURL.resolvingSymlinksInPath().pathComponents
-        var i = 0
-        while i < b.count && i < t.count && b[i] == t[i] { i += 1 }
-        let ups = Array(repeating: "..", count: b.count - i)
-        let downs = Array(t[i...])
-        let parts = ups + downs
-        return parts.isEmpty ? "." : parts.joined(separator: "/")
     }
 
     /// Project-local cache directory for screenshots and named pipes.

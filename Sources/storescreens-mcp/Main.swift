@@ -380,6 +380,30 @@ struct StorescreensMCP {
                         await AsyncTaskStore.shared.appendEvent(taskId: taskId, line: line)
                     }
                 }
+
+                // Post-capture render + preview regeneration.
+                // Shared with the CLI entry point so MCP users get the
+                // same framed PNGs + raw/framed preview toggle. Render
+                // progress lines flow through the logger closure into
+                // AsyncTaskStore so callers polling `get_capture_status`
+                // see them alongside capture events. Failures inside
+                // the runner are already non-fatal — nothing throws here.
+                let baseDirectory = URL(fileURLWithPath: configPath)
+                    .deletingLastPathComponent()
+                    .standardized
+                await PostCaptureRunner().runIfEnabled(
+                    captureConfig: captureConfig,
+                    manifest: result.manifest,
+                    capturedRoot: result.outputDir,
+                    baseDirectory: baseDirectory,
+                    logger: { msg in
+                        Task {
+                            await collector.append(msg)
+                            await AsyncTaskStore.shared.appendEvent(taskId: taskId, line: msg)
+                        }
+                    }
+                )
+
                 let events = await collector.events
 
                 // Store full result for on-demand retrieval
