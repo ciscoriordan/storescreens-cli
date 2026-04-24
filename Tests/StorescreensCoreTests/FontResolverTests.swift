@@ -127,6 +127,54 @@ final class FontResolverTests: XCTestCase {
         XCTAssertNil(GoogleFontsDownloader.extractFirstTTFURL(from: css))
     }
 
+    // MARK: - CSS URL construction
+
+    /// Pins the downloader to the v1 `/css` endpoint. v2 returns woff2 only;
+    /// any regression to `/css2?family=...` silently breaks offline TTF resolution.
+    func testCSSURL_usesV1Endpoint() {
+        let url = GoogleFontsDownloader.cssURL(family: "Inter", weight: 9, italic: false)
+        XCTAssertEqual(url.scheme, "https")
+        XCTAssertEqual(url.host, "fonts.googleapis.com")
+        XCTAssertEqual(url.path, "/css", "must use v1 /css (not /css2); v2 returns woff2 only")
+        XCTAssertFalse(url.absoluteString.contains("/css2"))
+    }
+
+    func testCSSURL_includesWeightInV1Format() {
+        // v1 format: `Inter:700`, not v2's `Inter:ital,wght@0,700`.
+        let url = GoogleFontsDownloader.cssURL(family: "Inter", weight: 9, italic: false)
+        let q = url.query ?? ""
+        XCTAssertTrue(q.contains("family=Inter:700"), "expected 'family=Inter:700' in \(q)")
+        XCTAssertTrue(q.contains("display=swap"))
+    }
+
+    func testCSSURL_italicSuffix() {
+        let url = GoogleFontsDownloader.cssURL(family: "Inter", weight: 5, italic: true)
+        XCTAssertTrue(url.query?.contains("family=Inter:400italic") == true,
+                      "expected italic suffix '400italic' in \(url.query ?? "")")
+    }
+
+    func testCSSURL_escapesSpacesInFamily() {
+        let url = GoogleFontsDownloader.cssURL(family: "Bricolage Grotesque", weight: 9, italic: false)
+        XCTAssertTrue(url.absoluteString.contains("family=Bricolage+Grotesque:700"),
+                      "expected + for spaces; got \(url.absoluteString)")
+    }
+
+    /// Tests against a real v1 fixture captured from the live endpoint on 2026-04-24.
+    /// The regex must accept TTF URLs inside a v1 `@font-face` block.
+    func testExtractFirstTTFURL_parsesV1Response() {
+        let css = """
+            @font-face {
+              font-family: 'Inter';
+              font-style: normal;
+              font-weight: 700;
+              font-display: swap;
+              src: url(https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuFuYAZ9hjQ.ttf) format('truetype');
+            }
+            """
+        let url = GoogleFontsDownloader.extractFirstTTFURL(from: css)
+        XCTAssertEqual(url?.absoluteString, "https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuFuYAZ9hjQ.ttf")
+    }
+
     // MARK: - Weight mapping
 
     func testWeightMap_coversAllRoles() {

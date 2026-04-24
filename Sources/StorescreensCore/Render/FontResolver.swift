@@ -231,25 +231,15 @@ package protocol FontDownloading: Sendable {
     func download(family: String, weight: Int, italic: Bool, to destination: URL) throws
 }
 
-/// Downloads a single weight+italic variant from the Google Fonts CSS2 API.
-/// Uses an older-browser User-Agent to request TTF instead of woff2, since
-/// CoreText can load TTF directly.
+/// Downloads a single weight+italic variant from the Google Fonts CSS API.
+/// Uses the v1 `/css` endpoint (not `/css2`) because v1 still serves TTF URLs
+/// to every User-Agent, while v2 returns woff2 only. CoreText can load TTF
+/// directly, so TTF is what we want.
 package struct GoogleFontsDownloader: FontDownloading {
     package init() {}
 
     package func download(family: String, weight: Int, italic: Bool, to destination: URL) throws {
-        // Map NSFontManager weight (2-12) to Google's 100-900 scale
-        let googleWeight = Self.googleWeight(from: weight)
-        let ital = italic ? "1" : "0"
-        let familyQuery = family.replacingOccurrences(of: " ", with: "+")
-        let cssURL = URL(string: "https://fonts.googleapis.com/css2?family=\(familyQuery):ital,wght@\(ital),\(googleWeight)&display=swap")!
-
-        var request = URLRequest(url: cssURL)
-        // Old Android UA triggers the TTF codepath (Google serves woff2 to modern browsers)
-        request.setValue(
-            "Mozilla/5.0 (Linux; Android 5.0; SM-G900P Build/LRX21T) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.113 Mobile Safari/537.36",
-            forHTTPHeaderField: "User-Agent"
-        )
+        let request = URLRequest(url: Self.cssURL(family: family, weight: weight, italic: italic))
 
         let css = try sync(request: request)
         guard let cssString = String(data: css, encoding: .utf8) else {
@@ -267,6 +257,19 @@ package struct GoogleFontsDownloader: FontDownloading {
 
         let ttfData = try sync(request: URLRequest(url: ttfURL))
         try ttfData.write(to: destination, options: .atomic)
+    }
+
+    /// Builds the Google Fonts CSS API URL for one weight+italic variant.
+    /// Uses v1 `/css` (not v2 `/css2`) because v1 serves TTF URLs to every
+    /// User-Agent, while v2 returns woff2 only. Exposed for unit testing —
+    /// regressing this endpoint silently breaks offline TTF resolution.
+    static func cssURL(family: String, weight: Int, italic: Bool) -> URL {
+        let googleWeight = googleWeight(from: weight)
+        let familyQuery = family.replacingOccurrences(of: " ", with: "+")
+        // v1 URL format: `Inter:700` or `Inter:700italic`. We only ever
+        // fetch one variant at a time here.
+        let variant = italic ? "\(googleWeight)italic" : "\(googleWeight)"
+        return URL(string: "https://fonts.googleapis.com/css?family=\(familyQuery):\(variant)&display=swap")!
     }
 
     static func extractFirstTTFURL(from css: String) -> URL? {
