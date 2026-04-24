@@ -10,9 +10,9 @@ StoreScreens ships as three complementary pieces. Most users only need the CLI; 
 
 | Piece | What it is | When you want it |
 |---|---|---|
-| **`storescreens` (CLI)** | The core binary. Runs UI tests across simulators, captures screenshots, builds the HTML preview gallery. | Always - this is the engine. Use it from your terminal, CI, or scripts. |
-| **`storescreens-mcp` (MCP server)** | A structured wrapper that exposes the CLI's operations as [Model Context Protocol](https://modelcontextprotocol.io) tools with inline progress streaming. | When your AI coding assistant (Claude Code, Cursor, etc.) should drive captures directly instead of parsing CLI output from a Bash call. |
-| **[storescreens-skill](https://github.com/ciscoriordan/storescreens-skill)** | An agent skill - instructions and templates that teach an assistant how to detect your Xcode project, generate config, scaffold UI tests, and run a capture. | When you want an assistant to do the full setup for you, from zero to first screenshots, with no manual steps. Works with any assistant that supports skills. |
+| `storescreens` (CLI) | The core binary. Runs UI tests across simulators, captures screenshots, builds the HTML preview gallery. | Always - this is the engine. Use it from your terminal, CI, or scripts. |
+| `storescreens-mcp` (MCP server) | A structured wrapper that exposes the CLI's operations as [Model Context Protocol](https://modelcontextprotocol.io) tools with inline progress streaming. | When your AI coding assistant (Claude Code, Cursor, etc.) should drive captures directly instead of parsing CLI output from a Bash call. |
+| [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) | An agent skill - instructions and templates that teach an assistant how to detect your Xcode project, generate config, scaffold UI tests, and run a capture. | When you want an assistant to do the full setup for you, from zero to first screenshots, with no manual steps. Works with any assistant that supports skills. |
 
 Both the CLI and MCP server are installed by `brew install storescreens`.
 
@@ -22,10 +22,10 @@ StoreScreens is purpose-built for one job: generating the complete set of App St
 
 | Tool | Scope | Best for | App Store screenshot output |
 |---|---|---|---|
-| **`storescreens`** | Narrow. App Store screenshot capture, device-size routing, locale and appearance matrix, HTML preview gallery. | Producing the final screenshot set for App Store Connect in one command. | Yes. Named, organized by device and locale, ready to upload. |
-| [**Apple Xcode MCP**](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) (built into Xcode 26.3+) | Xcode-resident tools. Most notably `RenderPreview` for a single SwiftUI `#Preview`. | Checking one view's layout without spinning up a simulator. | No. |
-| [**XcodeBuildMCP**](https://github.com/getsentry/XcodeBuildMCP) | General iOS/macOS build, test, and device interaction driven by `xcodebuild`. | Letting an agent compile, test, and debug iOS/macOS projects through a unified MCP interface. | No. |
-| [**xc-mcp**](https://github.com/conorluddy/xc-mcp) | 29 tools covering build, simulator lifecycle, and accessibility-first UI automation. Optimized for low-context agent interactions. | Agents that need to drive the simulator via semantic accessibility queries (fast, token-cheap) instead of parsing screenshots. | No, its screenshot tool is for a single capture, not a full App Store matrix. |
+| `storescreens` | Narrow. App Store screenshot capture, device-size routing, locale and appearance matrix, HTML preview gallery. | Producing the final screenshot set for App Store Connect in one command. | Yes. Named, organized by device and locale, ready to upload. |
+| [Apple Xcode MCP](https://developer.apple.com/documentation/xcode/giving-agentic-coding-tools-access-to-xcode) (built into Xcode 26.3+) | Xcode-resident tools. Most notably `RenderPreview` for a single SwiftUI `#Preview`. | Checking one view's layout without spinning up a simulator. | No. |
+| [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP) | General iOS/macOS build, test, and device interaction driven by `xcodebuild`. | Letting an agent compile, test, and debug iOS/macOS projects through a unified MCP interface. | No. |
+| [xc-mcp](https://github.com/conorluddy/xc-mcp) | 29 tools covering build, simulator lifecycle, and accessibility-first UI automation. Optimized for low-context agent interactions. | Agents that need to drive the simulator via semantic accessibility queries (fast, token-cheap) instead of parsing screenshots. | No, its screenshot tool is for a single capture, not a full App Store matrix. |
 
 If you are shipping an app, you will likely use StoreScreens alongside one of the general servers: the general server handles build and run, StoreScreens handles the screenshot matrix at the end.
 
@@ -47,7 +47,7 @@ When the MCP server is configured, the agent streams per-screenshot progress inl
 
 ## Install
 
-Requires **macOS 14+** (Sonoma or later) on **Apple Silicon** (arm64). Intel Macs are not supported in the prebuilt binaries; Intel users can build from source.
+Requires macOS 14+ (Sonoma or later) on Apple Silicon (arm64). Intel Macs are not supported.
 
 ### Homebrew
 
@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/ciscoriordan/storescreens-cli/main/
 
 ### From source
 
-Requires **Xcode 16+**.
+Requires Xcode 16+.
 
 ```bash
 git clone https://github.com/ciscoriordan/storescreens-cli.git
@@ -99,14 +99,14 @@ storescreens capture --verbose
 
 ### How it works
 
-The CLI uses **XCUITest** - Apple's built-in UI testing framework - to drive your app and capture screenshots. A UI test launches your app in a simulator, taps through screens programmatically, and saves screenshots at each step. The CLI then runs that test across every device size in your config.
+The CLI uses XCUITest - Apple's built-in UI testing framework - to drive your app and capture screenshots. A UI test launches your app in a simulator, taps through screens programmatically, and saves screenshots at each step. The CLI then runs that test across every device size in your config.
 
 #### Do I need a UI test target?
 
 Yes. If your project doesn't have one yet, add it in Xcode:
 
-1. **File > New > Target**
-2. Select **UI Testing Bundle**
+1. File > New > Target
+2. Select UI Testing Bundle
 3. Name it something like `MyAppUITests`
 4. Make sure it's targeting your app
 
@@ -116,12 +116,12 @@ Yes. If your project doesn't have one yet, add it in Xcode:
 
 If you wrote your `ScreenshotTests.swift` by hand (rather than generating it with `storescreens setup`), the target setup requires one extra step because Xcode auto-creates a placeholder test file when you add the target:
 
-1. **File → New → Target → UI Testing Bundle**
+1. File → New → Target → UI Testing Bundle
 2. Name it to match your `test_target` in `storescreens.yml` (e.g. `ExampleUITests`)
-3. Set **Target to be Tested** to your app
-4. Click **Finish** - Xcode creates the target with a default `ExampleUITestsLaunchTests.swift` placeholder
-5. **Delete** the placeholder file Xcode generated (move to Trash)
-6. **Right-click** your UI test group in the Project Navigator → **Add Files to "[project]"**
+3. Set Target to be Tested to your app
+4. Click Finish - Xcode creates the target with a default `ExampleUITestsLaunchTests.swift` placeholder
+5. Delete the placeholder file Xcode generated (move to Trash)
+6. Right-click your UI test group in the Project Navigator → Add Files to "[project]"
 7. Select your `ScreenshotTests.swift` and confirm it is added to the `ExampleUITests` target
 8. In `storescreens.yml`, set `test_target` and `test_class` to match:
 
@@ -235,11 +235,11 @@ func testScreenshots() {
 }
 ```
 
-You can test your navigation works before running the full capture - just run the test in Xcode with **Cmd+U** or click the diamond next to the test function.
+You can test your navigation works before running the full capture - just run the test in Xcode with Cmd+U or click the diamond next to the test function.
 
 #### Accessibility identifiers
 
-UI tests find elements by accessibility identifier, text label, or type. **Always prefer `.accessibilityIdentifier()`** over matching by text - text labels can appear in multiple places (e.g. your app name on both the launch screen and the main toolbar), causing tests to match the wrong element or pass prematurely.
+UI tests find elements by accessibility identifier, text label, or type. Always prefer `.accessibilityIdentifier()` over matching by text, since text labels can appear in multiple places (e.g. your app name on both the launch screen and the main toolbar), causing tests to match the wrong element or pass prematurely.
 
 Add identifiers to your SwiftUI views:
 
@@ -281,7 +281,7 @@ takeScreenshot(named: "01_Home")
 
 The generated `waitForElement()` helper searches all element types by accessibility identifier, so it works for buttons, text, scroll views, or any other element.
 
-**Common pitfall**: If your app name (e.g. "MyApp") appears as `Text("MyApp")` in both `LaunchScreen.swift` and your main view's toolbar, a test like `app.staticTexts["MyApp"].waitForExistence(timeout: 10)` will match the launch screen text and proceed before your main content loads. Use a unique identifier instead:
+Common pitfall: If your app name (e.g. "MyApp") appears as `Text("MyApp")` in both `LaunchScreen.swift` and your main view's toolbar, a test like `app.staticTexts["MyApp"].waitForExistence(timeout: 10)` will match the launch screen text and proceed before your main content loads. Use a unique identifier instead:
 
 ```swift
 // In your main view:
@@ -294,7 +294,7 @@ app.staticTexts["mainTitle"].waitForExistence(timeout: 10)
 
 #### How screenshots are saved
 
-By default, screenshots are collected from the **filesystem**. Your test code writes PNGs directly to a cache directory, and the CLI copies them to the output folder after the test finishes.
+By default, screenshots are collected from the filesystem. Your test code writes PNGs directly to a cache directory, and the CLI copies them to the output folder after the test finishes.
 
 The generated `takeScreenshot()` helper does two things:
 1. Creates an `XCTAttachment` (stored in the `.xcresult` bundle as a backup)
@@ -321,11 +321,11 @@ Intermediate screenshots and named pipes for real-time logging are stored in `.s
 
 Filesystem capture is the primary path because it gives you things xcresult export can't:
 
-- **Streaming progress** - PNGs land one-by-one as the test runs, so the MCP server streams per-screenshot updates to your AI assistant. `xcresulttool export` only runs after the entire test finishes, so progress is all-or-nothing.
-- **Incremental safety** - if the test crashes partway through, you still get every screenshot captured before the crash.
-- **Deterministic filenames** - you pick the name. `xcresulttool` appends `_N_UUID.png` to every attachment, which has to be regex-stripped back to the original name.
-- **No silent skip rules** - `xcresulttool` silently drops attachments whose names start with `Screenshot`, `UI Snapshot`, `Synthesized Event`, `Screen Recording`, and several others. Filesystem writes are always kept, no matter what you name them.
-- **Faster** - no post-processing step after the test finishes.
+- Streaming progress - PNGs land one-by-one as the test runs, so the MCP server streams per-screenshot updates to your AI assistant. `xcresulttool export` only runs after the entire test finishes, so progress is all-or-nothing.
+- Incremental safety - if the test crashes partway through, you still get every screenshot captured before the crash.
+- Deterministic filenames - you pick the name. `xcresulttool` appends `_N_UUID.png` to every attachment, which has to be regex-stripped back to the original name.
+- No silent skip rules - `xcresulttool` silently drops attachments whose names start with `Screenshot`, `UI Snapshot`, `Synthesized Event`, `Screen Recording`, and several others. Filesystem writes are always kept, no matter what you name them.
+- Faster - no post-processing step after the test finishes.
 
 The tradeoff: filesystem capture only works on simulators, because it relies on `SIMULATOR_HOST_HOME` to cross the sandbox boundary back to your Mac. App Store screenshots are simulator-only anyway, so this rarely matters.
 
@@ -363,10 +363,10 @@ Check for this in your app to set up the ideal state for screenshots:
 
 Common things to configure in screenshot mode:
 
-- **Simulate pro/premium access** - show the full app without paywalls. Make sure your entitlement checks don't override this (skip StoreKit verification in screenshot mode).
-- **Disable animations** - makes UI interactions instant and screenshots deterministic.
-- **Reset UI state** - clear persisted toggles, expansion states, or onboarding flags so tests always start from a known state.
-- **Seed sample data** - pre-populate the app with good-looking content if it would otherwise be empty on first launch.
+- Simulate pro/premium access - show the full app without paywalls. Make sure your entitlement checks don't override this (skip StoreKit verification in screenshot mode).
+- Disable animations - makes UI interactions instant and screenshots deterministic.
+- Reset UI state - clear persisted toggles, expansion states, or onboarding flags so tests always start from a known state.
+- Seed sample data - pre-populate the app with good-looking content if it would otherwise be empty on first launch.
 
 #### Simple mode (no tests needed)
 
@@ -389,6 +389,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens list` | Show available simulators and App Store size mappings |
 | `storescreens screenshot` | Take a quick screenshot of a running simulator |
 | `storescreens render` | Render captioned/framed screenshots from an existing capture |
+| `storescreens templates` | List the built-in render templates (curated background + type + chrome presets) |
 | `storescreens bezels` | Import / inspect Apple device bezel assets used by `render` |
 | `storescreens auth` | Manage App Store Connect API credentials |
 | `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
@@ -447,7 +448,7 @@ Use `--non-interactive` to skip prompts and use auto-discovered screens (or defa
 
 Captures screenshots using one of two modes.
 
-**XCTest mode** (default) - runs your UI tests, collects screenshots written to the filesystem by your test code. Use `--verbose` to see full xcodebuild output in the terminal (logs are always saved to the output directory either way):
+XCTest mode (default) - runs your UI tests, collects screenshots written to the filesystem by your test code. Use `--verbose` to see full xcodebuild output in the terminal (logs are always saved to the output directory either way):
 
 ```bash
 storescreens capture --verbose
@@ -458,7 +459,7 @@ How it works:
 2. Your test code writes screenshots as PNGs to a shared cache directory
 3. The CLI collects PNGs from the cache and organizes them into folders by device size
 
-**Simple mode** - boots each simulator, installs your app, and takes a raw screenshot of whatever's on screen:
+Simple mode - boots each simulator, installs your app, and takes a raw screenshot of whatever's on screen:
 
 ```bash
 storescreens capture --mode simple
@@ -466,7 +467,7 @@ storescreens capture --mode simple
 
 Useful if you don't have UI tests and just want a quick capture of your launch screen.
 
-**Options:**
+Options:
 
 | Flag | Description |
 |------|-------------|
@@ -479,6 +480,7 @@ Useful if you don't have UI tests and just want a quick capture of your launch s
 | `--xcresult` | Extract screenshots from `.xcresult` bundle instead of filesystem |
 | `--only PREFIXES` | Only capture screenshots matching these prefixes (comma-separated) |
 | `--skip-check` | Skip preflight source code check |
+| `--no-render` | Skip the post-capture render pass even if `render.enabled: true` is set in config |
 | `--verbose` | Stream full xcodebuild output to terminal (logs are always saved to `logs/`) |
 
 ### `storescreens check`
@@ -499,7 +501,7 @@ Preflight Check
 Errors block capture. Use --skip-check to bypass.
 ```
 
-**Detection rules:**
+Detection rules:
 
 | Rule | Severity | What it catches |
 |------|----------|-----------------|
@@ -698,7 +700,7 @@ test_class: ScreenshotTests
 # previews whose device/appearance isn't in the current run).
 # keep_old_previews: true
 
-# Render pass (optional) — composites captioned images from captures
+# Render pass (optional): composites captioned images from captures
 # render:
 #   enabled: true
 #   output_dir: ./storescreens-framed
@@ -776,7 +778,7 @@ Use `--no-render` to skip the render pass on a given capture run.
 
 ### Templates
 
-Skip the hand-tuning with a named template — a curated palette, typography, and background pattern bundle. Add `template: <id>` under `render:` and every field that a template provides becomes a default (your own explicit fields still win).
+Skip the hand-tuning with a named template: a curated palette, typography, and background pattern bundle. Add `template: <id>` under `render:` and every field that a template provides becomes a default (your own explicit fields still win).
 
 ```yaml
 render:
@@ -812,13 +814,13 @@ storescreens templates
 | <img src="assets/templates/sunset_blvd.png" width="120" /> | `sunset_blvd` | Bold four-stop sunset gradient, display type | Entertainment, lifestyle, social |
 | <img src="assets/templates/jazz_and_wine.png" width="120" /> | `jazz_and_wine` | Deep bordeaux with elegant cream serif | Food, drink, hospitality, creative |
 
-The showcase PNGs above are rendered by `TemplateShowcaseTests.testRegenerateShowcaseAssets` — regenerate with `STORESCREENS_WRITE_SHOWCASE=1 swift test --filter TemplateShowcaseTests` after tweaking any template. The white rounded-rect frame in each thumbnail is `chrome.style: stroke` (a CoreGraphics outline), not a real Apple bezel PSD — the showcase forces stroke chrome so regenerating doesn't require the Apple Design Resources DMGs to be installed. When you actually apply a template to your own captures, each one defaults to `chrome.style: bezel` and uses real silver/titanium bezels once you've run `storescreens bezels import`.
+The showcase PNGs above are rendered by `TemplateShowcaseTests.testRegenerateShowcaseAssets`. Regenerate with `STORESCREENS_WRITE_SHOWCASE=1 swift test --filter TemplateShowcaseTests` after tweaking any template. The white rounded-rect frame in each thumbnail is `chrome.style: stroke` (a CoreGraphics outline), not a real Apple bezel PSD, so regenerating doesn't require the Apple Design Resources DMGs to be installed. When you apply a template to your own captures, each defaults to `chrome.style: bezel` and uses real silver/titanium bezels once you've run `storescreens bezels import`.
 
 #### Template credits
 
-The nine built-in templates are clean-room reproductions of the *visual direction* (palette, typography mood, pattern concept, target app category) of the free templates in [ButterKit](https://butterkit.app/templates/), which are [MIT-licensed](https://butterkit.app/license-agreement/). **Nothing from ButterKit is bundled** — no PSDs, SVGs, bitmaps, or code. Backgrounds are drawn procedurally in CoreGraphics (`PatternRenderer.swift`), fonts resolve via the Google Fonts API at render time, and every color / weight / size is redefined in `RenderTemplate.swift` using StoreScreens' own render config shape. The showcase PNGs in `assets/templates/` are generated by `TemplateShowcaseTests` against a synthetic placeholder screenshot — also not sourced from ButterKit. Names are preserved so users who've seen ButterKit's catalog recognize the aesthetic.
+The nine built-in templates are clean-room reproductions of the *visual direction* (palette, typography mood, pattern concept, target app category) of the free templates in [ButterKit](https://butterkit.app/templates/), which are [MIT-licensed](https://butterkit.app/license-agreement/). Nothing from ButterKit is bundled: no PSDs, SVGs, bitmaps, or code. Backgrounds are drawn procedurally in CoreGraphics (`PatternRenderer.swift`), fonts resolve via the Google Fonts API at render time, and every color, weight, and size is redefined in `RenderTemplate.swift` using StoreScreens' own render config shape. The showcase PNGs in `assets/templates/` are generated by `TemplateShowcaseTests` against a synthetic placeholder screenshot (also not sourced from ButterKit). Names are preserved so users who've seen ButterKit's catalog recognize the aesthetic.
 
-Individual credits: *Ethereal* is by Zach Spitulski (founder of ButterKit); the other eight (*Ascent*, *All The Wiser*, *Sahara*, *Midnight*, *Pinecrest*, *Blueprint*, *Sunset Blvd*, *Jazz & Wine*) are credited to the ButterKit team on [butterkit.app/templates](https://butterkit.app/templates/). If you like the aesthetic, check out ButterKit — they ship many more templates and a 3D rendering engine for the marketing pieces StoreScreens doesn't do.
+Individual credits: *Ethereal* is by Zach Spitulski (founder of ButterKit); the other eight (*Ascent*, *All The Wiser*, *Sahara*, *Midnight*, *Pinecrest*, *Blueprint*, *Sunset Blvd*, *Jazz & Wine*) are credited to the ButterKit team on [butterkit.app/templates](https://butterkit.app/templates/). If you like the aesthetic, check out ButterKit directly. They ship many more templates plus a 3D rendering engine for the marketing pieces StoreScreens doesn't do.
 
 Templates set `background`, `caption`, and `chrome` defaults. You still pick captions per slide via the usual `slides:` block, and any field you write in the config overrides the template.
 
@@ -836,9 +838,9 @@ render:
 
 ### Chrome styles
 
-- `none` — no chrome; screenshot drawn at the padded rect.
-- `stroke` — rounded-rect clip with device-derived corner radius + optional colored border and drop shadow. Zero asset download.
-- `bezel` — screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels).
+- `none`: no chrome; screenshot drawn at the padded rect.
+- `stroke`: rounded-rect clip with device-derived corner radius plus optional colored border and drop shadow. Zero asset download.
+- `bezel`: screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels).
 
 ### Fonts
 
@@ -894,7 +896,7 @@ logo:
     y_pct: 0
 ```
 
-`nudge.x_pct` and `nudge.y_pct` are percentages of the canvas width and height respectively, so offsets stay the same relative size across iPhone 6.9", iPad 13", and Mac renders. Both are optional — omit a field and it's treated as zero.
+`nudge.x_pct` and `nudge.y_pct` are percentages of the canvas width and height respectively, so offsets stay the same relative size across iPhone 6.9", iPad 13", and Mac renders. Both are optional; omit a field and it's treated as zero.
 
 ## Device bezels
 
@@ -902,7 +904,7 @@ The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple
 
 ### Install
 
-1. Download DMGs from https://developer.apple.com/design/resources/ (Product Bezels section — iPhone, iPad, MacBook as needed).
+1. Download DMGs from https://developer.apple.com/design/resources/ (Product Bezels section; iPhone, iPad, MacBook as needed).
 2. Double-click each DMG to mount.
 3. Run:
 
@@ -941,8 +943,8 @@ render:
 
 ### Prerequisites
 
-1. Create an **App Store Connect API key** at https://appstoreconnect.apple.com/access/integrations/api. Choose either Admin or App Manager access. Download the `AuthKey_XXXXXX.p8` file and keep it safe; Apple only lets you download it once.
-2. Record the **Key ID** (10-character alphanumeric) and **Issuer ID** (a UUID) from the same page.
+1. Create an App Store Connect API key at https://appstoreconnect.apple.com/access/integrations/api. Choose either Admin or App Manager access. Download the `AuthKey_XXXXXX.p8` file and keep it safe; Apple only lets you download it once.
+2. Record the Key ID (10-character alphanumeric) and Issuer ID (a UUID) from the same page.
 
 ### Configure credentials
 
@@ -1051,7 +1053,7 @@ Flags:
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
 
-Re-runs are cheap. Both metadata and screenshots are idempotent: before PATCHing a localization, `submit` fetches the current version-localization attributes from ASC and sends only fields that actually differ (unchanged fields skip the PATCH entirely). Before wiping a screenshot set, it reads each existing screenshot's `sourceFileChecksum` (MD5) and compares to the local render's MD5 in manifest order — if the set already matches, no DELETEs fire and no uploads happen. The report lists unchanged locales with `count: 0` so you can see the skip happened.
+Re-runs are cheap. Both metadata and screenshots are idempotent: before PATCHing a localization, `submit` fetches the current version-localization attributes from ASC and sends only fields that actually differ (unchanged fields skip the PATCH entirely). Before wiping a screenshot set, it reads each existing screenshot's `sourceFileChecksum` (MD5) and compares to the local render's MD5 in manifest order. If the set already matches, no DELETEs fire and no uploads happen. The report lists unchanged locales with `count: 0` so you can see the skip happened.
 
 ### Submit for review
 
@@ -1074,10 +1076,10 @@ Prefer to leave `submit_for_review: false` in the yml as the default safe state 
 
 ### Troubleshooting
 
-- **"credentials not configured"**: run `storescreens auth login` or check the `ASC_*` env vars.
-- **"no App Store Connect app matched"**: the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
-- **"no ASC display type for WxH"**: the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
-- **"8MB limit exceeded"**: Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
+- "credentials not configured": run `storescreens auth login` or check the `ASC_*` env vars.
+- "no App Store Connect app matched": the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
+- "no ASC display type for WxH": the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
+- "8MB limit exceeded": Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
 
 ## Archiving + uploading the app binary
 
@@ -1125,25 +1127,25 @@ StoreScreens labels devices by physical screen dimension (6.9", 6.3", etc.). Her
 
 | App Store Connect slot | StoreScreens size | Simulator to use |
 |------------------------|-------------------|------------------|
-| 6.9" (primary required) | **6.9"** | `iPhone 17 Pro Max` |
-| 6.5" (auto-filled from 6.9") ¹ | **6.5"** | `iPhone 11 Pro Max`, `iPhone Xs Max` ² |
-| 6.3" | **6.3"** | `iPhone 17 Pro`, `iPhone 17`, `iPhone Air` |
-| 6.1" | **6.1"** | `iPhone 16`, `iPhone 15` |
-| 5.5" | **5.5"** | `iPhone 8 Plus` |
-| 4.7" | **4.7"** | `iPhone SE (3rd generation)` |
-| iPad 13" (required when iPad supported) | **iPad Pro 13"** | `iPad Pro 13-inch (M5)` |
-| iPad 11" | **iPad Pro 11"** | `iPad Pro 11-inch (M5)` |
-| iPad Pro 12.9" (2nd Gen) | **iPad Pro 12.9"** | `iPad Pro 12.9-inch (2nd generation)` ³ |
-| iPad 10.5" | **iPad 10.5"** | `iPad Air (3rd generation)` ³ |
-| iPad 9.7" | **iPad 9.7"** | `iPad (6th generation)` ³ |
+| 6.9" (primary required) | 6.9" | `iPhone 17 Pro Max` |
+| 6.5" (auto-filled from 6.9") ¹ | 6.5" | `iPhone 11 Pro Max`, `iPhone Xs Max` ² |
+| 6.3" | 6.3" | `iPhone 17 Pro`, `iPhone 17`, `iPhone Air` |
+| 6.1" | 6.1" | `iPhone 16`, `iPhone 15` |
+| 5.5" | 5.5" | `iPhone 8 Plus` |
+| 4.7" | 4.7" | `iPhone SE (3rd generation)` |
+| iPad 13" (required when iPad supported) | iPad Pro 13" | `iPad Pro 13-inch (M5)` |
+| iPad 11" | iPad Pro 11" | `iPad Pro 11-inch (M5)` |
+| iPad Pro 12.9" (2nd Gen) | iPad Pro 12.9" | `iPad Pro 12.9-inch (2nd generation)` ³ |
+| iPad 10.5" | iPad 10.5" | `iPad Air (3rd generation)` ³ |
+| iPad 9.7" | iPad 9.7" | `iPad (6th generation)` ³ |
 
-**No 6.7" slot exists in App Store Connect.**
+No 6.7" slot exists in App Store Connect.
 
-**¹ 6.5" is auto-filled** - providing 6.9" screenshots causes App Store Connect to automatically use them for the 6.5" slot too. A dedicated 6.5" simulator is only needed if you want distinct screenshots for that slot.
+¹ 6.5" is auto-filled - providing 6.9" screenshots causes App Store Connect to automatically use them for the 6.5" slot too. A dedicated 6.5" simulator is only needed if you want distinct screenshots for that slot.
 
-**² 6.5" (1242×2688)** is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it - only these older simulators do.
+² 6.5" (1242×2688) is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it - only these older simulators do.
 
-**³ Older iPad slots** (12.9" 2nd Gen, 10.5", 9.7") require older simulator runtimes that may not be installed. Most apps only need the 13" slot.
+³ Older iPad slots (12.9" 2nd Gen, 10.5", 9.7") require older simulator runtimes that may not be installed. Most apps only need the 13" slot.
 
 ### Mac App Store
 
@@ -1157,10 +1159,10 @@ devices:
 
 | Mac App Store slot | StoreScreens size | Notes |
 |--------------------|-------------------|-------|
-| 2880x1800 | **Mac 2880x1800** | 15" Retina (MacBook Pro 15") |
-| 2560x1600 | **Mac 2560x1600** | 13" Retina (MacBook Pro 13", Air M1+) |
-| 1440x900 | **Mac 1440x900** | Non-Retina |
-| 1280x800 | **Mac 1280x800** | Minimum required |
+| 2880x1800 | Mac 2880x1800 | 15" Retina (MacBook Pro 15") |
+| 2560x1600 | Mac 2560x1600 | 13" Retina (MacBook Pro 13", Air M1+) |
+| 1440x900 | Mac 1440x900 | Non-Retina |
+| 1280x800 | Mac 1280x800 | Minimum required |
 
 macOS XCUITests set the app window size in test code before capturing. Your test should resize the window to the target screenshot dimensions. Example:
 
@@ -1227,8 +1229,8 @@ storescreens-output/
 
 Every capture run saves full xcodebuild output to `logs/` in the output directory:
 
-- **`test-<id>.log`** - one per device, containing the full build + test output (compiler errors, element lookups, assertion failures, test durations)
-- **`test-debug-<id>.log`** - debug prints from your test code, if you write to the StoreScreens named pipe
+- `test-<id>.log` - one per device, containing the full build + test output (compiler errors, element lookups, assertion failures, test durations)
+- `test-debug-<id>.log` - debug prints from your test code, if you write to the StoreScreens named pipe
 
 When something goes wrong, check these logs first - the root cause is almost always visible in the xcodebuild output. Use `--verbose` to also stream xcodebuild output to the terminal in real time.
 
@@ -1269,8 +1271,8 @@ MCP (storescreens-mcp) - get_capture_status
 
 When `locales` is set in your config:
 
-- **XCTest mode**: passes `-testLanguage` and `-testRegion` to `xcodebuild`, so your app launches in the target language without modifying simulator settings.
-- **Simple mode**: modifies the simulator's language preferences and reboots before capturing.
+- XCTest mode: passes `-testLanguage` and `-testRegion` to `xcodebuild`, so your app launches in the target language without modifying simulator settings.
+- Simple mode: modifies the simulator's language preferences and reboots before capturing.
 
 ## Filtering Screenshots
 
@@ -1380,21 +1382,23 @@ storescreens check --directory ./MyApp      # scan a specific directory
 | `list_simulators` | List available simulators grouped by App Store size slot. |
 | `list_screenshots` | List screenshots from the last capture. |
 | `get_screenshot` | Load a saved PNG as an inline image. |
+| `list_templates` | List the built-in render templates (id, name, category, description). |
+| `set_template` | Write `render.template: <id>` into `storescreens.yml`. Rejects unknown ids. |
 | `read_config` / `write_config` | Read or update `storescreens.yml`. |
 
 The agent skill at [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) wraps these tools with the end-to-end workflow (detect project, scaffold UI tests, configure devices, run capture, render, submit).
 
 ## Agent Skill
 
-Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports **targeted screenshots** for quick visual checks during development.
+Use [storescreens-skill](https://github.com/ciscoriordan/storescreens-skill) to let an AI coding assistant handle the full setup - project detection, config generation, UI test scaffolding, and capture - automatically. The skill also supports targeted screenshots for quick visual checks during development.
 
 ### Works with Xcode MCP (Xcode 26.3+)
 
 StoreScreens complements Xcode's built-in MCP server. When both are available, the agent can pick the right tool for each situation:
 
-- **Xcode `RenderPreview`** - check a single SwiftUI `#Preview` in isolation (no simulator needed)
-- **StoreScreens `take_screenshot`** - capture the full running app in a simulator (<1 second)
-- **StoreScreens `capture`** - full App Store screenshot suite across multiple devices, locales, and appearances
+- Xcode `RenderPreview`: check a single SwiftUI `#Preview` in isolation (no simulator needed)
+- StoreScreens `take_screenshot`: capture the full running app in a simulator (<1 second)
+- StoreScreens `capture`: full App Store screenshot suite across multiple devices, locales, and appearances
 
 ## Releasing
 
@@ -1402,16 +1406,16 @@ Releases are driven entirely by pushing a semver tag. `.github/workflows/release
 
 ```bash
 # Bump VERSION to match the new tag, commit, then:
-git tag v2.0.8
-git push origin v2.0.8
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 That one push triggers, in order:
 
-1. **Build + GitHub Release**: compiles `storescreens` and `storescreens-mcp` in release mode, tars them under `storescreens-v<version>-macos.tar.gz`, and attaches the tarball to a new GitHub Release whose notes are auto-generated from merged PRs.
-2. **Homebrew tap bump**: rewrites `Formula/storescreens.rb` in [`ciscoriordan/homebrew-tap`](https://github.com/ciscoriordan/homebrew-tap) with the new URL and SHA256 so `brew upgrade storescreens` picks up the release. Requires the `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, `Contents: Write` on the tap).
-3. **Skill tag + template sync**: syncs `Sources/storescreens-cli/Resources/ScreenshotTests.swift.template` into `ciscoriordan/storescreens-skill`'s `assets/`, commits the diff if any, and mirrors the same `v<version>` tag onto the skill so `npx skills add ciscoriordan/storescreens-skill@v<version>` and `brew install ciscoriordan/tap/storescreens@<version>` resolve to matching behavior. Requires `SKILL_REPO_TOKEN` (or falls back to `HOMEBREW_TAP_TOKEN` if that token's scope covers the skill repo).
-4. **Web rebuild**: fires a `repository_dispatch(cli-release)` at [`ciscoriordan/storescreens-web`](https://github.com/ciscoriordan/storescreens-web). Its `Hero.astro` fetches this repo's `releases/latest` at build time, so the site's "V X.Y.Z AVAILABLE NOW" eyebrow updates on the next deploy. Requires `WEB_REPO_TOKEN` (`Contents: Write` on storescreens-web).
+1. Build + GitHub Release: compiles `storescreens` and `storescreens-mcp` in release mode, tars them under `storescreens-v<version>-macos.tar.gz`, and attaches the tarball to a new GitHub Release whose notes are auto-generated from merged PRs.
+2. Homebrew tap bump: rewrites `Formula/storescreens.rb` in [`ciscoriordan/homebrew-tap`](https://github.com/ciscoriordan/homebrew-tap) with the new URL and SHA256 so `brew upgrade storescreens` picks up the release. Requires the `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, `Contents: Write` on the tap).
+3. Skill tag + template sync: syncs `Sources/storescreens-cli/Resources/ScreenshotTests.swift.template` into `ciscoriordan/storescreens-skill`'s `assets/`, commits the diff if any, and mirrors the same `v<version>` tag onto the skill so `npx skills add ciscoriordan/storescreens-skill@v<version>` and `brew install ciscoriordan/tap/storescreens@<version>` resolve to matching behavior. Requires `SKILL_REPO_TOKEN` (or falls back to `HOMEBREW_TAP_TOKEN` if that token's scope covers the skill repo).
+4. Web rebuild: fires a `repository_dispatch(cli-release)` at [`ciscoriordan/storescreens-web`](https://github.com/ciscoriordan/storescreens-web). Its `Hero.astro` fetches this repo's `releases/latest` at build time, so the site's "V X.Y.Z AVAILABLE NOW" eyebrow updates on the next deploy. Requires `WEB_REPO_TOKEN` (`Contents: Write` on storescreens-web).
 
 Steps 2-4 are `continue-on-error: true`. A missing or too-narrowly-scoped token emits a warning and a manual command to run, but does not fail the release. The GitHub Release itself (step 1) is fatal on error.
 
@@ -1421,8 +1425,8 @@ This tool is for native Apple platforms (iOS, iPadOS, watchOS, macOS). For cross
 
 ## Acknowledgements
 
-- Built-in render templates (`ascent`, `all_the_wiser`, `ethereal`, `sahara`, `midnight`, `pinecrest`, `blueprint`, `sunset_blvd`) take their names and visual direction from the free MIT-licensed templates at [ButterKit](https://butterkit.app/templates/). The implementations here are independent — no ButterKit code or artwork is bundled. See [Template credits](#template-credits) for more.
-- Device bezel rendering uses PSDs from [Apple Design Resources](https://developer.apple.com/design/resources/). Apple licenses these for use with Apple products; StoreScreens does not redistribute them — users download the DMGs from Apple and `storescreens bezels import` extracts what it needs locally.
+- Built-in render templates (`ascent`, `all_the_wiser`, `ethereal`, `sahara`, `midnight`, `pinecrest`, `blueprint`, `sunset_blvd`, `jazz_and_wine`) take their names and visual direction from the free MIT-licensed templates at [ButterKit](https://butterkit.app/templates/). The implementations here are independent and no ButterKit code or artwork is bundled. See [Template credits](#template-credits) for more.
+- Device bezel rendering uses PSDs from [Apple Design Resources](https://developer.apple.com/design/resources/). Apple licenses these for use with Apple products; StoreScreens does not redistribute them. Users download the DMGs from Apple and `storescreens bezels import` extracts what it needs locally.
 
 ## License
 
