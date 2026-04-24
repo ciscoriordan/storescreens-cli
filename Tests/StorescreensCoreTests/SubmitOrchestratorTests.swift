@@ -107,7 +107,12 @@ final class SubmitOrchestratorTests: XCTestCase {
                 screenshots: true,
                 metadata: true,
                 submitForReview: false,
-                platform: "IOS"
+                platform: "IOS",
+                // Tests stub only the endpoints they exercise; the
+                // attach-build step reaches into `/v1/builds` which
+                // nothing here sets up. Real-world submit runs with
+                // attach_build: true (the default).
+                attachBuild: false
             )
         )
         return (client, ascConfig)
@@ -403,7 +408,11 @@ final class SubmitOrchestratorTests: XCTestCase {
 
         let config = AppStoreConnectConfig(
             bundleID: "com.example.app",
-            submit: SubmitConfig(createVersion: "1.2.0", metadata: true)
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false  // test stub doesn't model /v1/builds
+            )
         )
         let orchestrator = SubmitOrchestrator(client: client, config: config)
 
@@ -454,7 +463,8 @@ final class SubmitOrchestratorTests: XCTestCase {
                 createVersion: "1.2.0",
                 screenshots: false,
                 metadata: false,
-                submitForReview: true
+                submitForReview: true,
+                attachBuild: false  // test stub doesn't model /v1/builds
             )
         )
         let orchestrator = SubmitOrchestrator(client: client, config: config)

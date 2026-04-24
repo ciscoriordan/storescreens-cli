@@ -29,6 +29,8 @@ package struct SubmitOrchestrator {
         package var metadataUpdates: [MetadataUpdate]
         package var screenshotUploads: [ScreenshotUpload]
         package var privacyURLUpdates: [String]       // locales where privacy URL was set
+        package var attachedBuildNumber: String?      // ASC build number attached to the version
+        package var exportComplianceSet: Bool         // true when we patched usesNonExemptEncryption
         package var reviewSubmissionID: String?
         package var errors: [String]
 
@@ -103,6 +105,8 @@ package struct SubmitOrchestrator {
             metadataUpdates: [],
             screenshotUploads: [],
             privacyURLUpdates: [],
+            attachedBuildNumber: nil,
+            exportComplianceSet: false,
             reviewSubmissionID: nil,
             errors: []
         )
@@ -153,6 +157,44 @@ package struct SubmitOrchestrator {
                 report: &report,
                 progress: progress
             )
+        }
+
+        // 4b. Attach the latest VALID build to the version, and (if
+        // configured) set export compliance on that build. Without
+        // these two steps the version shows "Missing Build" and
+        // "Missing Compliance" in App Store Connect and can't be
+        // submitted for review. Defaults: attach on, export
+        // compliance = `.none` (app uses only standard iOS
+        // cryptography covered by Apple's exemption).
+        let attachBuildEnabled = config.submit?.attachBuild ?? true
+        if attachBuildEnabled {
+            do {
+                let buildsAPI = BuildsAPI(client: client)
+                if let build = try await buildsAPI.latestValidBuild(
+                    appID: app.id,
+                    marketingVersion: createVersion,
+                    platform: platform
+                ) {
+                    try await appsAPI.attachBuild(versionID: version.id, buildID: build.id)
+                    report.attachedBuildNumber = build.attributes?.version
+                    progress?("attached build \(build.attributes?.version ?? build.id) to version \(createVersion)")
+
+                    // Set export compliance on the attached build.
+                    let complianceSetting = config.submit?.exportCompliance ?? .none
+                    if let answer = complianceSetting.usesNonExemptEncryption {
+                        try await buildsAPI.setExportCompliance(
+                            buildID: build.id,
+                            usesNonExemptEncryption: answer
+                        )
+                        report.exportComplianceSet = true
+                        progress?("export compliance set: usesNonExemptEncryption=\(answer)")
+                    }
+                } else {
+                    report.errors.append("attach build: no VALID build found for \(createVersion) — wait for Apple's processing to finish (usually 10-30 min after upload-build), then re-run submit")
+                }
+            } catch {
+                report.errors.append("attach build: \(error)")
+            }
         }
 
         // 5. Submit for review if requested. Must run after screenshots +

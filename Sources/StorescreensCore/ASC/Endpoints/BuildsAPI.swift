@@ -78,4 +78,53 @@ package struct BuildsAPI {
         }
         return numbers.max()
     }
+
+    /// Newest processed, "VALID" build for the marketing-version train
+    /// — the one `submit` should attach to the App Store version.
+    /// Apple's processing is async and can take several minutes; when
+    /// nothing has finished processing yet this returns nil.
+    package func latestValidBuild(
+        appID: String,
+        marketingVersion: String,
+        platform: String = "IOS"
+    ) async throws -> Build? {
+        let builds = try await listBuilds(
+            appID: appID, marketingVersion: marketingVersion, platform: platform
+        )
+        return builds.first { $0.attributes?.processingState == "VALID" }
+    }
+
+    /// PATCH `/v1/builds/{id}` to answer App Store Connect's export
+    /// compliance question (`usesNonExemptEncryption`). Most apps ship
+    /// with `false`: they only use the standard iOS cryptography
+    /// covered by Apple's exemption (HTTPS via URLSession, keychain,
+    /// signing, etc.). A build without this answer set can't be
+    /// submitted for review or distributed through TestFlight, so ASC
+    /// shows it as "Missing Compliance" until the question is answered.
+    package func setExportCompliance(
+        buildID: String,
+        usesNonExemptEncryption: Bool
+    ) async throws {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "builds"
+                let id: String
+                let attributes: Attrs
+            }
+            struct Attrs: Encodable {
+                let usesNonExemptEncryption: Bool
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            id: buildID,
+            attributes: .init(usesNonExemptEncryption: usesNonExemptEncryption)
+        ))
+        struct Resp: Decodable { let data: Build }
+        _ = try await client.patch(
+            path: "builds/\(buildID)",
+            body: body,
+            as: Resp.self
+        )
+    }
 }

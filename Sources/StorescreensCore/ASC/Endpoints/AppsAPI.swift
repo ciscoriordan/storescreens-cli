@@ -139,6 +139,40 @@ package struct AppsAPI {
         return try await createVersion(appID: appID, versionString: versionString, platform: platform)
     }
 
+    /// PATCH `/v1/appStoreVersions/{id}` to attach a processed build
+    /// to the version. Required for review submission — ASC rejects a
+    /// reviewSubmission whose version has no build associated with it.
+    /// The build must be in `processingState: "VALID"` (Apple's
+    /// binary processing finished without issues) or the PATCH
+    /// succeeds but the version still can't be submitted for review.
+    package func attachBuild(versionID: String, buildID: String) async throws {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appStoreVersions"
+                let id: String
+                let relationships: Rels
+            }
+            struct Rels: Encodable {
+                struct Build: Encodable {
+                    struct BuildRef: Encodable { let type = "builds"; let id: String }
+                    let data: BuildRef
+                }
+                let build: Build
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            id: versionID,
+            relationships: .init(build: .init(data: .init(id: buildID)))
+        ))
+        struct Resp: Decodable { let data: Version }
+        _ = try await client.patch(
+            path: "appStoreVersions/\(versionID)",
+            body: body,
+            as: Resp.self
+        )
+    }
+
     // MARK: - Version localizations
 
     package struct Localization: Codable, Sendable {

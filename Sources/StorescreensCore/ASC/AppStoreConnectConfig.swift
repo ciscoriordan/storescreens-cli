@@ -55,18 +55,55 @@ package struct SubmitConfig: Codable, Sendable {
     /// Defaults to "IOS". Rarely needs override.
     package var platform: String?
 
+    /// Attach the newest VALID build (from the `createVersion` train)
+    /// to the App Store version after screenshots and metadata upload.
+    /// A version without a build can't be submitted for review and
+    /// shows "Missing Build" in the ASC web UI. Default true so a
+    /// standard submit flow produces a review-ready version in one
+    /// command; set false when manually managing build attachment.
+    package var attachBuild: Bool?
+
+    /// Answer to Apple's export compliance question on the attached
+    /// build (`usesNonExemptEncryption` in the Build Beta Detail /
+    /// App Store build attributes). The question must be answered
+    /// before a build can be submitted for review or made available
+    /// to external testers on TestFlight.
+    ///
+    /// - `none` (default): app uses only standard iOS cryptography
+    ///   covered by Apple's exemption (HTTPS, keychain, signing,
+    ///   etc.). Sent as `usesNonExemptEncryption: false`. This is
+    ///   correct for the vast majority of apps.
+    /// - `exempt_algorithms`: app ships its own cryptographic
+    ///   algorithms, but they all qualify for one of Apple's specific
+    ///   exemptions (authentication, DRM, copy protection, etc.). Sent
+    ///   as `usesNonExemptEncryption: false` plus an explanatory
+    ///   `exemptEncryptionExplanation` string.
+    /// - `non_exempt`: app uses non-exempt encryption and an
+    ///   ERN / export compliance review applies. Sent as
+    ///   `usesNonExemptEncryption: true`. Submitters are responsible
+    ///   for having the necessary paperwork filed with the Bureau of
+    ///   Industry and Security separately.
+    ///
+    /// Set to `skip` to leave the question untouched (the build will
+    /// still show "Missing Compliance" until answered manually).
+    package var exportCompliance: ExportCompliance?
+
     package init(
         createVersion: String? = nil,
         screenshots: Bool? = nil,
         metadata: Bool? = nil,
         submitForReview: Bool? = nil,
-        platform: String? = nil
+        platform: String? = nil,
+        attachBuild: Bool? = nil,
+        exportCompliance: ExportCompliance? = nil
     ) {
         self.createVersion = createVersion
         self.screenshots = screenshots
         self.metadata = metadata
         self.submitForReview = submitForReview
         self.platform = platform
+        self.attachBuild = attachBuild
+        self.exportCompliance = exportCompliance
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -75,6 +112,40 @@ package struct SubmitConfig: Codable, Sendable {
         case metadata
         case submitForReview = "submit_for_review"
         case platform
+        case attachBuild = "attach_build"
+        case exportCompliance = "export_compliance"
+    }
+}
+
+/// Answer to App Store Connect's export compliance question.
+package enum ExportCompliance: String, Codable, Sendable {
+    /// App uses only standard iOS cryptography (HTTPS, keychain,
+    /// signing). The common case. Sent as `usesNonExemptEncryption:
+    /// false`.
+    case none
+
+    /// App ships its own cryptographic algorithms but all qualify for
+    /// an Apple exemption (authentication, DRM, copy protection, IP
+    /// rights management). Sent as `usesNonExemptEncryption: false`.
+    case exemptAlgorithms = "exempt_algorithms"
+
+    /// App uses non-exempt encryption and the submitter has the
+    /// required BIS export paperwork. Sent as
+    /// `usesNonExemptEncryption: true`.
+    case nonExempt = "non_exempt"
+
+    /// Don't touch the usesNonExemptEncryption attribute. The build
+    /// shows "Missing Compliance" in ASC until answered manually.
+    case skip
+
+    /// Mapping to the boolean `usesNonExemptEncryption` attribute on
+    /// the build. Nil means "skip — don't PATCH the build".
+    package var usesNonExemptEncryption: Bool? {
+        switch self {
+        case .none, .exemptAlgorithms: return false
+        case .nonExempt:                return true
+        case .skip:                     return nil
+        }
     }
 }
 

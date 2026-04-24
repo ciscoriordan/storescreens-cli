@@ -145,6 +145,12 @@ struct SubmitCommand: AsyncParsableCommand {
         if !report.privacyURLUpdates.isEmpty {
             print("  privacy URL updated for: \(report.privacyURLUpdates.joined(separator: ", "))")
         }
+        if let buildNumber = report.attachedBuildNumber {
+            print("  build attached: \(buildNumber)")
+        }
+        if report.exportComplianceSet {
+            print("  export compliance: answered")
+        }
         if let submissionID = report.reviewSubmissionID {
             print("  submitted for review: \(submissionID)")
         }
