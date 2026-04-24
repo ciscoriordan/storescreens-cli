@@ -11,7 +11,7 @@ struct AuthCommand: AsyncParsableCommand {
             ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH; (2) the config file at \
             ~/.storescreens/asc-credentials.yml (created by `auth login` or `auth init`).
 
-            Download your API key from https://appstoreconnect.apple.com/access/api \
+            Download your API key from https://appstoreconnect.apple.com/access/integrations/api \
             and keep the .p8 file safe; Apple only lets you download it once.
             """,
         subcommands: [
@@ -64,7 +64,7 @@ struct AuthInitCommand: AsyncParsableCommand {
         let template = """
             # App Store Connect API credentials for storescreens.
             #
-            # 1. Create an API key at https://appstoreconnect.apple.com/access/api
+            # 1. Create an API key at https://appstoreconnect.apple.com/access/integrations/api
             #    (Admin or App Manager access works)
             # 2. Download the AuthKey_XXXXXX.p8 file; Apple lets you download it ONCE.
             # 3. Fill in the three fields below and save.

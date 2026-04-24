@@ -819,7 +819,7 @@ render:
 
 ### Prerequisites
 
-1. Create an **App Store Connect API key** at https://appstoreconnect.apple.com/access/api. Choose either Admin or App Manager access. Download the `AuthKey_XXXXXX.p8` file and keep it safe; Apple only lets you download it once.
+1. Create an **App Store Connect API key** at https://appstoreconnect.apple.com/access/integrations/api. Choose either Admin or App Manager access. Download the `AuthKey_XXXXXX.p8` file and keep it safe; Apple only lets you download it once.
 2. Record the **Key ID** (10-character alphanumeric) and **Issuer ID** (a UUID) from the same page.
 
 ### Configure credentials

@@ -3,7 +3,7 @@ import CryptoKit
 
 /// Mints JWTs for the App Store Connect API. Tokens are signed with ES256
 /// (ECDSA on P-256 + SHA-256) using the .p8 private key Apple issues from
-/// https://appstoreconnect.apple.com/access/api.
+/// https://appstoreconnect.apple.com/access/integrations/api.
 ///
 /// Spec: https://developer.apple.com/documentation/appstoreconnectapi/generating_tokens_for_api_requests
 package struct ASCJWTSigner {

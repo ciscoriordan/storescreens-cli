@@ -111,3 +111,32 @@ jobs:
             git commit -m "Bump storescreens to v${VERSION}"
             git push origin main
           fi
+
+      # Keep storescreens-skill in lock-step with the CLI: every
+      # CLI release tag gets mirrored onto the skill repo's current
+      # main HEAD, so a user who pins either side by tag (`npx skills
+      # add ciscoriordan/storescreens-skill@v2.0.1` or `brew install
+      # ciscoriordan/tap/storescreens@2.0.1`) gets matching behavior.
+      # Uses the same HOMEBREW_TAP_TOKEN since it already has write
+      # scope on the same owner's repos; if the token is tap-only,
+      # create a separate SKILL_REPO_TOKEN with Contents:Write on
+      # ciscoriordan/storescreens-skill and swap it in below.
+      - name: Tag matching version on storescreens-skill
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping skill tag. Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/ciscoriordan/storescreens-skill.git" "$RUNNER_TEMP/skill"
+          cd "$RUNNER_TEMP/skill"
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} already exists on storescreens-skill; skipping"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
