@@ -6,7 +6,7 @@ import Foundation
 /// that field, leaving the rest inherited from the defaults.
 ///
 /// Callers pass screenshot names as they appear in the manifest (e.g.
-/// "01_Home"); unknown names simply inherit the defaults unchanged.
+/// "Home"); unknown names simply inherit the defaults unchanged.
 package enum RenderResolver {
 
     /// If `config.template` names a known template, return a copy where the

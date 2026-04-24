@@ -358,6 +358,11 @@ package struct CaptureOrchestrator: Sendable {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
+            outputOrganizer.stampMtimes(
+                manifest: manifest,
+                outputDir: effectiveOutputDir,
+                order: config.screenshots
+            )
             try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
 
             // Extract app icon from the built .app bundle
@@ -904,6 +909,11 @@ package struct CaptureOrchestrator: Sendable {
                 devices: manifestDevices
             )
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
+            outputOrganizer.stampMtimes(
+                manifest: manifest,
+                outputDir: effectiveOutputDir,
+                order: config.screenshots
+            )
             try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir)
 
             AppIconExtractor.extract(appBundlePath: appPath, to: effectiveOutputDir)

@@ -36,8 +36,9 @@ package struct OutputOrganizer {
                     continue
                 }
 
-                // suggestedHumanReadableName format: "01_home_empty_0_UUID.png"
-                // Strip the _N_UUID.png suffix to get the original attachment name
+                // suggestedHumanReadableName format: "<name>_<N>_<UUID>.png"
+                // (e.g. "Home_0_E0857E0B-...png"). Strip the _N_UUID.png suffix
+                // to get the original attachment name the test code passed.
                 let name = Self.cleanAttachmentName(rawName)
 
                 // Filter by name if specified
@@ -117,8 +118,8 @@ package struct OutputOrganizer {
         var screenshots: [CaptureManifest.Screenshot] = []
 
         // Find all PNG files in the device-specific directory.
-        // Supports both plain names ("01_Home.png") and the legacy prefixed format
-        // ("iPhone 17 Pro Max-01_Home.png") where the simulator name is prepended.
+        // Supports both plain names ("Home.png") and the legacy prefixed format
+        // ("iPhone 17 Pro Max-Home.png") where the simulator name is prepended.
         let prefix = "\(simulatorName)-"
         let allFiles = (try? fm.contentsOfDirectory(atPath: screenshotsDir)) ?? []
         let matchingFiles = allFiles
@@ -165,11 +166,52 @@ package struct OutputOrganizer {
         try data.write(to: URL(fileURLWithPath: path))
     }
 
+    /// Stamp each screenshot PNG's modificationDate and creationDate so that
+    /// sorting by "date modified" (ls -t) or Finder's "Date Created" shows
+    /// them in `order`. The first name in `order` gets the most recent
+    /// timestamp; each subsequent entry is 1 ms older. Screenshots whose
+    /// names aren't in `order` get a much older timestamp so they sort
+    /// after all listed entries.
+    ///
+    /// No-op when `order` is nil or empty: legacy configs that relied on
+    /// alphabetical filename ordering keep their capture-time mtimes.
+    package func stampMtimes(
+        manifest: CaptureManifest,
+        outputDir: String,
+        order: [String]?
+    ) {
+        guard let order, !order.isEmpty else { return }
+        let fm = FileManager.default
+        let ordinal: [String: Int] = Dictionary(
+            uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) }
+        )
+        let base = Date()
+        let step: TimeInterval = 0.001
+        let unlistedOffset: TimeInterval = -3600
+
+        for device in manifest.devices {
+            for shot in device.screenshots {
+                let abs = (outputDir as NSString).appendingPathComponent(shot.filename)
+                guard fm.fileExists(atPath: abs) else { continue }
+                let ts: Date
+                if let idx = ordinal[shot.name] {
+                    ts = base.addingTimeInterval(-step * Double(idx))
+                } else {
+                    ts = base.addingTimeInterval(unlistedOffset)
+                }
+                try? fm.setAttributes([
+                    .modificationDate: ts,
+                    .creationDate: ts,
+                ], ofItemAtPath: abs)
+            }
+        }
+    }
+
     // MARK: - Private
 
     /// Extract the original attachment name from xcresulttool's suggestedHumanReadableName.
-    /// Input format: "01_home_empty_0_E0857E0B-CF5B-4340-BE0F-3D2949AB2FD4.png"
-    /// Output: "01_home_empty"
+    /// Input format: "Home_0_E0857E0B-CF5B-4340-BE0F-3D2949AB2FD4.png"
+    /// Output: "Home"
     private static func cleanAttachmentName(_ suggestedName: String) -> String {
         // Remove .png extension if present
         var name = suggestedName
@@ -201,7 +243,7 @@ package struct OutputOrganizer {
     }
 
     /// Returns the relative filename for the manifest.
-    /// Examples: "iPhone_6.9_01_Home.png", "en-US/dark/iPhone_6.9_01_Home.png"
+    /// Examples: "iPhone_6.9_Home.png", "en-US/dark/iPhone_6.9_Home.png"
     private func relativeFilename(devicePrefix: String, screenshotName: String, locale: String?, appearance: String?) -> String {
         var components: [String] = []
         if let locale { components.append(locale) }

@@ -152,10 +152,14 @@ struct InitCommand: AsyncParsableCommand {
         yaml += "#   - light\n"
         yaml += "#   - dark\n\n"
 
-        yaml += "# Optional: filter screenshots by XCTAttachment name\n"
+        yaml += "# Screenshot display order for App Store Connect. Drives render order,\n"
+        yaml += "# HTML preview gallery order, and the mtime stamp on captured PNGs so\n"
+        yaml += "# `ls -t` / Finder \"Date Created\" sort matches this list.\n"
+        yaml += "# Also acts as a filter: only screenshots whose name appears here are kept.\n"
         yaml += "# screenshots:\n"
-        yaml += "#   - \"01_HomeScreen\"\n"
-        yaml += "#   - \"02_Settings\"\n\n"
+        yaml += "#   - \"Home\"\n"
+        yaml += "#   - \"Search\"\n"
+        yaml += "#   - \"Detail\"\n\n"
 
         yaml += "output_dir: \"\(config.outputDir)\"\n\n"
 

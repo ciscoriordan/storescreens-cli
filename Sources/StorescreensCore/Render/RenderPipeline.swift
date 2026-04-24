@@ -99,6 +99,15 @@ package struct RenderPipeline {
             }
         }
 
+        // Stamp mtimes on the rendered PNGs so `ls -t` / Finder Date sort
+        // matches the configured `screenshots:` order, the same way
+        // OutputOrganizer does for the raw captured dir.
+        OutputOrganizer().stampMtimes(
+            manifest: manifest,
+            outputDir: renderRoot.path,
+            order: screenshotOrder
+        )
+
         return Output(renderedSlides: renderedCount, failures: failures, warnings: warnings)
     }
 

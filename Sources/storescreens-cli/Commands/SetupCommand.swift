@@ -188,11 +188,27 @@ struct SetupCommand: AsyncParsableCommand {
                 updated = true
             }
 
+            // Emit `screenshots:` list so the capture pipeline can stamp
+            // mtimes in display order (first in list = newest mtime).
+            // Skip if the user already wrote one.
+            if !contents.contains("\nscreenshots:") && !contents.hasPrefix("screenshots:") {
+                var section = "\n# Display order for App Store Connect. Drives render order, HTML\n"
+                section += "# preview gallery order, and the mtime stamp on output PNGs so\n"
+                section += "# `ls -t` / Finder \"Date Created\" sort matches this list.\n"
+                section += "screenshots:\n"
+                for name in screenNames {
+                    let clean = name.replacingOccurrences(of: " ", with: "")
+                    section += "  - \"\(clean)\"\n"
+                }
+                contents += section
+                updated = true
+            }
+
             if updated {
                 try contents.write(toFile: configPath, atomically: true, encoding: .utf8)
-                logger.log("Updated \(configPath) with test_target and test_class", level: .success)
+                logger.log("Updated \(configPath) with test_target, test_class, and screenshots list", level: .success)
             } else {
-                logger.log("\(configPath) already has test_target and test_class", level: .success)
+                logger.log("\(configPath) already has test_target, test_class, and screenshots list", level: .success)
             }
         } else {
             logger.log("No storescreens.yml found. Run 'storescreens init' first, then re-run setup.", level: .warning)
@@ -354,7 +370,6 @@ struct SetupCommand: AsyncParsableCommand {
         """
 
         for (index, name) in screenNames.enumerated() {
-            let number = String(format: "%02d", index + 1)
             let attachmentName = name
                 .replacingOccurrences(of: " ", with: "")
 
@@ -362,7 +377,10 @@ struct SetupCommand: AsyncParsableCommand {
                 swift += "        // TODO: Navigate to \(name)\n"
                 swift += "        // waitForElement(id: \"\(attachmentName.lowercased())Content\")\n"
             }
-            swift += "        takeScreenshot(named: \"\(number)_\(attachmentName)\")\n"
+            // Names are plain identifiers (Home, Search, Detail). Display order
+            // is driven by the `screenshots:` list in storescreens.yml, which
+            // the capture pipeline uses to stamp mtimes on the output PNGs.
+            swift += "        takeScreenshot(named: \"\(attachmentName)\")\n"
             if index < screenNames.count - 1 {
                 swift += "\n"
             }
