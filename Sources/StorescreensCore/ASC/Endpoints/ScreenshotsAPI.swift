@@ -84,9 +84,19 @@ package struct ScreenshotsAPI {
 
     /// Lists screenshots in a set (so we can delete them individually without
     /// recreating the set, useful to preserve the set's id if anything else
-    /// references it).
+    /// references it). `fileName` + `sourceFileChecksum` let callers diff the
+    /// current set against a local render without re-uploading unchanged
+    /// bytes: ASC's checksum is MD5 of the file bytes, same shape we send
+    /// on `confirmUpload`, so a local MD5 of the render PNG matches iff the
+    /// bytes round-tripped.
     package struct ScreenshotInSet: Codable, Sendable {
         package let id: String
+        package let attributes: Attributes?
+
+        package struct Attributes: Codable, Sendable {
+            package let fileName: String?
+            package let sourceFileChecksum: String?
+        }
     }
 
     package func listScreenshots(setID: String) async throws -> [ScreenshotInSet] {

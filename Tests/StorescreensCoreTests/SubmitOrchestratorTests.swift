@@ -524,6 +524,175 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertNil(report.reviewSubmissionID)
     }
 
+    // MARK: - Idempotency: skip unchanged fields and screenshots
+
+    /// When every metadata field already matches ASC's current values, the
+    /// PATCH calls are skipped and the report shows no metadataUpdates.
+    func testSubmit_unchangedMetadata_skipsPatch() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-meta-noop-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("1.2.0 release notes", to: metaRoot.appendingPathComponent("en-US/release_notes.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // Current localization already carries the exact same description
+        // + whatsNew we'll read from the fixture files, so the diff should
+        // come back empty.
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US","description":"English description","whatsNew":"1.2.0 release notes"}}]}"#.utf8))
+        }
+        let patchCounter = Counter()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            _ = patchCounter.increment()
+            return (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        let patchCalls = ASCStub.requests.filter {
+            $0.httpMethod == "PATCH" && $0.url?.path.hasSuffix("/v1/appStoreVersionLocalizations/LOC-en-US") == true
+        }
+        XCTAssertEqual(patchCalls.count, 0, "unchanged metadata must not PATCH the localization")
+        XCTAssertTrue(report.metadataUpdates.isEmpty, "unchanged metadata should not be listed in the report")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When the existing screenshot set's sourceFileChecksum values match
+    /// the local renders in the same order, the submit run skips the
+    /// DELETE loop and the upload chain entirely.
+    func testSubmit_unchangedScreenshots_skipsUploadAndDelete() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-shot-noop-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let renderRoot = tmp.appendingPathComponent("render")
+        try FileManager.default.createDirectory(at: renderRoot, withIntermediateDirectories: true)
+
+        // Write 2 iPhone PNGs and record their MD5s so ASC's "current set"
+        // can claim matching sourceFileChecksums.
+        let png1 = makePNG(w: 1320, h: 2868)
+        let png2 = makePNG(w: 1320, h: 2868)
+        try png1.write(to: renderRoot.appendingPathComponent("iPhone_6.9_01.png"))
+        try png2.write(to: renderRoot.appendingPathComponent("iPhone_6.9_02.png"))
+        let md5_1 = Insecure.MD5.hash(data: png1).map { String(format: "%02x", $0) }.joined()
+        let md5_2 = Insecure.MD5.hash(data: png2).map { String(format: "%02x", $0) }.joined()
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "App", displayName: nil, scheme: "App",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"", simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [
+                        .init(name: "01", filename: "iPhone_6.9_01.png", capturedAt: Date()),
+                        .init(name: "02", filename: "iPhone_6.9_02.png", capturedAt: Date()),
+                    ]
+                )
+            ]
+        )
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/appStoreVersionLocalizations/LOC-en-US/appScreenshotSets") { _ in
+            (200, Data(#"{"data":[{"id":"SET-1","type":"appScreenshotSets","attributes":{"screenshotDisplayType":"APP_IPHONE_67"}}]}"#.utf8))
+        }
+        // Existing screenshots' checksums match the local renders.
+        let existingJSON = """
+        {"data":[
+          {"id":"EXIST-1","type":"appScreenshots","attributes":{"fileName":"iPhone_6.9_01.png","sourceFileChecksum":"\(md5_1)"}},
+          {"id":"EXIST-2","type":"appScreenshots","attributes":{"fileName":"iPhone_6.9_02.png","sourceFileChecksum":"\(md5_2)"}}
+        ]}
+        """
+        ASCStub.add(method: "GET", suffix: "/appScreenshotSets/SET-1/appScreenshots") { _ in
+            (200, Data(existingJSON.utf8))
+        }
+        // Guards: if any of these ever fire, the idempotency check broke.
+        let deleteCounter = Counter()
+        ASCStub.add(method: "DELETE", suffix: "/v1/appScreenshots/EXIST-1") { _ in
+            _ = deleteCounter.increment(); return (204, Data())
+        }
+        ASCStub.add(method: "DELETE", suffix: "/v1/appScreenshots/EXIST-2") { _ in
+            _ = deleteCounter.increment(); return (204, Data())
+        }
+        let reserveCounter = Counter()
+        ASCStub.add(method: "POST", suffix: "/v1/appScreenshots") { _ in
+            _ = reserveCounter.increment()
+            return (201, Data(#"{"data":{"id":"SHOT-X","type":"appScreenshots","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                screenshots: true,
+                metadata: false,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: renderRoot,
+            metadataRoot: nil,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: false,
+            progress: nil
+        )
+
+        let deleteCalls = ASCStub.requests.filter {
+            $0.httpMethod == "DELETE" && $0.url?.path.contains("/v1/appScreenshots/EXIST-") == true
+        }
+        let reserveCalls = ASCStub.requests.filter {
+            $0.httpMethod == "POST" && $0.url?.path.hasSuffix("/v1/appScreenshots") == true
+        }
+        XCTAssertEqual(deleteCalls.count, 0, "unchanged screenshots must not DELETE existing entries")
+        XCTAssertEqual(reserveCalls.count, 0, "unchanged screenshots must not reserve new uploads")
+        // The group is still reported, but with count=0 to signal the skip.
+        XCTAssertTrue(report.screenshotUploads.contains {
+            $0.locale == "en-US" && $0.displayType == "APP_IPHONE_67" && $0.count == 0
+        }, "expected a count=0 skip entry, got \(report.screenshotUploads)")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
     func testSubmit_bundleIDNotFound_throws() async throws {
         let (client, baseConfig) = makeClient()
         ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in

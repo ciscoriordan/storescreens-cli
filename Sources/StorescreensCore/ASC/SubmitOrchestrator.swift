@@ -291,32 +291,44 @@ package struct SubmitOrchestrator {
             guard fields.hasAnyField else { continue }
 
             // Version localization PATCH — covers description / keywords /
-            // whatsNew / support / marketing / promotional / subtitle / name.
+            // whatsNew / support / marketing / promotional. Diff against the
+            // current ASC values so unchanged fields don't re-PATCH; if
+            // nothing differs we skip the PATCH entirely.
             do {
                 let localization = try await appsAPI.findOrCreateLocalization(
                     versionID: versionID, locale: locale
                 )
-                _ = try await appsAPI.updateLocalization(id: localization.id, fields: fields)
-                let names = updatedFieldNames(fields)
-                if !names.isEmpty {
+                let diff = changedVersionLocalizationFields(
+                    desired: fields, current: localization.attributes
+                )
+                if diff.hasAnyField {
+                    _ = try await appsAPI.updateLocalization(id: localization.id, fields: diff)
+                    let names = updatedFieldNames(diff)
                     report.metadataUpdates.append(.init(locale: locale, fieldsUpdated: names))
                     progress?("metadata \(locale): updated \(names.joined(separator: ", "))")
+                } else {
+                    progress?("metadata \(locale): unchanged")
                 }
             } catch {
                 report.errors.append("metadata \(locale): \(error)")
             }
 
-            // AppInfo localization PATCH — privacy URL only.
+            // AppInfo localization PATCH — privacy URL only. Skip if the
+            // current value on ASC already matches.
             if let privacyURL = fields.privacyPolicyURL, let appInfo = editableAppInfo {
                 do {
                     let ail = try await appsAPI.findOrCreateAppInfoLocalization(
                         appInfoID: appInfo.id, locale: locale
                     )
-                    _ = try await appsAPI.updateAppInfoLocalization(
-                        id: ail.id, privacyPolicyURL: privacyURL
-                    )
-                    report.privacyURLUpdates.append(locale)
-                    progress?("privacy \(locale): updated privacyPolicyUrl")
+                    if ail.attributes?.privacyPolicyUrl == privacyURL {
+                        progress?("privacy \(locale): unchanged")
+                    } else {
+                        _ = try await appsAPI.updateAppInfoLocalization(
+                            id: ail.id, privacyPolicyURL: privacyURL
+                        )
+                        report.privacyURLUpdates.append(locale)
+                        progress?("privacy \(locale): updated privacyPolicyUrl")
+                    }
                 } catch {
                     report.errors.append("privacy URL \(locale): \(error)")
                 }
@@ -324,13 +336,35 @@ package struct SubmitOrchestrator {
         }
     }
 
+    /// Returns a LocalizationFields carrying only the version-level fields
+    /// that actually differ from ASC's current state. Fields that don't
+    /// belong on the version localization endpoint (name, subtitle,
+    /// privacyPolicyURL) are always nil here — they're handled elsewhere or
+    /// not sent at all.
+    private func changedVersionLocalizationFields(
+        desired: LocalizationFields,
+        current: AppsAPI.Localization.Attributes?
+    ) -> LocalizationFields {
+        func diff(_ new: String?, _ old: String?) -> String? {
+            guard let new else { return nil }
+            return new == (old ?? "") ? nil : new
+        }
+        return LocalizationFields(
+            description:     diff(desired.description,     current?.description),
+            keywords:        diff(desired.keywords,        current?.keywords),
+            promotionalText: diff(desired.promotionalText, current?.promotionalText),
+            whatsNew:        diff(desired.whatsNew,        current?.whatsNew),
+            supportURL:      diff(desired.supportURL,      current?.supportUrl),
+            marketingURL:    diff(desired.marketingURL,    current?.marketingUrl)
+        )
+    }
+
     private func updatedFieldNames(_ fields: LocalizationFields) -> [String] {
-        // Privacy URL is deliberately excluded — it's patched on the
-        // appInfoLocalization, not the version localization, and reported
-        // separately via `report.privacyURLUpdates`.
+        // Only lists fields that actually went out in the PATCH. Version
+        // localization doesn't carry name/subtitle (those live on the
+        // appInfoLocalization) and privacyPolicyURL is reported separately
+        // via `report.privacyURLUpdates`.
         var names: [String] = []
-        if fields.name != nil { names.append("name") }
-        if fields.subtitle != nil { names.append("subtitle") }
         if fields.description != nil { names.append("description") }
         if fields.keywords != nil { names.append("keywords") }
         if fields.promotionalText != nil { names.append("promotionalText") }
@@ -392,9 +426,32 @@ package struct SubmitOrchestrator {
                     displayType: key.displayType
                 )
 
+                let existing = try await screenshotsAPI.listScreenshots(setID: set.id)
+
+                // Idempotency: if the existing set matches the local render
+                // in content + order, skip the whole wipe+reupload. ASC
+                // stores MD5 of the file bytes in sourceFileChecksum, the
+                // same shape we compute here from the local render PNG.
+                let localChecksums = items.map { (fileURL, _, _) -> String in
+                    let data = (try? Data(contentsOf: fileURL)) ?? Data()
+                    return ScreenshotsAPI.md5Hex(data: data)
+                }
+                let existingChecksums = existing.map { $0.attributes?.sourceFileChecksum ?? "" }
+                let unchanged = !localChecksums.isEmpty
+                    && localChecksums == existingChecksums
+                    && !localChecksums.contains("")
+                    && !existingChecksums.contains("")
+
+                if unchanged {
+                    progress?("\(key.locale) \(key.displayType): unchanged (\(items.count) screenshot(s))")
+                    report.screenshotUploads.append(.init(
+                        locale: key.locale, displayType: key.displayType, count: 0
+                    ))
+                    continue
+                }
+
                 // Wipe existing screenshots in the set so fresh uploads
                 // become the source of truth.
-                let existing = try await screenshotsAPI.listScreenshots(setID: set.id)
                 for e in existing { try await screenshotsAPI.deleteScreenshot(id: e.id) }
 
                 // Upload in manifest order (key.items were appended in

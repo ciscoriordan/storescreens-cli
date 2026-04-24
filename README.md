@@ -962,6 +962,8 @@ Flags:
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
 
+Re-runs are cheap. Both metadata and screenshots are idempotent: before PATCHing a localization, `submit` fetches the current version-localization attributes from ASC and sends only fields that actually differ (unchanged fields skip the PATCH entirely). Before wiping a screenshot set, it reads each existing screenshot's `sourceFileChecksum` (MD5) and compares to the local render's MD5 in manifest order — if the set already matches, no DELETEs fire and no uploads happen. The report lists unchanged locales with `count: 0` so you can see the skip happened.
+
 ### Submit for review
 
 Set `submit_for_review: true` in the `submit:` block to automatically send the version to App Review after uploads finish. This posts to Apple's `reviewSubmissions` flow; no manual "Submit for Review" click in the web UI is needed.
