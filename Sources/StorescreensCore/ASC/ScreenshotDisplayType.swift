@@ -36,7 +36,14 @@ package enum ScreenshotDisplayType {
         // Keyed by portrait dims. Values match ASC's screenshotDisplayType.
         // Sources: ASC API enum + Apple's 2024/2025 screenshot specifications.
         switch (w, h) {
-        case (1320, 2868):  return "APP_IPHONE_69"    // iPhone 17 Pro Max / 16 Pro Max
+        // Apple's screenshotDisplayType enum does NOT have APP_IPHONE_69 yet
+        // as of 2026-04; the 1320x2868 "6.9"" slot in the ASC web UI is
+        // still fed from APP_IPHONE_67 uploads (the 6.7" slot), which
+        // the gallery then auto-scales up. Uploading under the
+        // literal "APP_IPHONE_69" enum fails with a 409
+        // ENTITY_ERROR.ATTRIBUTE.TYPE. Route 6.9" screenshots into
+        // APP_IPHONE_67 until Apple ships a native 69 enum value.
+        case (1320, 2868):  return "APP_IPHONE_67"    // iPhone 17 Pro Max / 16 Pro Max (uploaded under 6.7" slot; ASC auto-fills 6.9")
         case (1290, 2796):  return "APP_IPHONE_67"    // iPhone 14 Pro Max, 15 Plus/Pro Max, 16 Plus
         case (1284, 2778):  return "APP_IPHONE_67"    // iPhone 12/13 Pro Max, 14 Plus
         case (1260, 2736):  return "APP_IPHONE_63"    // iPhone Air

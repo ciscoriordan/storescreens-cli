@@ -121,16 +121,24 @@ jobs:
       # scope on the same owner's repos; if the token is tap-only,
       # create a separate SKILL_REPO_TOKEN with Contents:Write on
       # ciscoriordan/storescreens-skill and swap it in below.
+      # Non-fatal even when the whole step errors out: a missing or
+      # too-narrowly-scoped token must not kill a CLI release. The
+      # side-effect of syncing the skill tag is best-effort.
       - name: Tag matching version on storescreens-skill
+        continue-on-error: true
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.SKILL_REPO_TOKEN || secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set +e
           if [ -z "${TAP_TOKEN}" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping skill tag. Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"
+            echo "::warning::No token available; skipping skill tag. Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"
             exit 0
           fi
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/ciscoriordan/storescreens-skill.git" "$RUNNER_TEMP/skill"
+          if ! git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/ciscoriordan/storescreens-skill.git" "$RUNNER_TEMP/skill" 2>/dev/null; then
+            echo "::warning::Clone of storescreens-skill failed (token likely lacks Contents:Write on that repo). Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"
+            exit 0
+          fi
           cd "$RUNNER_TEMP/skill"
           if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
             echo "v${VERSION} already exists on storescreens-skill; skipping"
@@ -139,4 +147,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "v${VERSION}"
-          git push origin "v${VERSION}"
+          if ! git push origin "v${VERSION}"; then
+            echo "::warning::Push of v${VERSION} to storescreens-skill failed. Tag manually: git -C storescreens-skill tag v${VERSION} && git push origin v${VERSION}"
+            exit 0
+          fi
+          echo "tagged storescreens-skill at v${VERSION}"
