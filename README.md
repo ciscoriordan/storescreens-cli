@@ -158,16 +158,16 @@ class ScreenshotTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        takeScreenshot(named: "01_Home")
+        takeScreenshot(named: "Home")
 
         // TODO: Navigate to Search Results
-        takeScreenshot(named: "02_SearchResults")
+        takeScreenshot(named: "SearchResults")
 
         // TODO: Navigate to Detail
-        takeScreenshot(named: "03_Detail")
+        takeScreenshot(named: "Detail")
 
         // TODO: Navigate to Settings
-        takeScreenshot(named: "04_Settings")
+        takeScreenshot(named: "Settings")
     }
 
     func takeScreenshot(named name: String) {
@@ -181,6 +181,8 @@ class ScreenshotTests: XCTestCase {
 ```
 
 The first screenshot captures whatever's on screen right after launch. Each `// TODO` is where you add code to navigate to the next screen.
+
+Name screenshots with meaningful identifiers (`Home`, `Search`, `Detail`) and let the `screenshots:` list in `storescreens.yml` drive display order. After capture, storescreens stamps each output PNG's mtime and creationDate in that order, so `ls -t` and Finder's "Date Created" sort match the order you configured. No numeric prefixes needed.
 
 #### Adding navigation
 
@@ -216,22 +218,22 @@ func testScreenshots() {
     app.launch()
 
     // Home screen - shown right after launch
-    takeScreenshot(named: "01_Home")
+    takeScreenshot(named: "Home")
 
     // Search - tap the search tab, enter a query
     app.tabBars.buttons["Search"].tap()
     app.searchFields.firstMatch.tap()
     app.typeText("recipes")
-    takeScreenshot(named: "02_Search")
+    takeScreenshot(named: "Search")
 
     // Detail - tap a result
     app.cells.firstMatch.tap()
-    takeScreenshot(named: "03_Detail")
+    takeScreenshot(named: "Detail")
 
     // Settings - go back, open settings
     app.navigationBars.buttons.firstMatch.tap()
     app.tabBars.buttons["Settings"].tap()
-    takeScreenshot(named: "04_Settings")
+    takeScreenshot(named: "Settings")
 }
 ```
 
@@ -272,11 +274,11 @@ Then in your test, wait for elements by identifier instead of using `sleep()`:
 ```swift
 // Bad: fragile timing, screenshots may capture loading spinners
 sleep(5)
-takeScreenshot(named: "01_Home")
+takeScreenshot(named: "Home")
 
 // Good: waits for actual content to load
 waitForElement(id: "mainContent", timeout: 15)
-takeScreenshot(named: "01_Home")
+takeScreenshot(named: "Home")
 ```
 
 The generated `waitForElement()` helper searches all element types by accessibility identifier, so it works for buttons, text, scroll views, or any other element.
@@ -642,10 +644,14 @@ locales:
 #   hi: in-hi
 #   custom: https://example.com/my-flag.svg
 
-# Filter screenshots by XCTAttachment name
+# Display order for App Store Connect. Drives render order, HTML preview
+# gallery order, and the mtime stamp on captured PNGs so `ls -t` / Finder
+# "Date Created" sort matches this list. Also acts as a filter: only
+# screenshots whose name appears here are kept.
 # screenshots:
-#   - "01_HomeScreen"
-#   - "02_Settings"
+#   - "Home"
+#   - "Search"
+#   - "Detail"
 
 output_dir: "./storescreens-output"
 
@@ -714,7 +720,7 @@ test_class: ScreenshotTests
 #   chrome:
 #     style: bezel
 #   slides:
-#     "01_Home":
+#     "Home":
 #       caption: "Your recipes, organized."
 ```
 
@@ -748,13 +754,13 @@ render:
     stroke_width: 3
 
   slides:
-    "01_Home":
+    "Home":
       caption: "Your recipes, organized."
-    "02_Search":
+    "Search":
       caption:
         - Find anything
         - in *seconds*.
-    "03_Detail":
+    "Detail":
       caption:
         title: Every **detail**, at a glance.
         subtitle: Powered by AI
@@ -786,7 +792,7 @@ render:
   template: sahara     # see `storescreens templates` for the list
 
   slides:
-    "01_Home":
+    "Home":
       caption: "Your adventure, planned."
 ```
 
@@ -1196,13 +1202,15 @@ storescreens-output/
 ├── logs/
 │   └── test-a1b2c3d4.log          ← per-device build + test output (one per simulator)
 ├── light/
-│   ├── iPhone_6.9_01_Home.png
-│   ├── iPhone_6.9_02_SearchResults.png
-│   ├── iPad_Pro_13_01_Home.png
+│   ├── iPhone_6.9_Home.png
+│   ├── iPhone_6.9_SearchResults.png
+│   ├── iPad_Pro_13_Home.png
 │   └── ...
 ├── dark/
 │   └── ...
 ```
+
+File mtimes and creationDates are stamped in the order of the top-level `screenshots:` list in `storescreens.yml`, so `ls -t storescreens-output/light/` and Finder's "Date Created" sort both reflect the order you configured (first in list = newest). This means screenshots can be named with their meaningful identifier only: no `01_` / `02_` prefixes needed just to get alphabetical sort to match display order. If `screenshots:` is unset, file mtimes are left alone (legacy behavior).
 
 When capture completes successfully, `preview.html` automatically opens in your default browser. Each card links to a detail page for that device size and appearance. When multiple locales are configured, each locale section is labeled with its country/language flag.
 
@@ -1214,8 +1222,8 @@ With locales enabled, a locale directory is added:
 storescreens-output/
 ├── en-US/
 │   ├── light/
-│   │   ├── iPhone_6.9_01_Home.png
-│   │   ├── iPad_Pro_13_01_Home.png
+│   │   ├── iPhone_6.9_Home.png
+│   │   ├── iPad_Pro_13_Home.png
 │   │   └── ...
 │   └── dark/
 │       └── ...
@@ -1345,7 +1353,7 @@ Running tests on 1 simulators...
   ▸ Waiting for deck list...
   ▸ Deck list ready
   ▸ [1/8] Deck Selection
-  ▸ Captured screenshot 01_DeckSelection
+  ▸ Captured screenshot DeckSelection
   ▸ [2/8] Country/Region Picker
   ▸ Tapping 'Select region' button
 ```
