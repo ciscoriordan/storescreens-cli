@@ -48,6 +48,21 @@ package struct BackgroundRenderer {
             ctx.restoreGState()
         }
 
+        // Pattern layer: drawn between the color fill and the image layer.
+        // Patterns sit on top of the flat color/gradient but below any user-
+        // supplied image (an image wins when both are set, so users who add
+        // photography to a template slide get their image instead of the
+        // procedural layer).
+        if let pattern = config?.pattern {
+            PatternRenderer().draw(
+                pattern,
+                into: ctx,
+                canvasSize: canvasSize,
+                slideIndex: slideIndex,
+                slidesInCombo: slidesInCombo
+            )
+        }
+
         // Image layer
         guard let imageVariant = config?.image,
               let path = imageVariant.value(for: appearance),

@@ -23,6 +23,9 @@ struct RenderCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Override the render output directory (defaults to config.render.output_dir).")
     var outputDir: String?
 
+    @Option(name: .long, help: "Apply a named built-in template (e.g. 'sahara'). Overrides any `template:` in the config. Run `storescreens templates` to list options.")
+    var template: String?
+
     func run() async throws {
         let logger = Logger()
 
@@ -30,9 +33,20 @@ struct RenderCommand: AsyncParsableCommand {
         let loader = ConfigLoader()
         let captureConfig = try loader.load(from: config)
 
-        guard let render = captureConfig.render else {
+        guard var render = captureConfig.render else {
             logger.log("no `render:` block in \(config); nothing to do", level: .warning)
             return
+        }
+
+        // Flag overrides config. Warn up-front when the chosen template
+        // doesn't exist so users don't silently get the un-templated default.
+        if let flag = template {
+            if RenderTemplate.find(flag) == nil {
+                logger.log("unknown template '\(flag)'; use `storescreens templates` to list available templates", level: .warning)
+            }
+            render.template = flag
+        } else if let configured = render.template, !configured.isEmpty, RenderTemplate.find(configured) == nil {
+            logger.log("unknown template '\(configured)' in config; use `storescreens templates` to list available templates", level: .warning)
         }
 
         // 2. Locate capture manifest

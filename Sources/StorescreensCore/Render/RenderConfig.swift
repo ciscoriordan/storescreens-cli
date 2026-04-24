@@ -7,6 +7,11 @@ import Foundation
 package struct RenderConfig: Codable, Sendable {
     package var enabled: Bool?
     package var outputDir: String?
+    /// Named preset that seeds default `background`, `caption`, and `chrome`
+    /// values. User-supplied fields in this same block override the template.
+    /// Valid names: see `RenderTemplate.builtIn` (e.g. "ascent", "sahara").
+    /// Unknown names are ignored with a warning.
+    package var template: String?
     package var background: BackgroundConfig?
     package var scrim: ScrimConfig?
     package var logo: LogoConfig?
@@ -18,6 +23,7 @@ package struct RenderConfig: Codable, Sendable {
     package init(
         enabled: Bool? = nil,
         outputDir: String? = nil,
+        template: String? = nil,
         background: BackgroundConfig? = nil,
         scrim: ScrimConfig? = nil,
         logo: LogoConfig? = nil,
@@ -27,6 +33,7 @@ package struct RenderConfig: Codable, Sendable {
     ) {
         self.enabled = enabled
         self.outputDir = outputDir
+        self.template = template
         self.background = background
         self.scrim = scrim
         self.logo = logo
@@ -38,6 +45,7 @@ package struct RenderConfig: Codable, Sendable {
     package enum CodingKeys: String, CodingKey {
         case enabled
         case outputDir = "output_dir"
+        case template
         case background, scrim, logo, caption, chrome, slides
     }
 }
@@ -148,18 +156,57 @@ package struct BackgroundConfig: Codable, Sendable {
     package var color: AppearanceVariant<BackgroundColor>?
     package var align: BackgroundAlign?
     package var fit: BackgroundFit?
+    /// Procedural pattern layer drawn on top of the color/gradient base.
+    /// Independent from `image:` — a background can have both a gradient
+    /// and a pattern, but if an image is also set the image wins.
+    package var pattern: PatternConfig?
 
     package init(
         image: AppearanceVariant<String>? = nil,
         color: AppearanceVariant<BackgroundColor>? = nil,
         align: BackgroundAlign? = nil,
-        fit: BackgroundFit? = nil
+        fit: BackgroundFit? = nil,
+        pattern: PatternConfig? = nil
     ) {
         self.image = image
         self.color = color
         self.align = align
         self.fit = fit
+        self.pattern = pattern
     }
+}
+
+/// Procedural pattern drawn on top of a solid/gradient background.
+/// Used by templates like "ascent" (topographic), "blueprint" (grid),
+/// "sahara" (dune layers). Colors are hex strings.
+///
+/// YAML:
+///   pattern:
+///     pattern: topographic
+///     color: "#1A1F2E"
+///     opacity: 0.15
+package struct PatternConfig: Codable, Sendable {
+    package var pattern: BackgroundPattern
+    /// Accent / line color. Hex string. Defaults to black if omitted.
+    package var color: String?
+    /// 0..1. Multiplier on the pattern's internal drawing alpha. Default 0.25.
+    package var opacity: Double?
+
+    package init(pattern: BackgroundPattern, color: String? = nil, opacity: Double? = nil) {
+        self.pattern = pattern
+        self.color = color
+        self.opacity = opacity
+    }
+}
+
+/// Built-in procedural patterns. Extend carefully — the set is stable and
+/// templates reference them by lower_snake_case name in YAML.
+package enum BackgroundPattern: String, Codable, Sendable, CaseIterable {
+    case topographic
+    case blueprintGrid = "blueprint_grid"
+    case duneLayers = "dune_layers"
+    case softWaves = "soft_waves"
+    case gamifiedShapes = "gamified_shapes"
 }
 
 /// Background fill: a single hex color for a solid fill, or an ordered list
@@ -211,6 +258,42 @@ package enum BackgroundFit: String, Codable, Sendable {
     case cover, contain, tile
 }
 
+// MARK: - Shared alignment + nudge
+
+/// Vertical alignment of a block inside its reservation band.
+/// Applies to the caption block; the logo keeps its own simple top-padding
+/// model because it's always at the top of the canvas.
+package enum VerticalAlign: String, Codable, Sendable {
+    case top, center, bottom
+}
+
+/// Fine-grained positional offset relative to a block's normal layout
+/// position. Units are percentages of the canvas dimensions, so a nudge
+/// stays the same relative size across iPhone 6.9" and iPad 13" renders.
+///
+/// Coordinate conventions (matches human expectation, not CG origin):
+///   - `x_pct`: positive = right, negative = left
+///   - `y_pct`: positive = up (toward the top of the screen), negative = down
+///
+/// YAML:
+///   nudge:
+///     x_pct: 0
+///     y_pct: -2       # move the block 2% of canvas height downward
+package struct NudgeConfig: Codable, Sendable, Equatable {
+    package var xPct: Double?
+    package var yPct: Double?
+
+    package init(xPct: Double? = nil, yPct: Double? = nil) {
+        self.xPct = xPct
+        self.yPct = yPct
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case xPct = "x_pct"
+        case yPct = "y_pct"
+    }
+}
+
 // MARK: - Scrim
 
 package struct ScrimConfig: Codable, Sendable {
@@ -247,21 +330,26 @@ package struct LogoConfig: Codable, Sendable {
     package var placement: LogoPlacement?
     package var maxHeightPct: Double?
     package var topPaddingPct: Double?
+    /// Fine-tune the logo's position. Applied after the normal center-top
+    /// placement, in canvas-percent units. See `NudgeConfig` for semantics.
+    package var nudge: NudgeConfig?
 
     package init(
         path: AppearanceVariant<String>? = nil,
         placement: LogoPlacement? = nil,
         maxHeightPct: Double? = nil,
-        topPaddingPct: Double? = nil
+        topPaddingPct: Double? = nil,
+        nudge: NudgeConfig? = nil
     ) {
         self.path = path
         self.placement = placement
         self.maxHeightPct = maxHeightPct
         self.topPaddingPct = topPaddingPct
+        self.nudge = nudge
     }
 
     package enum CodingKeys: String, CodingKey {
-        case path, placement
+        case path, placement, nudge
         case maxHeightPct = "max_height_pct"
         case topPaddingPct = "top_padding_pct"
     }

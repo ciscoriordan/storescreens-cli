@@ -20,13 +20,18 @@ package struct RenderPipeline {
 
     /// Construction. `baseDirectory` is typically the directory containing
     /// the YML config; relative asset paths resolve against it.
+    ///
+    /// If `config.template` names a built-in template, its defaults are
+    /// applied here once so every downstream resolve sees a fully-baked
+    /// `RenderConfig`. Unknown template names are silently ignored
+    /// (resolved warnings come back via `Output.warnings`).
     package init(
         config: RenderConfig,
         baseDirectory: URL,
         bezelStore: BezelStore? = nil,
         fontResolver: FontResolver? = nil
     ) {
-        self.config = config
+        self.config = RenderResolver.applyTemplate(config)
         self.baseDirectory = baseDirectory
         self.bezelStore = bezelStore ?? BezelStore(
             projectLocal: baseDirectory.appendingPathComponent("bezels", isDirectory: true)
@@ -276,16 +281,39 @@ package struct RenderPipeline {
             )
             for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
 
-            // Caption centered vertically between the bottom of the
-            // logo band (canvasHeight - logoReservedH in bottom-left)
-            // and the top of the visible device (deviceTopBL). When no
-            // logo is present the upper bound is simply the canvas top.
+            // Caption placement inside its band.
+            //
+            // Band = [captionBandBottomBL, captionBandTopBL] in bottom-left
+            // CG coords. `verticalAlign` picks top / center (default) / bottom
+            // within the band; `nudge` then adds a user-specified offset
+            // measured in canvas-percent.
             let captionBandTopBL = canvasSize.height - logoReservedH
             let captionBandBottomBL = deviceTopBL
-            let textCenteredY = (captionBandTopBL + captionBandBottomBL) / 2
-            let topLeftY = textCenteredY - out.measuredHeight / 2
 
-            out.drawable.draw(into: ctx, topLeft: CGPoint(x: padding, y: topLeftY))
+            let verticalAlign = cr.verticalAlign ?? .center
+            let blockBottomY: CGFloat = {
+                switch verticalAlign {
+                case .top:
+                    // Block's top edge hugs the band top.
+                    return captionBandTopBL - out.measuredHeight
+                case .center:
+                    let mid = (captionBandTopBL + captionBandBottomBL) / 2
+                    return mid - out.measuredHeight / 2
+                case .bottom:
+                    // Block's bottom edge hugs the band bottom.
+                    return captionBandBottomBL
+                }
+            }()
+
+            // Nudge: x positive = right, y positive = up (toward screen top).
+            // Y-nudge in CG coords means adding to y (CG origin is bottom-left).
+            let nudgeX = CGFloat(cr.nudge?.xPct ?? 0) * canvasSize.width / 100.0
+            let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
+
+            out.drawable.draw(
+                into: ctx,
+                topLeft: CGPoint(x: padding + nudgeX, y: blockBottomY + nudgeY)
+            )
         }
 
         // --- Layer 5: chrome + screenshot ---

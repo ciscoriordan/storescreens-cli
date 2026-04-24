@@ -85,8 +85,14 @@ package struct LogoPlacer {
             let reservedHeight = canvasSize.height * (maxHeightPct + topPaddingPct) / 100.0
             centerY = canvasSize.height - reservedHeight / 2
         }
-        let x = (canvasSize.width - drawW) / 2
-        let yBottom = centerY - drawH / 2
+        // Nudge: x positive = right, y positive = up (toward screen top).
+        // Expressed as percentages of canvas dimensions so a logo offset
+        // scales naturally across iPhone / iPad / Mac sizes.
+        let nudgeX = CGFloat(config.nudge?.xPct ?? 0) * canvasSize.width / 100.0
+        let nudgeY = CGFloat(config.nudge?.yPct ?? 0) * canvasSize.height / 100.0
+
+        let x = (canvasSize.width - drawW) / 2 + nudgeX
+        let yBottom = centerY - drawH / 2 + nudgeY
 
         ctx.draw(image, in: CGRect(x: x, y: yBottom, width: drawW, height: drawH))
     }

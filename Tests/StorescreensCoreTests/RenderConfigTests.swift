@@ -81,6 +81,154 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertEqual(bg.image?.value(for: "dark"), "./only-light.png", "dark should fall back to light when dark absent")
     }
 
+    // MARK: - Pattern background
+
+    func testBackgroundPattern_decodes() throws {
+        let yaml = """
+            background:
+              color: "#F4EFE7"
+              pattern:
+                pattern: topographic
+                color: "#1A1F2E"
+                opacity: 0.15
+            """
+        let bg: BackgroundConfig = try decodeNested(yaml, key: "background")
+        XCTAssertEqual(bg.pattern?.pattern, .topographic)
+        XCTAssertEqual(bg.pattern?.color, "#1A1F2E")
+        XCTAssertEqual(bg.pattern?.opacity, 0.15)
+    }
+
+    func testBackgroundPattern_allCases_decode() throws {
+        // Each enum case must be reachable from YAML by its lower_snake_case name.
+        // Guards against silently renaming a case and breaking user configs.
+        let pairs: [(String, BackgroundPattern)] = [
+            ("topographic", .topographic),
+            ("blueprint_grid", .blueprintGrid),
+            ("dune_layers", .duneLayers),
+            ("soft_waves", .softWaves),
+            ("gamified_shapes", .gamifiedShapes),
+        ]
+        for (yamlName, expected) in pairs {
+            let yaml = """
+                background:
+                  pattern:
+                    pattern: \(yamlName)
+                """
+            let bg: BackgroundConfig = try decodeNested(yaml, key: "background")
+            XCTAssertEqual(bg.pattern?.pattern, expected, "'\(yamlName)' must decode to .\(expected)")
+        }
+    }
+
+    func testBackgroundPattern_omittedOptionalsDefaultNil() throws {
+        let yaml = """
+            background:
+              pattern:
+                pattern: blueprint_grid
+            """
+        let bg: BackgroundConfig = try decodeNested(yaml, key: "background")
+        XCTAssertEqual(bg.pattern?.pattern, .blueprintGrid)
+        XCTAssertNil(bg.pattern?.color, "omitted color must stay nil so renderer uses its default")
+        XCTAssertNil(bg.pattern?.opacity)
+    }
+
+    // MARK: - Template field
+
+    func testRenderConfig_templateField_decodes() throws {
+        let yaml = """
+            render:
+              enabled: true
+              template: sahara
+            """
+        let render: RenderConfig = try decodeNested(yaml, key: "render")
+        XCTAssertEqual(render.template, "sahara")
+        XCTAssertEqual(render.enabled, true)
+    }
+
+    func testRenderConfig_templateField_roundTrips() throws {
+        let original = RenderConfig(
+            enabled: true,
+            template: "midnight",
+            background: BackgroundConfig(color: .solid("#111111"))
+        )
+        let yaml = try YAMLEncoder().encode(original)
+        let decoded = try YAMLDecoder().decode(RenderConfig.self, from: yaml)
+        XCTAssertEqual(decoded.template, "midnight")
+        XCTAssertEqual(decoded.enabled, true)
+    }
+
+    // MARK: - Caption vertical_align + nudge
+
+    func testCaption_verticalAlign_decodesAllCases() throws {
+        let pairs: [(String, VerticalAlign)] = [
+            ("top", .top), ("center", .center), ("bottom", .bottom),
+        ]
+        for (yamlName, expected) in pairs {
+            let yaml = """
+                caption:
+                  vertical_align: \(yamlName)
+                """
+            let c: CaptionConfig = try decodeNested(yaml, key: "caption")
+            XCTAssertEqual(c.verticalAlign, expected, "'\(yamlName)' must decode to .\(expected)")
+        }
+    }
+
+    func testCaption_nudge_decodes() throws {
+        let yaml = """
+            caption:
+              nudge:
+                x_pct: 1.5
+                y_pct: -3
+            """
+        let c: CaptionConfig = try decodeNested(yaml, key: "caption")
+        XCTAssertEqual(c.nudge?.xPct, 1.5)
+        XCTAssertEqual(c.nudge?.yPct, -3)
+    }
+
+    func testCaption_nudge_partialFields() throws {
+        let yaml = """
+            caption:
+              nudge:
+                y_pct: 2
+            """
+        let c: CaptionConfig = try decodeNested(yaml, key: "caption")
+        XCTAssertNil(c.nudge?.xPct, "unset x_pct must stay nil so renderer treats it as zero")
+        XCTAssertEqual(c.nudge?.yPct, 2)
+    }
+
+    // MARK: - Logo nudge
+
+    func testLogo_nudge_decodes() throws {
+        let yaml = """
+            logo:
+              path: ./logo.png
+              nudge:
+                x_pct: -1
+                y_pct: 4
+            """
+        let l: LogoConfig = try decodeNested(yaml, key: "logo")
+        XCTAssertEqual(l.nudge?.xPct, -1)
+        XCTAssertEqual(l.nudge?.yPct, 4)
+    }
+
+    // MARK: - Merge behavior for nudge
+
+    func testMergeLogo_slideNudge_wins() {
+        let base = LogoConfig(nudge: NudgeConfig(xPct: 0, yPct: 0))
+        let override = LogoConfig(nudge: NudgeConfig(xPct: 2, yPct: -1))
+        let merged = RenderResolver.mergeLogo(base: base, override: override)
+        XCTAssertEqual(merged?.nudge?.xPct, 2)
+        XCTAssertEqual(merged?.nudge?.yPct, -1)
+    }
+
+    func testMergeCaption_verticalAlignAndNudge_slideWins() {
+        let base = CaptionConfig(verticalAlign: .center, nudge: NudgeConfig(xPct: 0, yPct: 0))
+        let override = CaptionConfig(verticalAlign: .bottom, nudge: NudgeConfig(yPct: 5))
+        let merged = RenderResolver.mergeCaption(base: base, override: override)
+        XCTAssertEqual(merged?.verticalAlign, .bottom)
+        XCTAssertEqual(merged?.nudge?.yPct, 5)
+        XCTAssertEqual(merged?.nudge?.xPct, 0, "unset fields in override fall through to base")
+    }
+
     // MARK: - ChromeCornerRadius union
 
     func testChromeCornerRadius_auto() throws {

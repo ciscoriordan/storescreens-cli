@@ -9,6 +9,32 @@ import Foundation
 /// "01_Home"); unknown names simply inherit the defaults unchanged.
 package enum RenderResolver {
 
+    /// If `config.template` names a known template, return a copy where the
+    /// template's values fill in any gaps not set by the user. User-supplied
+    /// fields always win. Returns the original config unchanged when no
+    /// template is set or when the name doesn't match a built-in.
+    ///
+    /// Called once by `RenderPipeline.init` so downstream resolve calls see
+    /// the fully-baked defaults without having to know about templates.
+    package static func applyTemplate(_ config: RenderConfig) -> RenderConfig {
+        guard let name = config.template, !name.isEmpty,
+              let template = RenderTemplate.find(name) else {
+            return config
+        }
+        let t = template.config
+        return RenderConfig(
+            enabled: config.enabled ?? t.enabled,
+            outputDir: config.outputDir ?? t.outputDir,
+            template: config.template,
+            background: mergeBackground(base: t.background, override: config.background),
+            scrim: mergeScrim(base: t.scrim, override: config.scrim),
+            logo: mergeLogo(base: t.logo, override: config.logo),
+            caption: mergeCaption(base: t.caption, override: config.caption),
+            chrome: mergeChrome(base: t.chrome, override: config.chrome),
+            slides: config.slides ?? t.slides
+        )
+    }
+
     /// Resolved caption for a slide. Combines slide-level text + highlights
     /// with role styles from the defaults (optionally overridden per slide).
     package struct ResolvedCaption: Sendable {
@@ -20,6 +46,8 @@ package enum RenderResolver {
         package let spacingPct: Double?
         package let minHeightPct: Double?
         package let paddingPct: Double?
+        package let verticalAlign: VerticalAlign?
+        package let nudge: NudgeConfig?
     }
 
     package static func resolvedBackground(
@@ -91,7 +119,9 @@ package enum RenderResolver {
             subtitleStyle: subtitleStyle,
             spacingPct: defaults?.spacingPct,
             minHeightPct: defaults?.minHeightPct,
-            paddingPct: defaults?.paddingPct
+            paddingPct: defaults?.paddingPct,
+            verticalAlign: defaults?.verticalAlign,
+            nudge: defaults?.nudge
         )
     }
 
@@ -103,7 +133,34 @@ package enum RenderResolver {
             image: override?.image ?? base?.image,
             color: override?.color ?? base?.color,
             align: override?.align ?? base?.align,
-            fit: override?.fit ?? base?.fit
+            fit: override?.fit ?? base?.fit,
+            pattern: mergePattern(base: base?.pattern, override: override?.pattern)
+        )
+    }
+
+    static func mergePattern(base: PatternConfig?, override: PatternConfig?) -> PatternConfig? {
+        guard override != nil || base != nil else { return nil }
+        // `pattern` is required on PatternConfig (no nullable enum), so fall
+        // through to `.topographic` only as an unreachable failsafe — either
+        // side present means its pattern wins by position.
+        let chosen = override?.pattern ?? base?.pattern ?? .topographic
+        return PatternConfig(
+            pattern: chosen,
+            color: override?.color ?? base?.color,
+            opacity: override?.opacity ?? base?.opacity
+        )
+    }
+
+    static func mergeCaption(base: CaptionConfig?, override: CaptionConfig?) -> CaptionConfig? {
+        guard override != nil || base != nil else { return nil }
+        return CaptionConfig(
+            title: mergeRole(base: base?.title, override: override?.title),
+            subtitle: mergeRole(base: base?.subtitle, override: override?.subtitle),
+            spacingPct: override?.spacingPct ?? base?.spacingPct,
+            minHeightPct: override?.minHeightPct ?? base?.minHeightPct,
+            paddingPct: override?.paddingPct ?? base?.paddingPct,
+            verticalAlign: override?.verticalAlign ?? base?.verticalAlign,
+            nudge: mergeNudge(base: base?.nudge, override: override?.nudge)
         )
     }
 
@@ -130,7 +187,16 @@ package enum RenderResolver {
             path: override?.path ?? base?.path,
             placement: override?.placement ?? base?.placement,
             maxHeightPct: override?.maxHeightPct ?? base?.maxHeightPct,
-            topPaddingPct: override?.topPaddingPct ?? base?.topPaddingPct
+            topPaddingPct: override?.topPaddingPct ?? base?.topPaddingPct,
+            nudge: mergeNudge(base: base?.nudge, override: override?.nudge)
+        )
+    }
+
+    static func mergeNudge(base: NudgeConfig?, override: NudgeConfig?) -> NudgeConfig? {
+        guard override != nil || base != nil else { return nil }
+        return NudgeConfig(
+            xPct: override?.xPct ?? base?.xPct,
+            yPct: override?.yPct ?? base?.yPct
         )
     }
 

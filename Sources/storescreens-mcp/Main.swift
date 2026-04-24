@@ -263,6 +263,40 @@ struct StorescreensMCP {
             ])
         ),
         Tool(
+            name: "list_templates",
+            description: """
+            List built-in render templates (curated color + typography + background pattern presets). \
+            Apply one by calling set_template(template_id) or by passing --template to the render CLI. \
+            User-supplied fields in the config always win over template defaults.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+            ])
+        ),
+        Tool(
+            name: "set_template",
+            description: """
+            Apply a built-in render template by writing `template: <id>` into storescreens.yml. \
+            Creates the `render:` block if missing. Does NOT remove user-supplied fields - those still \
+            win over the template defaults. Call list_templates first to see available IDs.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "template_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Template id from list_templates (e.g. 'sahara', 'midnight'). Pass empty string to clear."),
+                    ]),
+                    "config_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Path to config file (default: storescreens.yml)"),
+                    ]),
+                ]),
+                "required": .array([.string("template_id")]),
+            ])
+        ),
+        Tool(
             name: "write_config",
             description: """
             Create or update storescreens.yml. Accepts a JSON object with any subset of config fields. \
@@ -309,6 +343,8 @@ struct StorescreensMCP {
             case "take_screenshot":   return try await handleTakeScreenshot(params)
             case "read_config":       return try handleReadConfig(params)
             case "write_config":      return try handleWriteConfig(params)
+            case "list_templates":    return try handleListTemplates()
+            case "set_template":      return try handleSetTemplate(params)
             default:
                 return .init(content: [.text("Unknown tool: \(params.name)")], isError: true)
             }
@@ -884,6 +920,64 @@ struct StorescreensMCP {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let json = String(data: try encoder.encode(config), encoding: .utf8) ?? "{}"
         return .init(content: [.text(json)], isError: false)
+    }
+
+    // MARK: - list_templates
+
+    static func handleListTemplates() throws -> CallTool.Result {
+        struct Out: Encodable {
+            let id: String
+            let name: String
+            let category: String
+            let description: String
+        }
+        let templates = RenderTemplate.builtIn.map {
+            Out(id: $0.id, name: $0.name, category: $0.category, description: $0.description)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let json = String(data: try encoder.encode(templates), encoding: .utf8) ?? "[]"
+        return .init(content: [.text("""
+        \(templates.count) built-in templates:
+
+        \(json)
+
+        Apply one with set_template(template_id: "<id>") or `storescreens render --template <id>`.
+        """)], isError: false)
+    }
+
+    // MARK: - set_template
+
+    static func handleSetTemplate(_ params: CallTool.Parameters) throws -> CallTool.Result {
+        guard let templateId = params.arguments?["template_id"]?.stringValue else {
+            return .init(content: [.text("Missing required parameter: template_id")], isError: true)
+        }
+        let configPath = params.arguments?["config_path"]?.stringValue ?? "storescreens.yml"
+
+        // Reject unknown template ids up-front so the user doesn't write a
+        // value that the render pipeline will then warn about. Empty string
+        // is the documented way to clear the template, so let that through.
+        if !templateId.isEmpty, RenderTemplate.find(templateId) == nil {
+            let known = RenderTemplate.builtIn.map(\.id).joined(separator: ", ")
+            return .init(content: [.text("Unknown template '\(templateId)'. Known: \(known).")], isError: true)
+        }
+
+        guard FileManager.default.fileExists(atPath: configPath) else {
+            return .init(content: [.text("No config at \(configPath). Run `storescreens init` or pass config_path.")], isError: true)
+        }
+
+        var config = try ConfigLoader().load(from: configPath)
+        var render = config.render ?? RenderConfig(enabled: true)
+        if render.enabled == nil { render.enabled = true }
+        render.template = templateId.isEmpty ? nil : templateId
+        config.render = render
+
+        try ConfigLoader().write(config, to: configPath)
+
+        let msg = templateId.isEmpty
+            ? "Cleared template from \(configPath)."
+            : "Applied template '\(templateId)' to \(configPath). Run `storescreens render` to re-render with the new defaults."
+        return .init(content: [.text(msg)], isError: false)
     }
 
     // MARK: - write_config

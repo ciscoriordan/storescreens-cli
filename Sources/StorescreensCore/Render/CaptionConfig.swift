@@ -8,26 +8,38 @@ package struct CaptionConfig: Codable, Sendable {
     package var spacingPct: Double?
     package var minHeightPct: Double?
     package var paddingPct: Double?
+    /// Where the caption block sits inside its reserved band.
+    /// `top` / `center` (default) / `bottom`. Per-role horizontal alignment
+    /// (`title.align`, `subtitle.align`) is independent and still works.
+    package var verticalAlign: VerticalAlign?
+    /// Fine-grained positional offset applied after vertical-align placement.
+    /// See `NudgeConfig` for units and sign conventions.
+    package var nudge: NudgeConfig?
 
     package init(
         title: CaptionRole? = nil,
         subtitle: CaptionRole? = nil,
         spacingPct: Double? = nil,
         minHeightPct: Double? = nil,
-        paddingPct: Double? = nil
+        paddingPct: Double? = nil,
+        verticalAlign: VerticalAlign? = nil,
+        nudge: NudgeConfig? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
         self.spacingPct = spacingPct
         self.minHeightPct = minHeightPct
         self.paddingPct = paddingPct
+        self.verticalAlign = verticalAlign
+        self.nudge = nudge
     }
 
     package enum CodingKeys: String, CodingKey {
-        case title, subtitle
+        case title, subtitle, nudge
         case spacingPct = "spacing_pct"
         case minHeightPct = "min_height_pct"
         case paddingPct = "padding_pct"
+        case verticalAlign = "vertical_align"
     }
 }
 
