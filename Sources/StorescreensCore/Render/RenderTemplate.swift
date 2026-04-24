@@ -50,6 +50,7 @@ package struct RenderTemplate: Sendable {
         pinecrest,
         blueprint,
         sunsetBlvd,
+        jazzAndWine,
     ]
 
     // MARK: - Templates
@@ -369,6 +370,47 @@ package struct RenderTemplate: Sendable {
                 shadow: true,
                 paddingPct: 5,
                 fit: .width
+            )
+        )
+    )
+
+    /// Dim warm speakeasy: deep bordeaux and mahogany with a cream serif.
+    /// Rich, minimalist, intimate. For food, wine, hospitality, creative apps.
+    package static let jazzAndWine = RenderTemplate(
+        id: "jazz_and_wine",
+        name: "Jazz & Wine",
+        description: "Deep bordeaux with elegant cream serif. Food, drink, hospitality, creative apps.",
+        category: "Minimal",
+        config: RenderConfig(
+            background: BackgroundConfig(
+                color: .gradient(["#3D1A1F", "#6E2E2A"])
+            ),
+            caption: CaptionConfig(
+                title: CaptionRole(
+                    font: .google(family: "Playfair Display", version: nil),
+                    weight: .semibold,
+                    italic: true,
+                    fontSizePct: 10.5,
+                    color: "#F2E3D1",
+                    align: .center
+                ),
+                subtitle: CaptionRole(
+                    font: .google(family: "Playfair Display", version: nil),
+                    weight: .regular,
+                    fontSizePct: 4.3,
+                    color: "#D9A94E",
+                    align: .center
+                ),
+                spacingPct: 1.6,
+                minHeightPct: 22,
+                paddingPct: 6
+            ),
+            chrome: ChromeConfig(
+                style: .bezel,
+                shadow: true,
+                paddingPct: 5,
+                fit: .width,
+                colorwayPreference: ["Rose Gold", "Desert Titanium", "Natural Titanium"]
             )
         )
     )
