@@ -15,6 +15,10 @@ package actor ArchiveRunner {
     /// Runs `xcodebuild archive`.
     ///
     /// - Parameter destination: defaults to `generic/platform=iOS` (fastlane's default).
+    /// - Parameter buildSettings: extra `KEY=VALUE` pairs appended after the
+    ///   subcommand args. Used for things like
+    ///   `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption=NO` to bake an export
+    ///   compliance answer into the archived Info.plist.
     package func archive(
         project: String?,
         workspace: String?,
@@ -24,6 +28,7 @@ package actor ArchiveRunner {
         archivePath: String,
         derivedDataPath: String?,
         allowProvisioningUpdates: Bool,
+        buildSettings: [String: String] = [:],
         lineHandler: (@Sendable (String) -> Void)? = nil
     ) async throws {
         var args: [String] = ["archive"]
@@ -43,6 +48,11 @@ package actor ArchiveRunner {
             // Lets Xcode contact the dev portal to create/download missing
             // profiles and certs at archive time under automatic signing.
             args += ["-allowProvisioningUpdates"]
+        }
+        // Build settings (e.g. INFOPLIST_KEY_*=...) come last so they
+        // override any project defaults.
+        for (key, value) in buildSettings.sorted(by: { $0.key < $1.key }) {
+            args.append("\(key)=\(value)")
         }
 
         let env = ["DEVELOPER_DIR": xcode.developerDir]

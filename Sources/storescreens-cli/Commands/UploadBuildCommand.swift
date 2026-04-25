@@ -199,6 +199,20 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
             if !line.isEmpty { print("  \(line)") }
         }
 
+        // Build settings: bake the export compliance answer into the
+        // Info.plist via INFOPLIST_KEY_ITSAppUsesNonExemptEncryption so the
+        // build doesn't show "Missing Compliance" in App Store Connect or
+        // TestFlight after upload. Default `.none` -> NO. `.skip` leaves
+        // the project's existing Info.plist untouched.
+        var extraBuildSettings: [String: String] = [:]
+        let compliance = buildCfg.exportCompliance ?? .none
+        if let answer = compliance.usesNonExemptEncryption {
+            extraBuildSettings["INFOPLIST_KEY_ITSAppUsesNonExemptEncryption"] = answer ? "YES" : "NO"
+            print("  compliance:    INFOPLIST_KEY_ITSAppUsesNonExemptEncryption=\(answer ? "YES" : "NO") (\(compliance.rawValue))")
+        } else {
+            print("  compliance:    skip (Info.plist key not modified)")
+        }
+
         // 1. Archive
         logger.header("Archiving")
         try await runner.archive(
@@ -210,6 +224,7 @@ struct UploadBuildRunCommand: AsyncParsableCommand {
             archivePath: archivePath,
             derivedDataPath: captureConfig.derivedDataPath,
             allowProvisioningUpdates: shouldAllowProvUpdates,
+            buildSettings: extraBuildSettings,
             lineHandler: verbose ? progress : nil
         )
         logger.log("archived -> \(archivePath)", level: .success)
@@ -591,6 +606,29 @@ struct UploadBuildInitCommand: AsyncParsableCommand {
 
             # Force a specific build number.
             # build_number: "3"
+
+            # App Store export compliance answer. Bakes
+            # ITSAppUsesNonExemptEncryption into the Info.plist at archive
+            # time (via INFOPLIST_KEY_*) so the build doesn't show "Missing
+            # Compliance" in TestFlight / App Store after upload.
+            #
+            #   none (default)     - app uses only standard iOS crypto
+            #                        (HTTPS, keychain, signing). Sets the
+            #                        key to NO. Correct for the vast
+            #                        majority of apps.
+            #   exempt_algorithms  - app ships its own crypto but it
+            #                        qualifies for an Apple exemption.
+            #                        Sets the key to NO.
+            #   non_exempt         - app uses non-exempt encryption.
+            #                        Sets the key to YES. Requires BIS
+            #                        export paperwork.
+            #   skip               - leave Info.plist untouched.
+            #
+            # Only takes effect for projects that use Xcode's auto-generated
+            # Info.plist (GENERATE_INFOPLIST_FILE = YES; the default in
+            # Xcode 13+). For legacy projects with a hand-written
+            # Info.plist, set ITSAppUsesNonExemptEncryption in the file.
+            # export_compliance: none
         """
     }
 

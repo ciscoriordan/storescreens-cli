@@ -303,6 +303,28 @@ package struct UploadBuildConfig: Codable, Sendable {
     /// Force a specific build number.
     package var buildNumber: String?
 
+    /// Export compliance answer baked into the Info.plist at archive time
+    /// via `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption`. Avoids the
+    /// "Missing Compliance" state in TestFlight + App Store after upload,
+    /// without needing a follow-up ASC API patch via `storescreens submit`.
+    ///
+    /// - `none` (default): app uses only standard iOS cryptography (HTTPS,
+    ///   keychain, signing). Sets the Info.plist key to NO.
+    /// - `exempt_algorithms`: app ships its own crypto but it qualifies for
+    ///   an Apple exemption. Sets the Info.plist key to NO. (To also set
+    ///   `ITSEncryptionExportComplianceCode` for an issued ERN, supply it
+    ///   in your Info.plist directly; this field doesn't manage that.)
+    /// - `non_exempt`: app uses non-exempt encryption. Sets the key to YES.
+    ///   Requires the appropriate BIS export paperwork; see Apple's docs.
+    /// - `skip`: don't set the Info.plist key. The build will show "Missing
+    ///   Compliance" until answered manually or via `storescreens submit`.
+    ///
+    /// Note: this build setting only takes effect for projects that opt
+    /// into Xcode's auto-generated Info.plist (`GENERATE_INFOPLIST_FILE = YES`,
+    /// the default in Xcode 13+ projects). For legacy projects with a
+    /// hand-written Info.plist, set the key in the file directly.
+    package var exportCompliance: ExportCompliance?
+
     package init(
         scheme: String? = nil,
         configuration: String? = nil,
@@ -320,7 +342,8 @@ package struct UploadBuildConfig: Codable, Sendable {
         skipUpload: Bool? = nil,
         autoBump: Bool? = nil,
         marketingVersion: String? = nil,
-        buildNumber: String? = nil
+        buildNumber: String? = nil,
+        exportCompliance: ExportCompliance? = nil
     ) {
         self.scheme = scheme
         self.configuration = configuration
@@ -339,6 +362,7 @@ package struct UploadBuildConfig: Codable, Sendable {
         self.autoBump = autoBump
         self.marketingVersion = marketingVersion
         self.buildNumber = buildNumber
+        self.exportCompliance = exportCompliance
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -359,5 +383,6 @@ package struct UploadBuildConfig: Codable, Sendable {
         case autoBump = "auto_bump"
         case marketingVersion = "marketing_version"
         case buildNumber = "build_number"
+        case exportCompliance = "export_compliance"
     }
 }
