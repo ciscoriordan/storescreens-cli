@@ -303,6 +303,78 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertEqual(l.insetPct, 6)
     }
 
+    func testTables_decode_full() throws {
+        let yaml = """
+            tables:
+              - rows:
+                  - ["A", "B"]
+                  - ["C", "D"]
+                text_color: "#FFFFFF"
+                border_color: "#FFD66B"
+                cell_style:
+                  font: system
+                  weight: bold
+                  align: center
+                border:
+                  enabled: true
+                  width_pct: 0.2
+                  sides: [outer, inner]
+                cell_padding_pct: 1.5
+                position: below_subtitle
+                align: center
+                max_height_pct: 14
+                placement: all
+                nudge:
+                  x_pct: 0
+                  y_pct: 0
+            """
+        let tables: [TableConfig] = try decodeNested(yaml, key: "tables")
+        XCTAssertEqual(tables.count, 1)
+        let t = tables[0]
+        XCTAssertEqual(t.rows, [["A", "B"], ["C", "D"]])
+        XCTAssertEqual(t.textColor?.value(for: "light"), "#FFFFFF")
+        XCTAssertEqual(t.borderColor?.value(for: "light"), "#FFD66B")
+        XCTAssertEqual(t.cellStyle?.weight, .bold)
+        XCTAssertEqual(t.border?.enabled, true)
+        XCTAssertEqual(t.border?.widthPct, 0.2)
+        XCTAssertEqual(t.border?.sides, [.outer, .inner])
+        XCTAssertEqual(t.cellPaddingPct, 1.5)
+        XCTAssertEqual(t.position, .belowSubtitle)
+        XCTAssertEqual(t.maxHeightPct, 14)
+    }
+
+    func testTables_decode_columnsAlternative() throws {
+        let yaml = """
+            tables:
+              - columns:
+                  - ["A", "C"]
+                  - ["B", "D"]
+            """
+        let tables: [TableConfig] = try decodeNested(yaml, key: "tables")
+        XCTAssertEqual(tables[0].columns, [["A", "C"], ["B", "D"]])
+        XCTAssertNil(tables[0].rows)
+    }
+
+    func testResolveTables_slideOverrideReplacesArray() {
+        let base = TableConfig(rows: [["X"]])
+        let override = TableConfig(rows: [["Y"]])
+        let cfg = RenderConfig(
+            tables: [base],
+            slides: ["s1": SlideOverride(tables: [override])]
+        )
+        XCTAssertEqual(RenderResolver.resolvedTables(config: cfg, slideName: "s1").first?.rows, [["Y"]])
+        XCTAssertEqual(RenderResolver.resolvedTables(config: cfg, slideName: "other").first?.rows, [["X"]])
+    }
+
+    func testResolveTables_capsAtTwo() {
+        let cfg = RenderConfig(tables: [
+            TableConfig(rows: [["1"]]),
+            TableConfig(rows: [["2"]]),
+            TableConfig(rows: [["3"]]),
+        ])
+        XCTAssertEqual(RenderResolver.resolvedTables(config: cfg, slideName: "any").count, 2)
+    }
+
     // MARK: - Resolved images / laurels
 
     func testResolveImages_slideOverrideReplacesArray() {

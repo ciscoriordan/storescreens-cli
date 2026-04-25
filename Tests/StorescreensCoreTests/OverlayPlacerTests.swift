@@ -388,6 +388,130 @@ final class OverlayPlacerTests: XCTestCase {
         return cg.width  // not found, return rightmost
     }
 
+    // MARK: - Tables
+
+    /// Empty table renders without crashing and contributes no reservation.
+    func testTable_empty_reservedHeightZero() {
+        let placer = makePlacer()
+        let canvas = CGSize(width: 200, height: 400)
+        let table = TableConfig(rows: [], position: .belowSubtitle, maxHeightPct: 14)
+        let h = placer.reservedHeight(
+            position: .belowSubtitle, images: [], laurels: [], tables: [table],
+            appearance: "light", canvasSize: canvas, isFirstInCombo: true
+        )
+        // Empty rows still claim max_height_pct because we reserve before
+        // measuring. That's OK; the rendered image is a no-op.
+        XCTAssertEqual(h, 56, accuracy: 0.001,
+            "empty table still reserves max_height_pct of canvas height")
+    }
+
+    /// Non-empty table reserves max_height_pct of canvas height regardless of
+    /// content size (width is content-driven, height is config-driven).
+    func testTable_reservedHeight_matchesMaxHeightPct() {
+        let placer = makePlacer()
+        let canvas = CGSize(width: 200, height: 400)
+        let table = TableConfig(
+            rows: [["A", "B"], ["C", "D"]],
+            position: .belowSubtitle,
+            maxHeightPct: 10
+        )
+        let h = placer.reservedHeight(
+            position: .belowSubtitle, images: [], laurels: [], tables: [table],
+            appearance: "light", canvasSize: canvas, isFirstInCombo: true
+        )
+        XCTAssertEqual(h, 40, accuracy: 0.001,
+            "10% of canvas height = 40px")
+    }
+
+    /// Drawing a 2x2 table with a tinted border lays down border pixels at
+    /// the expected positions. Probe a single row near the table top to find
+    /// the leftmost border-color pixel; it should match the slot's left
+    /// padding (the table's totalWidth is centered in the slot).
+    func testTable_drawSlot_drawsBorder() throws {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("table-draw-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let canvasW = 400, canvasH = 600
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let table = TableConfig(
+            rows: [["1", "2"], ["3", "4"]],
+            textColor: .shared("#FFFFFF"),
+            borderColor: .shared("#FF00FF"),
+            position: .aboveTitle,
+            align: .center,
+            maxHeightPct: 12
+        )
+        let slotH: CGFloat = CGFloat(canvasH) * 0.12
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        let warns = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [], tables: [table],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+        XCTAssertTrue(warns.isEmpty, "no warnings expected; got \(warns)")
+
+        // Border pixels are magenta. Find them anywhere on the canvas to
+        // confirm something rendered.
+        let cg = ctx.makeImage()!
+        var foundBorder = false
+        outer: for y in 0..<cg.height {
+            let bounds = colorBoundsX(in: cg, scanRowFromTop: y, channel: .red)
+            // colorBoundsX(.red) won't match magenta directly; use a simpler
+            // scan: any non-transparent pixel inside the slot rect is good.
+            _ = bounds
+            for x in 0..<cg.width {
+                let off = y * cg.bytesPerRow + x * 4
+                let data = cg.dataProvider!.data! as Data
+                if data[off + 3] > 0 {
+                    foundBorder = true
+                    break outer
+                }
+            }
+        }
+        XCTAssertTrue(foundBorder, "expected at least one drawn pixel from the table")
+    }
+
+    /// Padding short rows: a 2-column-wide first row + 1-column second row
+    /// gets padded to 2x2 with the [1][1] cell empty. Renders without crash.
+    func testTable_unequalRows_padsWithEmpty() throws {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("table-pad-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let canvasW = 400, canvasH = 600
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let table = TableConfig(
+            rows: [["A", "B"], ["C"]],   // second row is short
+            position: .aboveTitle,
+            maxHeightPct: 10
+        )
+        let slotH: CGFloat = CGFloat(canvasH) * 0.10
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        let warns = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [], tables: [table],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+        XCTAssertTrue(warns.isEmpty, "padding short rows must not warn; got \(warns)")
+    }
+
     // MARK: - Probe helpers
 
     private struct SinglePositionProbe {

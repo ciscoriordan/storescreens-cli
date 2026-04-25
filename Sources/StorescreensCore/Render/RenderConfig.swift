@@ -24,6 +24,9 @@ package struct RenderConfig: Codable, Sendable {
     /// Laurel overlays: left/right laurel SVGs flanking centered text. Up to
     /// two entries; same slot rules as `images`.
     package var laurels: [LaurelConfig]?
+    /// Table overlays: a 2D grid of text cells with optional borders. Up to
+    /// two entries; same slot rules as `images` and `laurels`.
+    package var tables: [TableConfig]?
     package var caption: CaptionConfig?
     package var chrome: ChromeConfig?
     /// Per-slide overrides keyed by screenshot name (exact match, not substring).
@@ -38,6 +41,7 @@ package struct RenderConfig: Codable, Sendable {
         logo: LogoConfig? = nil,
         images: [ImageConfig]? = nil,
         laurels: [LaurelConfig]? = nil,
+        tables: [TableConfig]? = nil,
         caption: CaptionConfig? = nil,
         chrome: ChromeConfig? = nil,
         slides: [String: SlideOverride]? = nil
@@ -50,6 +54,7 @@ package struct RenderConfig: Codable, Sendable {
         self.logo = logo
         self.images = images
         self.laurels = laurels
+        self.tables = tables
         self.caption = caption
         self.chrome = chrome
         self.slides = slides
@@ -59,7 +64,7 @@ package struct RenderConfig: Codable, Sendable {
         case enabled
         case outputDir = "output_dir"
         case template
-        case background, scrim, logo, images, laurels, caption, chrome, slides
+        case background, scrim, logo, images, laurels, tables, caption, chrome, slides
     }
 }
 
@@ -75,6 +80,7 @@ package struct SlideOverride: Codable, Sendable {
     /// ambiguous when the user wants to drop slot 0 but keep slot 1.
     package var images: [ImageConfig]?
     package var laurels: [LaurelConfig]?
+    package var tables: [TableConfig]?
     package var caption: SlideCaption?
     package var chrome: ChromeConfig?
 
@@ -98,6 +104,7 @@ package struct SlideOverride: Codable, Sendable {
         logo: LogoConfig? = nil,
         images: [ImageConfig]? = nil,
         laurels: [LaurelConfig]? = nil,
+        tables: [TableConfig]? = nil,
         caption: SlideCaption? = nil,
         chrome: ChromeConfig? = nil,
         captionLocales: [String: CaptionText]? = nil
@@ -107,13 +114,14 @@ package struct SlideOverride: Codable, Sendable {
         self.logo = logo
         self.images = images
         self.laurels = laurels
+        self.tables = tables
         self.caption = caption
         self.chrome = chrome
         self.captionLocales = captionLocales
     }
 
     package enum CodingKeys: String, CodingKey {
-        case background, scrim, logo, images, laurels, caption, chrome
+        case background, scrim, logo, images, laurels, tables, caption, chrome
         case captionLocales = "caption_locales"
     }
 }
@@ -524,6 +532,116 @@ package struct LaurelConfig: Codable, Sendable {
         case maxHeightPct = "max_height_pct"
         case insetPct = "inset_pct"
     }
+}
+
+/// Table overlay: a 2D grid of text cells with optional borders. Same slot
+/// semantics as `images` and `laurels`; up to two per slot, auto-distributed
+/// at equal whitespace when paired.
+package struct TableConfig: Codable, Sendable {
+    /// Row-major content. Each row is an array of cell strings; rows that
+    /// have fewer columns than the widest row are padded with empty cells
+    /// at the end so the rendered grid is always rectangular. Wins over
+    /// `columns` when both are set.
+    package var rows: [[String]]?
+    /// Column-major content. Same padding rule as `rows` but along columns.
+    /// Used only when `rows` is nil.
+    package var columns: [[String]]?
+    /// Cell text color (default white). Independent from `border_color` so
+    /// you can keep crisp white text on a tinted border.
+    package var textColor: AppearanceVariant<String>?
+    /// Border color (default white).
+    package var borderColor: AppearanceVariant<String>?
+    /// Cell text style. When `font_size_pct` is omitted, the renderer picks
+    /// a single auto-derived size that fits inside `max_height_pct / rows`,
+    /// applied uniformly to every cell.
+    package var cellStyle: CaptionRole?
+    /// Border configuration. Default: enabled, all outer + inner sides,
+    /// `width_pct: 0.15` (% of canvas height).
+    package var border: TableBorderConfig?
+    /// Cell interior padding as percent of canvas height. Default: 1.
+    package var cellPaddingPct: Double?
+    /// Slot the table sits in. Default: `below_subtitle` (matches laurels).
+    package var position: OverlayPosition?
+    /// Horizontal alignment of the whole table within its slot. Default: center.
+    package var align: CaptionAlign?
+    /// Block height (the table's max height) as a percentage of canvas height.
+    /// Default: 14. Width is content-driven.
+    package var maxHeightPct: Double?
+    /// Per-slide visibility. Default: `all`.
+    package var placement: OverlayPlacement?
+    /// Fine-tune position.
+    package var nudge: NudgeConfig?
+
+    package init(
+        rows: [[String]]? = nil,
+        columns: [[String]]? = nil,
+        textColor: AppearanceVariant<String>? = nil,
+        borderColor: AppearanceVariant<String>? = nil,
+        cellStyle: CaptionRole? = nil,
+        border: TableBorderConfig? = nil,
+        cellPaddingPct: Double? = nil,
+        position: OverlayPosition? = nil,
+        align: CaptionAlign? = nil,
+        maxHeightPct: Double? = nil,
+        placement: OverlayPlacement? = nil,
+        nudge: NudgeConfig? = nil
+    ) {
+        self.rows = rows
+        self.columns = columns
+        self.textColor = textColor
+        self.borderColor = borderColor
+        self.cellStyle = cellStyle
+        self.border = border
+        self.cellPaddingPct = cellPaddingPct
+        self.position = position
+        self.align = align
+        self.maxHeightPct = maxHeightPct
+        self.placement = placement
+        self.nudge = nudge
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case rows, columns, border, position, align, placement, nudge
+        case textColor = "text_color"
+        case borderColor = "border_color"
+        case cellStyle = "cell_style"
+        case cellPaddingPct = "cell_padding_pct"
+        case maxHeightPct = "max_height_pct"
+    }
+}
+
+/// Border configuration for a `TableConfig`. Defaults render outer + inner
+/// borders; pass `sides: [outer]` to drop grid lines, `sides: [inner]` for
+/// only grid lines, or per-side values like `[top, bottom]`.
+package struct TableBorderConfig: Codable, Sendable {
+    package var enabled: Bool?
+    /// Border thickness as a percentage of canvas height. Default: 0.15.
+    package var widthPct: Double?
+    /// Which sides to draw. Default: `[outer, inner]` (full grid). `outer`
+    /// expands to the four outside edges; `inner` to the lines between
+    /// cells. Individual sides override expansion of `outer`.
+    package var sides: [BorderSide]?
+
+    package init(
+        enabled: Bool? = nil,
+        widthPct: Double? = nil,
+        sides: [BorderSide]? = nil
+    ) {
+        self.enabled = enabled
+        self.widthPct = widthPct
+        self.sides = sides
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case enabled, sides
+        case widthPct = "width_pct"
+    }
+}
+
+package enum BorderSide: String, Codable, Sendable {
+    case outer
+    case inner
+    case top, bottom, left, right
 }
 
 // MARK: - Chrome

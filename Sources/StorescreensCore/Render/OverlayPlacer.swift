@@ -32,6 +32,7 @@ package struct OverlayPlacer: @unchecked Sendable {
         position: OverlayPosition,
         images: [ImageConfig],
         laurels: [LaurelConfig],
+        tables: [TableConfig] = [],
         appearance: String,
         canvasSize: CGSize,
         isFirstInCombo: Bool
@@ -40,6 +41,7 @@ package struct OverlayPlacer: @unchecked Sendable {
             position: position,
             images: images,
             laurels: laurels,
+            tables: tables,
             isFirstInCombo: isFirstInCombo
         ).items
 
@@ -53,6 +55,9 @@ package struct OverlayPlacer: @unchecked Sendable {
             case .laurel(let cfg):
                 let pct = CGFloat(cfg.maxHeightPct ?? 10)
                 maxH = max(maxH, canvasSize.height * pct / 100.0)
+            case .table(let cfg):
+                let pct = CGFloat(cfg.maxHeightPct ?? 14)
+                maxH = max(maxH, canvasSize.height * pct / 100.0)
             }
         }
         return maxH
@@ -64,6 +69,7 @@ package struct OverlayPlacer: @unchecked Sendable {
         position: OverlayPosition,
         images: [ImageConfig],
         laurels: [LaurelConfig],
+        tables: [TableConfig] = [],
         appearance: String,
         slotRect: CGRect,
         canvasSize: CGSize,
@@ -74,6 +80,7 @@ package struct OverlayPlacer: @unchecked Sendable {
             position: position,
             images: images,
             laurels: laurels,
+            tables: tables,
             isFirstInCombo: isFirstInCombo
         )
         var warnings = collected.warnings
@@ -105,6 +112,9 @@ package struct OverlayPlacer: @unchecked Sendable {
                     warnings.append("laurel SVGs missing from bundle; skipping laurel overlay")
                     continue
                 }
+                measured.append(m)
+            case .table(let cfg):
+                let m = measureTable(cfg: cfg, appearance: appearance, canvasSize: canvasSize)
                 measured.append(m)
             }
         }
@@ -181,6 +191,7 @@ package struct OverlayPlacer: @unchecked Sendable {
     private enum OverlayItem {
         case image(ImageConfig)
         case laurel(LaurelConfig)
+        case table(TableConfig)
     }
 
     private struct CollectedItems {
@@ -188,12 +199,14 @@ package struct OverlayPlacer: @unchecked Sendable {
         let warnings: [String]
     }
 
-    /// Filter images + laurels down to the set that belongs in `position`,
-    /// after applying default position, default placement, and the 2-item cap.
+    /// Filter images + laurels + tables down to the set that belongs in
+    /// `position`, after applying default position, default placement, and
+    /// the 2-item cap (across all overlay types).
     private func collectItems(
         position: OverlayPosition,
         images: [ImageConfig],
         laurels: [LaurelConfig],
+        tables: [TableConfig],
         isFirstInCombo: Bool
     ) -> CollectedItems {
         let target = position.canonicalSlot
@@ -213,8 +226,20 @@ package struct OverlayPlacer: @unchecked Sendable {
             shouldDrawLaurel(cfg, isFirstInCombo: isFirstInCombo)
         }
 
-        // Preserve config order (images first, then laurels) for stable stacking.
-        var combined: [OverlayItem] = imageMatches.map { .image($0) } + laurelMatches.map { .laurel($0) }
+        // Tables: default position is .belowSubtitle (sit under the caption,
+        // alongside or instead of laurels).
+        let tableMatches: [TableConfig] = tables.filter { cfg in
+            (cfg.position ?? .belowSubtitle).canonicalSlot == target
+        }.filter { cfg in
+            shouldDrawTable(cfg, isFirstInCombo: isFirstInCombo)
+        }
+
+        // Preserve config order (images, then laurels, then tables) for
+        // stable stacking when items share a slot.
+        var combined: [OverlayItem] =
+            imageMatches.map { .image($0) }
+            + laurelMatches.map { .laurel($0) }
+            + tableMatches.map { .table($0) }
 
         if combined.count > 2 {
             warnings.append("more than 2 overlays at \(target.rawValue); dropping extras")
@@ -242,11 +267,20 @@ package struct OverlayPlacer: @unchecked Sendable {
         }
     }
 
+    private func shouldDrawTable(_ cfg: TableConfig, isFirstInCombo: Bool) -> Bool {
+        switch cfg.placement ?? .all {
+        case .firstOnly: return isFirstInCombo
+        case .all:       return true
+        case .none:      return false
+        }
+    }
+
     // MARK: - Measured item model
 
     private enum MeasuredKind {
         case image(CGImage)
         case laurel(LaurelArtifacts)
+        case table(TableArtifacts)
     }
 
     private struct LaurelArtifacts {
@@ -285,6 +319,8 @@ package struct OverlayPlacer: @unchecked Sendable {
             ctx.draw(cg, in: rect)
         case .laurel(let art):
             drawLaurel(art, in: rect, into: ctx)
+        case .table(let art):
+            drawTable(art, in: rect, into: ctx)
         }
     }
 
@@ -475,6 +511,309 @@ package struct OverlayPlacer: @unchecked Sendable {
             let x = textRegionRect.minX + (textRegionRect.width - w) / 2
             let y = stackBottom
             fs.draw(in: ctx, rect: CGRect(x: x, y: y, width: w, height: subtitleH))
+        }
+    }
+
+    // MARK: - Table layout
+
+    private struct TableArtifacts {
+        let cells: [[CellArtifact]]      // [row][col]; non-nil framesetter for non-empty cells
+        let columnWidths: [CGFloat]      // includes 2 * cellPadding per column
+        let rowHeights: [CGFloat]        // includes 2 * cellPadding per row
+        let totalWidth: CGFloat          // sum of columns + outer/inner border lines
+        let totalHeight: CGFloat
+        let borderColor: NSColor
+        let borderWidth: CGFloat
+        let drawTopOuter: Bool
+        let drawBottomOuter: Bool
+        let drawLeftOuter: Bool
+        let drawRightOuter: Bool
+        let drawInner: Bool
+        let cellPadding: CGFloat
+    }
+
+    private struct CellArtifact {
+        let framesetter: AttributedFramesetter?
+        let textSize: CGSize
+        let align: CaptionAlign
+    }
+
+    /// Lays out the table into a `MeasuredItem` so the slot-distribution code
+    /// can position it the same way as images and laurels. Pads short rows
+    /// with empty cells, derives a single auto font size that fits inside
+    /// `max_height_pct / rows`, and computes column widths from the longest
+    /// cell text in each column.
+    private func measureTable(
+        cfg: TableConfig,
+        appearance: String,
+        canvasSize: CGSize
+    ) -> MeasuredItem {
+        // Resolve grid orientation. `rows` wins when both are set.
+        let rawGrid: [[String]] = cfg.rows ?? cfg.columns.map { transposeGrid($0) } ?? [[]]
+        let grid = padToRectangular(rawGrid)
+        let numRows = grid.count
+        let numCols = grid.first?.count ?? 0
+
+        // Empty/degenerate table: return a zero-sized measured item so the
+        // pipeline can drop it without crashing.
+        if numRows == 0 || numCols == 0 {
+            let zeroArt = TableArtifacts(
+                cells: [], columnWidths: [], rowHeights: [],
+                totalWidth: 0, totalHeight: 0,
+                borderColor: .white, borderWidth: 0,
+                drawTopOuter: false, drawBottomOuter: false,
+                drawLeftOuter: false, drawRightOuter: false, drawInner: false,
+                cellPadding: 0
+            )
+            return MeasuredItem(
+                kind: .table(zeroArt),
+                align: cfg.align ?? .center,
+                nudgeXPct: cfg.nudge?.xPct ?? 0,
+                nudgeYPct: cfg.nudge?.yPct ?? 0,
+                width: 0, height: 0
+            )
+        }
+
+        let blockHeight = canvasSize.height * CGFloat(cfg.maxHeightPct ?? 14) / 100.0
+        let cellPadding = canvasSize.height * CGFloat(cfg.cellPaddingPct ?? 1) / 100.0
+
+        // Border configuration.
+        let border = cfg.border
+        let bordersOn = border?.enabled ?? true
+        let borderWidth = bordersOn
+            ? canvasSize.height * CGFloat(border?.widthPct ?? 0.15) / 100.0
+            : 0
+        let borderSides = border?.sides ?? [.outer, .inner]
+        let drawTop    = bordersOn && (borderSides.contains(.outer) || borderSides.contains(.top))
+        let drawBottom = bordersOn && (borderSides.contains(.outer) || borderSides.contains(.bottom))
+        let drawLeft   = bordersOn && (borderSides.contains(.outer) || borderSides.contains(.left))
+        let drawRight  = bordersOn && (borderSides.contains(.outer) || borderSides.contains(.right))
+        let drawInner  = bordersOn && borderSides.contains(.inner)
+
+        // Vertical budget per cell: block height minus outer borders and
+        // inner border lines, divided by row count, minus the cell's own
+        // top + bottom padding.
+        let outerVBorder = (drawTop ? borderWidth : 0) + (drawBottom ? borderWidth : 0)
+        let innerVBorder = drawInner ? CGFloat(numRows - 1) * borderWidth : 0
+        let perCellHeight = (blockHeight - outerVBorder - innerVBorder) / CGFloat(numRows)
+        let perCellTextHeight = max(0, perCellHeight - 2 * cellPadding)
+
+        // Auto-derive font size to fit the per-cell text height (line height
+        // ≈ 1.2 × font size). Override via `cell_style.font_size_pct`.
+        let autoFontSize = perCellTextHeight / 1.2
+        let fontSize = cfg.cellStyle?.fontSizePct.map {
+            canvasSize.height * CGFloat($0) / 100.0
+        } ?? autoFontSize
+
+        // Cell text style.
+        let textColorHex = cfg.textColor?.value(for: appearance)
+        let textColor: NSColor = (cfg.cellStyle?.color.flatMap(RenderColors.parseHex))
+            ?? textColorHex.flatMap(RenderColors.parseHex)
+            ?? .white
+        let style = ResolvedRoleStyle(
+            font: cfg.cellStyle?.font ?? .system,
+            weight: cfg.cellStyle?.weight ?? .regular,
+            italic: cfg.cellStyle?.italic ?? false,
+            fontSize: fontSize,
+            color: textColor,
+            align: cfg.cellStyle?.align ?? .center
+        )
+
+        // Build framesetters per cell, measure each.
+        var cells: [[CellArtifact]] = []
+        var colWidths = Array(repeating: CGFloat(0), count: numCols)
+        for r in 0..<numRows {
+            var row: [CellArtifact] = []
+            for c in 0..<numCols {
+                let text = grid[r][c]
+                if text.isEmpty {
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: style.align))
+                    continue
+                }
+                guard let attr = try? MarkdownAttributor.buildAttributed(
+                    plainOrMarkdown: text, role: style, resolver: fontResolver
+                ) else {
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: style.align))
+                    continue
+                }
+                let fs = AttributedFramesetter(attributed: attr)
+                let size = fs.suggestedSize(constrainedTo: CGSize(
+                    width: CGFloat.greatestFiniteMagnitude,
+                    height: CGFloat.greatestFiniteMagnitude
+                ))
+                if size.width > colWidths[c] { colWidths[c] = size.width }
+                row.append(CellArtifact(framesetter: fs, textSize: size, align: style.align))
+            }
+            cells.append(row)
+        }
+
+        // Column widths include left + right cell padding.
+        let paddedColWidths = colWidths.map { $0 + 2 * cellPadding }
+        // Row heights are uniform = perCellHeight (already includes padding).
+        let rowHeights = Array(repeating: perCellHeight, count: numRows)
+
+        let outerHBorder = (drawLeft ? borderWidth : 0) + (drawRight ? borderWidth : 0)
+        let innerHBorder = drawInner ? CGFloat(numCols - 1) * borderWidth : 0
+        let totalWidth = paddedColWidths.reduce(0, +) + outerHBorder + innerHBorder
+        let totalHeight = rowHeights.reduce(0, +) + outerVBorder + innerVBorder
+
+        let borderColorHex = cfg.borderColor?.value(for: appearance)
+        let borderColor: NSColor = borderColorHex.flatMap(RenderColors.parseHex) ?? .white
+
+        let art = TableArtifacts(
+            cells: cells,
+            columnWidths: paddedColWidths,
+            rowHeights: rowHeights,
+            totalWidth: totalWidth,
+            totalHeight: totalHeight,
+            borderColor: borderColor,
+            borderWidth: borderWidth,
+            drawTopOuter: drawTop,
+            drawBottomOuter: drawBottom,
+            drawLeftOuter: drawLeft,
+            drawRightOuter: drawRight,
+            drawInner: drawInner,
+            cellPadding: cellPadding
+        )
+
+        return MeasuredItem(
+            kind: .table(art),
+            align: cfg.align ?? .center,
+            nudgeXPct: cfg.nudge?.xPct ?? 0,
+            nudgeYPct: cfg.nudge?.yPct ?? 0,
+            width: totalWidth,
+            height: totalHeight
+        )
+    }
+
+    /// Pad each row with empty strings so all rows have the same column count
+    /// (matching the longest row). Empty grid is returned unchanged.
+    private func padToRectangular(_ grid: [[String]]) -> [[String]] {
+        let cols = grid.map(\.count).max() ?? 0
+        guard cols > 0 else { return grid }
+        return grid.map { row in
+            row.count == cols ? row : row + Array(repeating: "", count: cols - row.count)
+        }
+    }
+
+    /// Transpose a column-major grid (cols x rows) into a row-major grid
+    /// (rows x cols). Used when the user supplies `columns:` instead of
+    /// `rows:`. Empty input returns empty.
+    private func transposeGrid(_ grid: [[String]]) -> [[String]] {
+        guard let firstColRows = grid.first?.count, firstColRows > 0 else { return [] }
+        let rows = grid.map(\.count).max() ?? 0
+        guard rows > 0 else { return [] }
+        var out: [[String]] = Array(repeating: Array(repeating: "", count: grid.count), count: rows)
+        for (c, col) in grid.enumerated() {
+            for r in 0..<rows {
+                out[r][c] = r < col.count ? col[r] : ""
+            }
+        }
+        return out
+    }
+
+    /// Draws the table at `rect.origin`. The MeasuredItem already sized us at
+    /// totalWidth × totalHeight, so `rect` matches our layout and we walk the
+    /// grid in CG bottom-left coords (row 0 sits at the TOP of `rect`).
+    private func drawTable(_ art: TableArtifacts, in rect: CGRect, into ctx: CGContext) {
+        guard !art.cells.isEmpty else { return }
+
+        let numRows = art.cells.count
+        let numCols = art.cells[0].count
+        let bw = art.borderWidth
+
+        // Compute X edges of each column (left edge of column i, plus the
+        // far-right edge after the last column). Walks from rect.minX
+        // accounting for left outer border + inner borders.
+        var colXEdges: [CGFloat] = []
+        var x = rect.minX + (art.drawLeftOuter ? bw : 0)
+        colXEdges.append(x)
+        for c in 0..<numCols {
+            x += art.columnWidths[c]
+            colXEdges.append(x)
+            if c < numCols - 1, art.drawInner { x += bw }
+        }
+
+        // Y edges of each row, top-down (row 0 is at the top of the table).
+        // CG y-axis is flipped, so row 0's top in CG coords is rect.maxY.
+        var rowYEdges: [CGFloat] = []
+        var y = rect.maxY - (art.drawTopOuter ? bw : 0)
+        rowYEdges.append(y)
+        for r in 0..<numRows {
+            y -= art.rowHeights[r]
+            rowYEdges.append(y)
+            if r < numRows - 1, art.drawInner { y -= bw }
+        }
+
+        // Draw borders first so cells render on top.
+        if bw > 0 {
+            let rgb = (art.borderColor.usingColorSpace(.sRGB) ?? art.borderColor)
+            ctx.setFillColor(red: rgb.redComponent, green: rgb.greenComponent,
+                             blue: rgb.blueComponent, alpha: rgb.alphaComponent)
+
+            // Outer borders.
+            if art.drawTopOuter {
+                ctx.fill(CGRect(x: rect.minX, y: rect.maxY - bw,
+                                width: rect.width, height: bw))
+            }
+            if art.drawBottomOuter {
+                ctx.fill(CGRect(x: rect.minX, y: rect.minY,
+                                width: rect.width, height: bw))
+            }
+            if art.drawLeftOuter {
+                ctx.fill(CGRect(x: rect.minX, y: rect.minY,
+                                width: bw, height: rect.height))
+            }
+            if art.drawRightOuter {
+                ctx.fill(CGRect(x: rect.maxX - bw, y: rect.minY,
+                                width: bw, height: rect.height))
+            }
+
+            // Inner borders.
+            if art.drawInner {
+                for c in 1..<numCols {
+                    let edge = colXEdges[c] - bw
+                    ctx.fill(CGRect(x: edge, y: rect.minY,
+                                    width: bw, height: rect.height))
+                }
+                for r in 1..<numRows {
+                    let edge = rowYEdges[r] - bw
+                    ctx.fill(CGRect(x: rect.minX, y: edge,
+                                    width: rect.width, height: bw))
+                }
+            }
+        }
+
+        // Cell text. Each cell's content rect is column[c] x row[r] minus
+        // padding. Text is positioned at the cell's align horizontally and
+        // vertically centered.
+        for r in 0..<numRows {
+            for c in 0..<numCols {
+                let cell = art.cells[r][c]
+                guard let fs = cell.framesetter, cell.textSize.height > 0 else { continue }
+                let cellLeft = colXEdges[c] + art.cellPadding
+                let cellRight = colXEdges[c + 1] - art.cellPadding
+                let cellWidth = max(0, cellRight - cellLeft)
+                let cellTop = rowYEdges[r] - art.cellPadding
+                let cellBottom = rowYEdges[r + 1] + art.cellPadding
+                let cellHeight = max(0, cellTop - cellBottom)
+
+                // Horizontal alignment within the cell.
+                let xOffset: CGFloat
+                switch cell.align {
+                case .left:   xOffset = 0
+                case .center: xOffset = max(0, (cellWidth - cell.textSize.width) / 2)
+                case .right:  xOffset = max(0, cellWidth - cell.textSize.width)
+                }
+                let textX = cellLeft + xOffset
+                // Vertical center: text bottom = cellBottom + (cellHeight - textH)/2.
+                let textY = cellBottom + max(0, (cellHeight - cell.textSize.height) / 2)
+                fs.draw(in: ctx, rect: CGRect(
+                    x: textX, y: textY,
+                    width: min(cell.textSize.width, cellWidth),
+                    height: cell.textSize.height
+                ))
+            }
         }
     }
 

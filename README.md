@@ -981,6 +981,26 @@ render:
 
 The laurel SVGs ship with the renderer; `color` tints both leaves with a solid fill (alpha-mask, so any color works). Two laurels in the same slot follow the same same-align/different-align rules as images.
 
+### Tables
+
+A 2D grid of text with optional borders. Up to two per slide, same slot semantics as images and laurels.
+
+```yaml
+render:
+  tables:
+    - rows:
+        - ["5,064",   "Verbs"]
+        - ["2x more", "than competitors"]
+      text_color: "#FFFFFF"
+      border_color: "#FFD66B"
+      cell_style:
+        weight: bold
+      position: below_subtitle
+      max_height_pct: 14
+```
+
+Use `columns:` instead of `rows:` for column-major content. Rows of unequal length are padded with empty cells, so the grid is always rectangular. Cell font size auto-derives to fit `max_height_pct / row_count` and is applied uniformly to every cell unless you override `cell_style.font_size_pct`. Border defaults to all sides + inner grid lines at width_pct: 0.15; override with `border.sides: [outer]`, `[inner]`, or per-side names like `[top, bottom]`.
+
 ## Device bezels
 
 The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple licenses these for use with Apple products; we don't redistribute.
@@ -1533,6 +1553,10 @@ This tool is for native Apple platforms (iOS, iPadOS, watchOS, macOS). For cross
 
 - Built-in render templates (`ascent`, `all_the_wiser`, `ethereal`, `sahara`, `midnight`, `pinecrest`, `blueprint`, `sunset_blvd`, `jazz_and_wine`) take their names and visual direction from the free MIT-licensed templates at [ButterKit](https://butterkit.app/templates/). The implementations here are independent and no ButterKit code or artwork is bundled. See [Template credits](#template-credits) for more.
 - Device bezel rendering uses PSDs from [Apple Design Resources](https://developer.apple.com/design/resources/). Apple licenses these for use with Apple products; StoreScreens does not redistribute them. Users download the DMGs from Apple and `storescreens bezels import` extracts what it needs locally.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ciscoriordan/storescreens-cli&type=Date)](https://www.star-history.com/#ciscoriordan/storescreens-cli&Date)
 
 ## License
 

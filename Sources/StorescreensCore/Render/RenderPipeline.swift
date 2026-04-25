@@ -217,17 +217,18 @@ package struct RenderPipeline {
         let overlayPlacer = OverlayPlacer(baseDirectory: baseDirectory, fontResolver: fontResolver)
         let images = RenderResolver.resolvedImages(config: config, slideName: slideName)
         let laurels = RenderResolver.resolvedLaurels(config: config, slideName: slideName)
+        let tables = RenderResolver.resolvedTables(config: config, slideName: slideName)
 
         let aboveTitleBandH = overlayPlacer.reservedHeight(
-            position: .aboveTitle, images: images, laurels: laurels,
+            position: .aboveTitle, images: images, laurels: laurels, tables: tables,
             appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
         let middleSlotH = overlayPlacer.reservedHeight(
-            position: .belowTitle, images: images, laurels: laurels,
+            position: .belowTitle, images: images, laurels: laurels, tables: tables,
             appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
         let belowSubtitleBandH = overlayPlacer.reservedHeight(
-            position: .belowSubtitle, images: images, laurels: laurels,
+            position: .belowSubtitle, images: images, laurels: laurels, tables: tables,
             appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
 
@@ -267,7 +268,7 @@ package struct RenderPipeline {
                 height: aboveTitleBandH
             )
             let warns = overlayPlacer.drawSlot(
-                position: .aboveTitle, images: images, laurels: laurels,
+                position: .aboveTitle, images: images, laurels: laurels, tables: tables,
                 appearance: appearance, slotRect: aboveRect,
                 canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
                 into: ctx
@@ -339,7 +340,7 @@ package struct RenderPipeline {
         // --- Layer 5: middle-slot overlays (between title and subtitle) ---
         if middleSlotRectBL.height > 0 {
             let warns = overlayPlacer.drawSlot(
-                position: .belowTitle, images: images, laurels: laurels,
+                position: .belowTitle, images: images, laurels: laurels, tables: tables,
                 appearance: appearance, slotRect: middleSlotRectBL,
                 canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
                 into: ctx
@@ -356,7 +357,7 @@ package struct RenderPipeline {
                 height: belowSubtitleBandH
             )
             let warns = overlayPlacer.drawSlot(
-                position: .belowSubtitle, images: images, laurels: laurels,
+                position: .belowSubtitle, images: images, laurels: laurels, tables: tables,
                 appearance: appearance, slotRect: belowRect,
                 canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
                 into: ctx

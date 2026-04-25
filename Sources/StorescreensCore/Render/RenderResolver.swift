@@ -30,10 +30,11 @@ package enum RenderResolver {
             scrim: mergeScrim(base: t.scrim, override: config.scrim),
             logo: mergeLogo(base: t.logo, override: config.logo),
             // Arrays replace wholesale: a user-supplied non-nil array fully
-            // shadows the template's. Templates rarely ship images/laurels
+            // shadows the template's. Templates rarely ship overlay arrays
             // anyway; this keeps the precedence rule predictable.
             images: config.images ?? t.images,
             laurels: config.laurels ?? t.laurels,
+            tables: config.tables ?? t.tables,
             caption: mergeCaption(base: t.caption, override: config.caption),
             chrome: mergeChrome(base: t.chrome, override: config.chrome),
             slides: config.slides ?? t.slides
@@ -133,6 +134,16 @@ package enum RenderResolver {
     ) -> [LaurelConfig] {
         let slide = config.slides?[slideName]
         let resolved = slide?.laurels ?? config.laurels ?? []
+        return Array(resolved.prefix(2))
+    }
+
+    /// Resolved table overlays. Same precedence and cap rules as `images`.
+    package static func resolvedTables(
+        config: RenderConfig,
+        slideName: String
+    ) -> [TableConfig] {
+        let slide = config.slides?[slideName]
+        let resolved = slide?.tables ?? config.tables ?? []
         return Array(resolved.prefix(2))
     }
 
