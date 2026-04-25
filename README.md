@@ -887,7 +887,7 @@ caption:
     align: right
 ```
 
-The caption block as a whole can be vertically positioned inside its reserved band, and both captions and logos accept a fine-grained `nudge`:
+The caption block as a whole can be vertically positioned inside its reserved band, and captions, images, laurels, and logos all accept a fine-grained `nudge`:
 
 ```yaml
 caption:
@@ -903,6 +903,82 @@ logo:
 ```
 
 `nudge.x_pct` and `nudge.y_pct` are percentages of the canvas width and height respectively, so offsets stay the same relative size across iPhone 6.9", iPad 13", and Mac renders. Both are optional; omit a field and it's treated as zero.
+
+### Images
+
+Up to two image overlays per slide, dropped into one of three slots around the caption block. Each entry is independent: each has its own path, slot, alignment, and nudge.
+
+```yaml
+render:
+  images:
+    - path: ./marketing/logo-wordmark.svg
+      position: above_title       # above_title | below_title | above_subtitle | below_subtitle
+      align: center               # left | center (default) | right
+      max_height_pct: 6           # % of canvas height; default 8
+      placement: first_only       # first_only | all | none
+```
+
+`below_title` and `above_subtitle` are aliases for the same physical slot (the gap between the title and subtitle text); pick whichever reads more naturally. `placement` defaults to `first_only` for the `above_title` slot and `all` for every other slot, matching the "logo on slide 1, badges on every slide" convention.
+
+Two images in the same slot stack horizontally:
+
+```yaml
+render:
+  images:
+    - path: ./marketing/badge-editors-choice.png
+      position: below_subtitle
+      align: center
+      max_height_pct: 9
+    - path: ./marketing/badge-press.png
+      position: below_subtitle
+      align: center
+      max_height_pct: 9
+```
+
+Stacking and conflict rules when two items land in the same slot:
+
+- Same `align` value: stacked horizontally as a single group, then aligned together inside the slot.
+- Different `align` values: each placed independently at its own align (may overlap if the slot is narrow).
+
+`path` accepts a `{ light:, dark: }` variant the same way `background.image` does, so a wordmark can swap between dark/light files when rendering both appearances.
+
+The legacy `logo:` block still works and is treated as a single image at `above_title`. Setting `images: []` (an explicitly empty array) suppresses that legacy fallback.
+
+### Laurels
+
+A laurel "award badge" overlay - left and right laurel SVGs flanking centered title and subtitle text, tinted to a single color. Up to two per slide, same slot rules as `images`.
+
+```yaml
+render:
+  laurels:
+    - title: "Editors' Choice"
+      subtitle: "App Store"
+      color: "#FFD66B"               # single hex, or { light:, dark: } variant
+      position: below_subtitle       # default; same slots as images
+      align: center
+      max_height_pct: 11
+      placement: all                 # default; laurels usually repeat
+```
+
+`title` is bold by default, `subtitle` is regular. Override per-role with `title_style` and `subtitle_style`, which take the same fields as `caption.title` / `caption.subtitle` (font, weight, italic, font_size_pct, color, align):
+
+```yaml
+render:
+  laurels:
+    - title: "4.9"
+      subtitle: "200k reviews"
+      color:
+        light: "#1A1F2E"
+        dark:  "#FFD66B"
+      title_style:
+        font_size_pct: 4.0
+        weight: heavy
+      subtitle_style:
+        font_size_pct: 2.4
+        italic: true
+```
+
+The laurel SVGs ship with the renderer; `color` tints both leaves with a solid fill (alpha-mask, so any color works). Two laurels in the same slot follow the same same-align/different-align rules as images.
 
 ## Device bezels
 

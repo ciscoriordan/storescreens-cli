@@ -210,6 +210,189 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertEqual(l.nudge?.yPct, 4)
     }
 
+    // MARK: - Images decoding
+
+    func testImages_decode_full() throws {
+        let yaml = """
+            images:
+              - path: ./logo.png
+                position: above_title
+                align: center
+                max_height_pct: 9
+                placement: first_only
+                nudge:
+                  x_pct: 1
+                  y_pct: -2
+              - path: ./badge.png
+                position: below_subtitle
+                align: right
+                max_height_pct: 12
+                placement: all
+                nudge:
+                  x_pct: -3
+            """
+        let imgs: [ImageConfig] = try decodeNested(yaml, key: "images")
+        XCTAssertEqual(imgs.count, 2)
+
+        XCTAssertEqual(imgs[0].path?.value(for: "light"), "./logo.png")
+        XCTAssertEqual(imgs[0].position, .aboveTitle)
+        XCTAssertEqual(imgs[0].align, .center)
+        XCTAssertEqual(imgs[0].maxHeightPct, 9)
+        XCTAssertEqual(imgs[0].placement, .firstOnly)
+        XCTAssertEqual(imgs[0].nudge?.xPct, 1)
+        XCTAssertEqual(imgs[0].nudge?.yPct, -2)
+
+        XCTAssertEqual(imgs[1].path?.value(for: "light"), "./badge.png")
+        XCTAssertEqual(imgs[1].position, .belowSubtitle)
+        XCTAssertEqual(imgs[1].align, .right)
+        XCTAssertEqual(imgs[1].maxHeightPct, 12)
+        XCTAssertEqual(imgs[1].placement, .all)
+        XCTAssertEqual(imgs[1].nudge?.xPct, -3)
+        XCTAssertNil(imgs[1].nudge?.yPct, "unset y_pct must remain nil")
+    }
+
+    func testImages_decode_minimal() throws {
+        let yaml = """
+            images:
+              - path: ./logo.png
+            """
+        let imgs: [ImageConfig] = try decodeNested(yaml, key: "images")
+        XCTAssertEqual(imgs.count, 1)
+        XCTAssertEqual(imgs[0].path?.value(for: "light"), "./logo.png")
+        XCTAssertNil(imgs[0].position, "position must remain nil so resolver fills default")
+        XCTAssertNil(imgs[0].align, "align must remain nil so resolver fills default")
+        XCTAssertNil(imgs[0].maxHeightPct)
+        XCTAssertNil(imgs[0].placement)
+        XCTAssertNil(imgs[0].nudge)
+    }
+
+    func testLaurels_decode_full() throws {
+        let yaml = """
+            laurels:
+              - title: Editor's Choice
+                subtitle: 2026
+                title_style:
+                  color: "#feb909"
+                subtitle_style:
+                  color: "#cccccc"
+                color: "#ffffff"
+                position: below_subtitle
+                align: center
+                max_height_pct: 11
+                placement: all
+                nudge:
+                  x_pct: 0.5
+                  y_pct: 1
+            """
+        let laurels: [LaurelConfig] = try decodeNested(yaml, key: "laurels")
+        XCTAssertEqual(laurels.count, 1)
+
+        let l = laurels[0]
+        XCTAssertEqual(l.title?.lines, ["Editor's Choice"])
+        XCTAssertEqual(l.subtitle?.lines, ["2026"])
+        XCTAssertEqual(l.titleStyle?.color, "#feb909")
+        XCTAssertEqual(l.subtitleStyle?.color, "#cccccc")
+        XCTAssertEqual(l.color?.value(for: "light"), "#ffffff")
+        XCTAssertEqual(l.position, .belowSubtitle)
+        XCTAssertEqual(l.align, .center)
+        XCTAssertEqual(l.maxHeightPct, 11)
+        XCTAssertEqual(l.placement, .all)
+        XCTAssertEqual(l.nudge?.xPct, 0.5)
+        XCTAssertEqual(l.nudge?.yPct, 1)
+    }
+
+    // MARK: - Resolved images / laurels
+
+    func testResolveImages_slideOverrideReplacesArray() {
+        let a = ImageConfig(path: .shared("./a.png"), position: .aboveTitle)
+        let b = ImageConfig(path: .shared("./b.png"), position: .belowSubtitle)
+        let c = ImageConfig(path: .shared("./c.png"), position: .belowTitle)
+
+        let config = RenderConfig(
+            images: [a, b],
+            slides: [
+                "01_Home": SlideOverride(images: [c]),
+            ]
+        )
+
+        let resolvedHome = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolvedHome.count, 1, "slide override replaces the array wholesale")
+        XCTAssertEqual(resolvedHome[0].path?.value(for: "light"), "./c.png")
+
+        let resolvedOther = RenderResolver.resolvedImages(config: config, slideName: "02_Unknown")
+        XCTAssertEqual(resolvedOther.count, 2, "unknown slide inherits top-level images")
+        XCTAssertEqual(resolvedOther[0].path?.value(for: "light"), "./a.png")
+        XCTAssertEqual(resolvedOther[1].path?.value(for: "light"), "./b.png")
+    }
+
+    func testResolveImages_legacyLogoSynthesized() {
+        let config = RenderConfig(
+            logo: LogoConfig(
+                path: .shared("./logo.png"),
+                placement: .firstOnly,
+                maxHeightPct: 7,
+                nudge: NudgeConfig(yPct: 2)
+            )
+        )
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 1, "legacy logo block must synthesize a single image")
+
+        let img = resolved[0]
+        XCTAssertEqual(img.path?.value(for: "light"), "./logo.png")
+        XCTAssertEqual(img.position, .aboveTitle, "legacy logo always lands at above_title")
+        XCTAssertEqual(img.maxHeightPct, 7)
+        XCTAssertEqual(img.placement, .firstOnly)
+        XCTAssertEqual(img.nudge?.yPct, 2)
+    }
+
+    func testResolveImages_imagesArrayOverridesLogo() {
+        let img = ImageConfig(path: .shared("./img.png"), position: .belowSubtitle)
+        let config = RenderConfig(
+            logo: LogoConfig(path: .shared("./logo.png")),
+            images: [img]
+        )
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertEqual(resolved[0].path?.value(for: "light"), "./img.png",
+                       "explicit images: must win over legacy logo:")
+    }
+
+    func testResolveImages_emptyImagesArrayDoesNotFallBackToLogo() {
+        let config = RenderConfig(
+            logo: LogoConfig(path: .shared("./logo.png")),
+            images: []
+        )
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 0, "explicit empty images: suppresses legacy logo fallback")
+    }
+
+    func testResolveImages_capsAtTwo() {
+        let imgs: [ImageConfig] = (0..<4).map {
+            ImageConfig(path: .shared("./img\($0).png"))
+        }
+        let config = RenderConfig(images: imgs)
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 2, "more than 2 entries must be truncated")
+        XCTAssertEqual(resolved[0].path?.value(for: "light"), "./img0.png")
+        XCTAssertEqual(resolved[1].path?.value(for: "light"), "./img1.png")
+    }
+
+    func testResolveLaurels_capsAtTwo() {
+        let laurels: [LaurelConfig] = (0..<4).map {
+            LaurelConfig(title: .string("L\($0)"))
+        }
+        let config = RenderConfig(laurels: laurels)
+
+        let resolved = RenderResolver.resolvedLaurels(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 2, "more than 2 entries must be truncated")
+        XCTAssertEqual(resolved[0].title?.lines, ["L0"])
+        XCTAssertEqual(resolved[1].title?.lines, ["L1"])
+    }
+
     // MARK: - Merge behavior for nudge
 
     func testMergeLogo_slideNudge_wins() {

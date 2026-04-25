@@ -5,12 +5,13 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// Orchestrates the per-slide render for a whole `CaptureManifest`.
-/// Layer stack per slide (bottom → top):
+/// Layer stack per slide (bottom -> top):
 ///   1. Background (solid + image, light/dark variant)
 ///   2. Scrim (solid or gradient)
-///   3. Logo (first slide in each device/locale/appearance combo)
-///   4. Caption block (reserved height band at the top)
-///   5. Chrome + screenshot (beneath caption, with padding)
+///   3. above_title overlay band (images / laurels at the top of the canvas)
+///   4. Caption block (title + optional middle-slot overlays + subtitle)
+///   5. below_subtitle overlay band (between caption and device)
+///   6. Chrome + screenshot
 package struct RenderPipeline {
 
     package let config: RenderConfig
@@ -205,28 +206,29 @@ package struct RenderPipeline {
 
         // --- Pre-compute the layout spine -----------------------------------
         //
-        // The pre-2.1 pipeline drew logo → caption → chrome in order,
-        // computing `reservedTop` (= logoBand + captionBand) only at
-        // chrome time. That meant logo and caption centered inside
-        // their own reservation bands and the chrome inset below
-        // (`chrome.padding_pct × (canvas - reservedTop)`) silently
-        // pushed the device down below those bands — so the vertical
-        // gap between text/logo and the device was always the
-        // in-band gap PLUS the chrome inset, and equidistant
-        // placement was literally impossible.
-        //
-        // The fix: measure the full layout spine upfront. `deviceTopY`
-        // (screen coords, measured from canvas top) is where the
-        // visible device edge lands after chrome insets. Logo and
-        // caption then center vertically in the [canvas top,
-        // deviceTopY] range (or in its logo/caption split when both
-        // are present), making each one literally equidistant from
-        // the canvas top and the device top.
-        let logoPlacer = LogoPlacer(baseDirectory: baseDirectory)
-        let logoConfig = RenderResolver.resolvedLogo(config: config, slideName: slideName)
-        let logoReservedH = logoPlacer.reservedHeight(
-            logoConfig, appearance: appearance,
-            canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
+        // Three overlay bands wrap the caption: above_title at the top
+        // of the canvas, a middle slot embedded in the caption block
+        // (between title and subtitle), and below_subtitle between the
+        // caption and the device. The caption's `min_height_pct` floor
+        // grows by the middle-slot height so adding a slot does not
+        // squeeze the text. Chrome inset is taken from the remaining
+        // space so device top moves down predictably as the user adds
+        // overlays.
+        let overlayPlacer = OverlayPlacer(baseDirectory: baseDirectory, fontResolver: fontResolver)
+        let images = RenderResolver.resolvedImages(config: config, slideName: slideName)
+        let laurels = RenderResolver.resolvedLaurels(config: config, slideName: slideName)
+
+        let aboveTitleBandH = overlayPlacer.reservedHeight(
+            position: .aboveTitle, images: images, laurels: laurels,
+            appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
+        )
+        let middleSlotH = overlayPlacer.reservedHeight(
+            position: .belowTitle, images: images, laurels: laurels,
+            appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
+        )
+        let belowSubtitleBandH = overlayPlacer.reservedHeight(
+            position: .belowSubtitle, images: images, laurels: laurels,
+            appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
         )
 
         let captionResolved = RenderResolver.resolvedCaption(
@@ -236,39 +238,45 @@ package struct RenderPipeline {
             guard let cr = captionResolved else { return false }
             return cr.title != nil || cr.subtitle != nil
         }()
-        let captionReservedH: CGFloat = {
+        let captionTextH: CGFloat = {
             guard hasCaption, let cr = captionResolved else { return 0 }
             let minHeightPct = CGFloat(cr.minHeightPct ?? 22)
             return canvasSize.height * minHeightPct / 100.0
         }()
+        // When middle-slot items exist without a caption, the slot still
+        // gets its own band sized by `middleSlotH`. When the caption is
+        // present, the slot lives inside the caption band.
+        let captionBandH = captionTextH + middleSlotH
 
-        let reservedTop = logoReservedH + captionReservedH
+        let reservedTop = aboveTitleBandH + captionBandH + belowSubtitleBandH
         let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
         let chromePaddingPct = CGFloat(chromeConfig?.paddingPct ?? 4)
         let chromeInsetDy = (canvasSize.height - reservedTop) * chromePaddingPct / 100.0
         // Top of the visible device in screen coordinates (distance
-        // from canvas top). In bottom-left Core Graphics coordinates
-        // this corresponds to `canvasSize.height - deviceTopY`.
+        // from canvas top). In bottom-left CG coords this is
+        // `canvasSize.height - deviceTopY`.
         let deviceTopY = reservedTop + chromeInsetDy
         let deviceTopBL = canvasSize.height - deviceTopY
 
-        // --- Layer 3: logo (first-slide only, per combo) ---
-        //
-        // Logo's centering range: the portion of [canvas top, device
-        // top] above the caption's space. When no caption exists on
-        // this slide the range collapses to [canvas top, device top],
-        // which is what the "equidistant" spec asks for on hero
-        // slides.
-        let logoBandBottomBL = deviceTopBL + captionReservedH
-        let logoCenterBL = (canvasSize.height + logoBandBottomBL) / 2
-        logoPlacer.drawLogo(
-            logoConfig, appearance: appearance,
-            isFirstInCombo: isFirstInCombo,
-            into: ctx, canvasSize: canvasSize,
-            verticalCenterY: logoCenterBL
-        )
+        // --- Layer 3: above_title overlays ---
+        if aboveTitleBandH > 0 {
+            let aboveRect = CGRect(
+                x: 0,
+                y: canvasSize.height - aboveTitleBandH,
+                width: canvasSize.width,
+                height: aboveTitleBandH
+            )
+            let warns = overlayPlacer.drawSlot(
+                position: .aboveTitle, images: images, laurels: laurels,
+                appearance: appearance, slotRect: aboveRect,
+                canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
+                into: ctx
+            )
+            for w in warns { warnings.append("[\(slideName)] \(w)") }
+        }
 
-        // --- Layer 4: caption ---
+        // --- Layer 4: caption (with embedded middle-slot gap) ---
+        var middleSlotRectBL: CGRect = .zero
         if hasCaption, let cr = captionResolved {
             let paddingPct = CGFloat(cr.paddingPct ?? 4)
             let spacingPct = CGFloat(cr.spacingPct ?? 1.2)
@@ -284,45 +292,76 @@ package struct RenderPipeline {
                 subtitleStyleRaw: cr.subtitleStyle,
                 highlights: cr.highlights,
                 canvasSize: canvasSize,
-                reservedHeight: captionReservedH,
+                reservedHeight: captionBandH,
                 blockWidth: blockWidth,
-                spacing: spacing
+                spacing: spacing,
+                middleSlotHeight: middleSlotH
             )
             for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
 
-            // Caption placement inside its band.
-            //
-            // Band = [captionBandBottomBL, captionBandTopBL] in bottom-left
-            // CG coords. `verticalAlign` picks top / center (default) / bottom
-            // within the band; `nudge` then adds a user-specified offset
-            // measured in canvas-percent.
-            let captionBandTopBL = canvasSize.height - logoReservedH
-            let captionBandBottomBL = deviceTopBL
+            // Band = [captionBandBottomBL, captionBandTopBL] in BL coords.
+            // verticalAlign picks top / center (default) / bottom; nudge
+            // shifts after that.
+            let captionBandTopBL = canvasSize.height - aboveTitleBandH
+            let captionBandBottomBL = captionBandTopBL - captionBandH
 
             let verticalAlign = cr.verticalAlign ?? .center
             let blockBottomY: CGFloat = {
                 switch verticalAlign {
                 case .top:
-                    // Block's top edge hugs the band top.
                     return captionBandTopBL - out.measuredHeight
                 case .center:
                     let mid = (captionBandTopBL + captionBandBottomBL) / 2
                     return mid - out.measuredHeight / 2
                 case .bottom:
-                    // Block's bottom edge hugs the band bottom.
                     return captionBandBottomBL
                 }
             }()
 
             // Nudge: x positive = right, y positive = up (toward screen top).
-            // Y-nudge in CG coords means adding to y (CG origin is bottom-left).
             let nudgeX = CGFloat(cr.nudge?.xPct ?? 0) * canvasSize.width / 100.0
             let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
+            let topLeft = CGPoint(x: padding + nudgeX, y: blockBottomY + nudgeY)
 
-            out.drawable.draw(
-                into: ctx,
-                topLeft: CGPoint(x: padding + nudgeX, y: blockBottomY + nudgeY)
+            out.drawable.draw(into: ctx, topLeft: topLeft)
+            middleSlotRectBL = out.drawable.middleSlotRect(topLeft: topLeft)
+        } else if middleSlotH > 0 {
+            // No caption text: the middle slot occupies its own band
+            // between the above_title and below_subtitle bands.
+            middleSlotRectBL = CGRect(
+                x: 0,
+                y: canvasSize.height - aboveTitleBandH - captionBandH,
+                width: canvasSize.width,
+                height: captionBandH
             )
+        }
+
+        // --- Layer 5: middle-slot overlays (between title and subtitle) ---
+        if middleSlotRectBL.height > 0 {
+            let warns = overlayPlacer.drawSlot(
+                position: .belowTitle, images: images, laurels: laurels,
+                appearance: appearance, slotRect: middleSlotRectBL,
+                canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
+                into: ctx
+            )
+            for w in warns { warnings.append("[\(slideName)] \(w)") }
+        }
+
+        // --- Layer 6: below_subtitle overlays ---
+        if belowSubtitleBandH > 0 {
+            let belowRect = CGRect(
+                x: 0,
+                y: deviceTopBL,
+                width: canvasSize.width,
+                height: belowSubtitleBandH
+            )
+            let warns = overlayPlacer.drawSlot(
+                position: .belowSubtitle, images: images, laurels: laurels,
+                appearance: appearance, slotRect: belowRect,
+                canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
+                into: ctx
+            )
+            for w in warns { warnings.append("[\(slideName)] \(w)") }
         }
 
         // --- Layer 5: chrome + screenshot ---

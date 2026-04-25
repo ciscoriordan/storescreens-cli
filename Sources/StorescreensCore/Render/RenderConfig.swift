@@ -15,6 +15,15 @@ package struct RenderConfig: Codable, Sendable {
     package var background: BackgroundConfig?
     package var scrim: ScrimConfig?
     package var logo: LogoConfig?
+    /// Image overlays drawn near the caption. Up to two entries; entries past
+    /// the second are dropped at render time with a warning. When `images` is
+    /// non-empty, a legacy `logo:` block is ignored. When `images` is nil/empty
+    /// the legacy `logo:` is treated as a single `above_title` image so old
+    /// configs keep working unchanged.
+    package var images: [ImageConfig]?
+    /// Laurel overlays: left/right laurel SVGs flanking centered text. Up to
+    /// two entries; same slot rules as `images`.
+    package var laurels: [LaurelConfig]?
     package var caption: CaptionConfig?
     package var chrome: ChromeConfig?
     /// Per-slide overrides keyed by screenshot name (exact match, not substring).
@@ -27,6 +36,8 @@ package struct RenderConfig: Codable, Sendable {
         background: BackgroundConfig? = nil,
         scrim: ScrimConfig? = nil,
         logo: LogoConfig? = nil,
+        images: [ImageConfig]? = nil,
+        laurels: [LaurelConfig]? = nil,
         caption: CaptionConfig? = nil,
         chrome: ChromeConfig? = nil,
         slides: [String: SlideOverride]? = nil
@@ -37,6 +48,8 @@ package struct RenderConfig: Codable, Sendable {
         self.background = background
         self.scrim = scrim
         self.logo = logo
+        self.images = images
+        self.laurels = laurels
         self.caption = caption
         self.chrome = chrome
         self.slides = slides
@@ -46,7 +59,7 @@ package struct RenderConfig: Codable, Sendable {
         case enabled
         case outputDir = "output_dir"
         case template
-        case background, scrim, logo, caption, chrome, slides
+        case background, scrim, logo, images, laurels, caption, chrome, slides
     }
 }
 
@@ -56,6 +69,12 @@ package struct SlideOverride: Codable, Sendable {
     package var background: BackgroundConfig?
     package var scrim: ScrimConfig?
     package var logo: LogoConfig?
+    /// Per-slide image overlays. When set (even to an empty array) replaces
+    /// the top-level `images:` wholesale for this slide; partial-element
+    /// merging is intentionally not supported because its semantics are
+    /// ambiguous when the user wants to drop slot 0 but keep slot 1.
+    package var images: [ImageConfig]?
+    package var laurels: [LaurelConfig]?
     package var caption: SlideCaption?
     package var chrome: ChromeConfig?
 
@@ -77,6 +96,8 @@ package struct SlideOverride: Codable, Sendable {
         background: BackgroundConfig? = nil,
         scrim: ScrimConfig? = nil,
         logo: LogoConfig? = nil,
+        images: [ImageConfig]? = nil,
+        laurels: [LaurelConfig]? = nil,
         caption: SlideCaption? = nil,
         chrome: ChromeConfig? = nil,
         captionLocales: [String: CaptionText]? = nil
@@ -84,13 +105,15 @@ package struct SlideOverride: Codable, Sendable {
         self.background = background
         self.scrim = scrim
         self.logo = logo
+        self.images = images
+        self.laurels = laurels
         self.caption = caption
         self.chrome = chrome
         self.captionLocales = captionLocales
     }
 
     package enum CodingKeys: String, CodingKey {
-        case background, scrim, logo, caption, chrome
+        case background, scrim, logo, images, laurels, caption, chrome
         case captionLocales = "caption_locales"
     }
 }
@@ -359,6 +382,138 @@ package enum LogoPlacement: String, Codable, Sendable {
     case firstOnly = "first_only"
     case all
     case none
+}
+
+// MARK: - Overlays (images + laurels)
+
+/// Where an overlay (image or laurel) sits relative to the caption block.
+/// `belowTitle` and `aboveSubtitle` are aliases for the same slot, the
+/// gap between the title and subtitle text. When the slide has no subtitle,
+/// `aboveSubtitle` and `belowSubtitle` collapse to "directly under the title"
+/// (i.e. the band between the title baseline and the device top).
+package enum OverlayPosition: String, Codable, Sendable {
+    case aboveTitle = "above_title"
+    case belowTitle = "below_title"
+    case aboveSubtitle = "above_subtitle"
+    case belowSubtitle = "below_subtitle"
+
+    /// `belowTitle` and `aboveSubtitle` collapse to the same physical slot.
+    package var canonicalSlot: OverlayPosition {
+        switch self {
+        case .belowTitle, .aboveSubtitle: return .belowTitle
+        default: return self
+        }
+    }
+}
+
+/// First-only / all / none. Controls per-slide visibility for an overlay.
+/// Same semantics as `LogoPlacement` (kept separate so the legacy logo type
+/// can stay frozen for backwards compatibility).
+package enum OverlayPlacement: String, Codable, Sendable {
+    case firstOnly = "first_only"
+    case all
+    case none
+}
+
+/// Image overlay drawn near the caption. Up to two entries may share a slot;
+/// stacking + alignment is handled by `OverlayPlacer`.
+package struct ImageConfig: Codable, Sendable {
+    /// File path to the image (relative to the config dir, absolute, or `~/`).
+    /// May be a `{ light, dark }` variant, same as `background.image`.
+    package var path: AppearanceVariant<String>?
+    /// Slot the image lands in. Default: `above_title` (matches legacy logo
+    /// placement so a single image with no `position:` reads naturally).
+    package var position: OverlayPosition?
+    /// Horizontal alignment within the slot. Default: `center`.
+    package var align: CaptionAlign?
+    /// Image height as a percentage of canvas height. Default: 8.
+    package var maxHeightPct: Double?
+    /// Per-slide visibility. Default: `first_only` for `above_title`, `all`
+    /// for every other position. (Re-applied at render time; the field stays
+    /// a flat optional here so the merge logic is simple.)
+    package var placement: OverlayPlacement?
+    /// Fine-tune position. See `NudgeConfig` for units.
+    package var nudge: NudgeConfig?
+
+    package init(
+        path: AppearanceVariant<String>? = nil,
+        position: OverlayPosition? = nil,
+        align: CaptionAlign? = nil,
+        maxHeightPct: Double? = nil,
+        placement: OverlayPlacement? = nil,
+        nudge: NudgeConfig? = nil
+    ) {
+        self.path = path
+        self.position = position
+        self.align = align
+        self.maxHeightPct = maxHeightPct
+        self.placement = placement
+        self.nudge = nudge
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case path, position, align, placement, nudge
+        case maxHeightPct = "max_height_pct"
+    }
+}
+
+/// Laurel overlay: left + right laurel SVGs flanking centered title/subtitle
+/// text. Up to two entries per slide; same slot rules as `ImageConfig`. The
+/// laurel SVGs are bundled with `StorescreensCore` and tinted via `color`
+/// (alpha-mask + fill, so any solid color works).
+package struct LaurelConfig: Codable, Sendable {
+    /// Title text rendered between the laurels (top line, bold by default).
+    package var title: CaptionText?
+    /// Subtitle text rendered below the title (regular by default).
+    package var subtitle: CaptionText?
+    /// Title style overrides. Defaults: bold, `color` from `LaurelConfig.color`.
+    package var titleStyle: CaptionRole?
+    /// Subtitle style overrides. Defaults: regular, `color` from `LaurelConfig.color`.
+    package var subtitleStyle: CaptionRole?
+    /// Laurel tint color (single hex or `{ light, dark }`). Defaults to white.
+    package var color: AppearanceVariant<String>?
+    /// Slot the laurel block sits in. Default: `below_subtitle` (the natural
+    /// "award badge" position under the caption).
+    package var position: OverlayPosition?
+    /// Horizontal alignment of the laurel block within its slot. Default: center.
+    package var align: CaptionAlign?
+    /// Block height (laurel + text) as a percentage of canvas height. Default: 10.
+    package var maxHeightPct: Double?
+    /// Per-slide visibility. Default: `all` (laurels usually want to repeat).
+    package var placement: OverlayPlacement?
+    /// Fine-tune position.
+    package var nudge: NudgeConfig?
+
+    package init(
+        title: CaptionText? = nil,
+        subtitle: CaptionText? = nil,
+        titleStyle: CaptionRole? = nil,
+        subtitleStyle: CaptionRole? = nil,
+        color: AppearanceVariant<String>? = nil,
+        position: OverlayPosition? = nil,
+        align: CaptionAlign? = nil,
+        maxHeightPct: Double? = nil,
+        placement: OverlayPlacement? = nil,
+        nudge: NudgeConfig? = nil
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.titleStyle = titleStyle
+        self.subtitleStyle = subtitleStyle
+        self.color = color
+        self.position = position
+        self.align = align
+        self.maxHeightPct = maxHeightPct
+        self.placement = placement
+        self.nudge = nudge
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case title, subtitle, color, position, align, placement, nudge
+        case titleStyle = "title_style"
+        case subtitleStyle = "subtitle_style"
+        case maxHeightPct = "max_height_pct"
+    }
 }
 
 // MARK: - Chrome

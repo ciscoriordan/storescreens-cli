@@ -29,6 +29,11 @@ package enum RenderResolver {
             background: mergeBackground(base: t.background, override: config.background),
             scrim: mergeScrim(base: t.scrim, override: config.scrim),
             logo: mergeLogo(base: t.logo, override: config.logo),
+            // Arrays replace wholesale: a user-supplied non-nil array fully
+            // shadows the template's. Templates rarely ship images/laurels
+            // anyway; this keeps the precedence rule predictable.
+            images: config.images ?? t.images,
+            laurels: config.laurels ?? t.laurels,
             caption: mergeCaption(base: t.caption, override: config.caption),
             chrome: mergeChrome(base: t.chrome, override: config.chrome),
             slides: config.slides ?? t.slides
@@ -75,6 +80,60 @@ package enum RenderResolver {
         let base = config.logo
         let override = config.slides?[slideName]?.logo
         return mergeLogo(base: base, override: override)
+    }
+
+    /// Resolved image overlays for a slide. Slide-level `images:` (when
+    /// non-nil) replaces the top-level array wholesale; element-by-element
+    /// merging is intentionally not supported because its semantics get
+    /// ambiguous when a user wants to drop slot 0 but keep slot 1.
+    ///
+    /// When the resolved array is empty, we fall back to synthesizing an
+    /// `above_title` image from the legacy `logo:` block so configs written
+    /// before 2.4 keep rendering with no edits.
+    ///
+    /// Capped at the first two entries; extras are silently truncated (the
+    /// pipeline emits a warning when more than two are present).
+    package static func resolvedImages(
+        config: RenderConfig,
+        slideName: String
+    ) -> [ImageConfig] {
+        let slide = config.slides?[slideName]
+        let resolved = slide?.images ?? config.images ?? []
+
+        if !resolved.isEmpty {
+            return Array(resolved.prefix(2))
+        }
+
+        // Legacy-logo fallback: an existing `logo:` block becomes a single
+        // above-title image. Empty `images: []` (explicitly set by the
+        // user) does NOT trigger the fallback because the array is non-nil,
+        // only an entirely-omitted block does.
+        if config.images != nil || slide?.images != nil {
+            return []
+        }
+        let mergedLogo = mergeLogo(base: config.logo, override: slide?.logo)
+        guard let logo = mergedLogo, logo.path != nil else { return [] }
+        let placement: OverlayPlacement? = logo.placement.map {
+            OverlayPlacement(rawValue: $0.rawValue) ?? .firstOnly
+        }
+        return [ImageConfig(
+            path: logo.path,
+            position: .aboveTitle,
+            align: .center,
+            maxHeightPct: logo.maxHeightPct,
+            placement: placement,
+            nudge: logo.nudge
+        )]
+    }
+
+    /// Resolved laurel overlays. Same precedence and cap rules as `images`.
+    package static func resolvedLaurels(
+        config: RenderConfig,
+        slideName: String
+    ) -> [LaurelConfig] {
+        let slide = config.slides?[slideName]
+        let resolved = slide?.laurels ?? config.laurels ?? []
+        return Array(resolved.prefix(2))
     }
 
     package static func resolvedChrome(

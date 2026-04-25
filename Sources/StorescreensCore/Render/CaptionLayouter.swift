@@ -53,30 +53,79 @@ package struct CaptionLayouter {
         let subtitleSize: CGSize
         let spacing: CGFloat
         let blockWidth: CGFloat
+        /// Height of an optional vertical gap reserved between title and
+        /// subtitle for image / laurel overlays. Zero means no slot. The
+        /// rendered text simply ignores this region; the caller queries
+        /// `middleSlotRect(topLeft:)` to draw into it.
+        let middleSlotHeight: CGFloat
 
         /// Draws the caption block with its bottom-left corner at `topLeft`
-        /// inside `ctx`. `topLeft.y` is in bottom-left (CG) coords — it's the
+        /// inside `ctx`. `topLeft.y` is in bottom-left (CG) coords - it's the
         /// y of the caption block's BOTTOM edge; the top of the block is at
-        /// `topLeft.y + totalHeight`. Title sits on top, subtitle below it.
+        /// `topLeft.y + totalHeight`. Title sits on top, subtitle below it,
+        /// with an optional middle slot gap between them.
         ///
         /// Core Text draws glyphs right-side-up in a natural bottom-left
         /// context. We compute rect coordinates in world space rather than
         /// flipping the CTM (which would mirror the glyphs vertically).
         package func draw(into ctx: CGContext, topLeft: CGPoint) {
-            let totalHeight = titleSize.height + (subtitleSize.height > 0 ? spacing + subtitleSize.height : 0)
+            let titleH = titleSize.height
+            let subH = subtitleSize.height
+            // The gap between title baseline and subtitle baseline (or below
+            // title when subtitle is absent) absorbs the middle slot plus
+            // spacing on either side, so the slot is visually separated from
+            // both text rows.
+            let titleBottomGap: CGFloat
+            if subH > 0 && middleSlotHeight > 0 {
+                titleBottomGap = spacing + middleSlotHeight + spacing
+            } else if subH > 0 {
+                titleBottomGap = spacing
+            } else if middleSlotHeight > 0 {
+                titleBottomGap = spacing + middleSlotHeight
+            } else {
+                titleBottomGap = 0
+            }
+            let totalHeight = titleH + titleBottomGap + subH
             let blockTop = topLeft.y + totalHeight     // world y of the block's top edge
 
-            if let ts = titleFramesetter, titleSize.height > 0 {
+            if let ts = titleFramesetter, titleH > 0 {
                 let x = topLeft.x + alignOffset(for: titleAlign, content: titleSize.width, total: blockWidth)
-                let y = blockTop - titleSize.height     // title's bottom edge
-                ts.draw(in: ctx, rect: CGRect(x: x, y: y, width: titleSize.width, height: titleSize.height))
+                let y = blockTop - titleH               // title's bottom edge
+                ts.draw(in: ctx, rect: CGRect(x: x, y: y, width: titleSize.width, height: titleH))
             }
 
-            if let ss = subtitleFramesetter, subtitleSize.height > 0 {
+            if let ss = subtitleFramesetter, subH > 0 {
                 let x = topLeft.x + alignOffset(for: subtitleAlign, content: subtitleSize.width, total: blockWidth)
                 let y = topLeft.y                       // subtitle's bottom edge = block's bottom edge
-                ss.draw(in: ctx, rect: CGRect(x: x, y: y, width: subtitleSize.width, height: subtitleSize.height))
+                ss.draw(in: ctx, rect: CGRect(x: x, y: y, width: subtitleSize.width, height: subH))
             }
+        }
+
+        /// World-space rectangle (bottom-left CG coords) reserved for an
+        /// image / laurel overlay between title and subtitle, given the same
+        /// `topLeft` passed to `draw()`. Returns `.zero` when no slot was
+        /// reserved. The slot is positioned `spacing` below the title's
+        /// bottom edge.
+        package func middleSlotRect(topLeft: CGPoint) -> CGRect {
+            guard middleSlotHeight > 0 else { return .zero }
+            let titleH = titleSize.height
+            let subH = subtitleSize.height
+            let titleBottomGap: CGFloat
+            if subH > 0 && middleSlotHeight > 0 {
+                titleBottomGap = spacing + middleSlotHeight + spacing
+            } else if subH > 0 {
+                titleBottomGap = spacing
+            } else if middleSlotHeight > 0 {
+                titleBottomGap = spacing + middleSlotHeight
+            } else {
+                titleBottomGap = 0
+            }
+            let totalHeight = titleH + titleBottomGap + subH
+            let blockTop = topLeft.y + totalHeight
+            let titleBottom = blockTop - titleH
+            let slotTop = titleBottom - spacing
+            let slotBottom = slotTop - middleSlotHeight
+            return CGRect(x: topLeft.x, y: slotBottom, width: blockWidth, height: middleSlotHeight)
         }
 
         private func alignOffset(for align: CaptionAlign, content: CGFloat, total: CGFloat) -> CGFloat {
@@ -91,7 +140,10 @@ package struct CaptionLayouter {
     /// Main entry point. `reservedHeight` is the pixel height of the reserved
     /// caption region (usually `canvasSize.height * min_height_pct / 100`).
     /// `blockWidth` is the pixel width available for text (usually canvas
-    /// width minus left/right padding).
+    /// width minus left/right padding). `middleSlotHeight` reserves a vertical
+    /// gap between title and subtitle for an image / laurel overlay; pass 0
+    /// to skip the slot. The slot height is included in fit/shrink decisions
+    /// and in the returned `measuredHeight`.
     package func layout(
         title: CaptionText?,
         subtitle: CaptionText?,
@@ -101,7 +153,8 @@ package struct CaptionLayouter {
         canvasSize: CGSize,
         reservedHeight: CGFloat,
         blockWidth: CGFloat,
-        spacing: CGFloat
+        spacing: CGFloat,
+        middleSlotHeight: CGFloat = 0
     ) throws -> Output {
 
         // If nothing to render, return empty output.
@@ -112,7 +165,8 @@ package struct CaptionLayouter {
                     titleFramesetter: nil, subtitleFramesetter: nil,
                     titleAlign: .center, subtitleAlign: .center,
                     titleSize: .zero, subtitleSize: .zero,
-                    spacing: 0, blockWidth: blockWidth
+                    spacing: 0, blockWidth: blockWidth,
+                    middleSlotHeight: middleSlotHeight
                 )
             )
         }
@@ -122,7 +176,6 @@ package struct CaptionLayouter {
 
         var ratio: CGFloat = 1.0
         var wasShrunk = false
-        var wasTruncated = false
         var warnings: [Warning] = []
 
         while true {
@@ -147,7 +200,19 @@ package struct CaptionLayouter {
             let sH = subtitleMeasure?.size.height ?? 0
             let tW = titleMeasure?.size.width ?? 0
             let sW = subtitleMeasure?.size.width ?? 0
-            let gap = (sH > 0 ? spacing : 0)
+            // Mirror the gap math in Drawable.draw: when both rows are
+            // present the slot is sandwiched by `spacing` on each side; when
+            // only the title is present the slot sits one `spacing` below it.
+            let gap: CGFloat
+            if sH > 0 && middleSlotHeight > 0 {
+                gap = spacing + middleSlotHeight + spacing
+            } else if sH > 0 {
+                gap = spacing
+            } else if middleSlotHeight > 0 {
+                gap = spacing + middleSlotHeight
+            } else {
+                gap = 0
+            }
             let totalH = tH + gap + sH
             let maxLineW = max(tW, sW)
 
@@ -162,7 +227,8 @@ package struct CaptionLayouter {
                     titleSize: titleMeasure?.size ?? .zero,
                     subtitleSize: subtitleMeasure?.size ?? .zero,
                     spacing: spacing,
-                    blockWidth: blockWidth
+                    blockWidth: blockWidth,
+                    middleSlotHeight: middleSlotHeight
                 )
                 return Output(
                     measuredHeight: totalH,
@@ -182,7 +248,6 @@ package struct CaptionLayouter {
             let subtitleBelowFloor = sH == 0 || subtitleTargetSize <= subtitleResolved.minFontSize
 
             if titleBelowFloor && (subtitle == nil || subtitleBelowFloor) {
-                wasTruncated = true
                 warnings.append(Warning(message: "caption did not fit at min font size; truncated with ellipsis"))
                 // Re-layout with a paragraph style that truncates.
                 let tAttrClipped = titleAttr.map { applyTruncation($0) }
@@ -197,12 +262,23 @@ package struct CaptionLayouter {
                     titleSize: tMeasure?.size ?? .zero,
                     subtitleSize: sMeasure?.size ?? .zero,
                     spacing: spacing,
-                    blockWidth: blockWidth
+                    blockWidth: blockWidth,
+                    middleSlotHeight: middleSlotHeight
                 )
                 let th = tMeasure?.size.height ?? 0
                 let sh = sMeasure?.size.height ?? 0
+                let truncatedGap: CGFloat
+                if sh > 0 && middleSlotHeight > 0 {
+                    truncatedGap = spacing + middleSlotHeight + spacing
+                } else if sh > 0 {
+                    truncatedGap = spacing
+                } else if middleSlotHeight > 0 {
+                    truncatedGap = spacing + middleSlotHeight
+                } else {
+                    truncatedGap = 0
+                }
                 return Output(
-                    measuredHeight: th + (sh > 0 ? spacing + sh : 0),
+                    measuredHeight: th + truncatedGap + sh,
                     wasShrunk: true, wasTruncated: true,
                     warnings: warnings, drawable: drawable
                 )

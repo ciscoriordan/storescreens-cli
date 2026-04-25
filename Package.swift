@@ -29,6 +29,9 @@ let package = Package(
             dependencies: [
                 .product(name: "Yams", package: "Yams"),
             ],
+            resources: [
+                .process("Resources"),
+            ],
             plugins: ["GenerateVersion"]
         ),
 

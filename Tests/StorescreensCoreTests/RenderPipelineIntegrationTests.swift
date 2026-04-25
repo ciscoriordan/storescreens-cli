@@ -260,6 +260,268 @@ final class RenderPipelineIntegrationTests: XCTestCase {
         print("--- bezel fixture rendered to \(renderRoot.path) ---")
     }
 
+    // MARK: - Images + laurels
+
+    /// One image at above_title, runs end-to-end with chrome=stroke. Verifies
+    /// the output PNG exists and has non-zero size (read in by ImageIO so we
+    /// know it decoded as a valid image).
+    func testRender_withSingleImageAtAboveTitle_succeeds() async throws {
+        let runRoot = try perTestRoot("image-single-above-title")
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        // Synthesize a screenshot + a small image asset.
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeSyntheticPNG(width: 1320, height: 2868, label: "Home", index: 0,
+                              to: capturedRoot.appendingPathComponent(filename))
+        let logoURL = runRoot.appendingPathComponent("logo.png")
+        try writeSolidColorPNG(width: 96, height: 96, color: .systemBlue, to: logoURL)
+
+        let manifest = singleSlideManifest(filename: filename, deviceType: "iPhone 6.9\"")
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#1a1a2e")),
+            images: [
+                ImageConfig(
+                    path: .shared(logoURL.path),
+                    position: .aboveTitle,
+                    align: .center,
+                    maxHeightPct: 8
+                ),
+            ],
+            caption: CaptionConfig(
+                title: CaptionRole(font: .system, weight: .bold, fontSizePct: 5.5,
+                                   color: "#ffffff", align: .center),
+                minHeightPct: 22, paddingPct: 4
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#ffffff", strokeWidth: 3,
+                                 cornerRadius: .auto, paddingPct: 5),
+            slides: [
+                "01_Home": SlideOverride(caption: SlideCaption(title: .string("Hello"))),
+            ]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(
+            manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot
+        )
+
+        XCTAssertEqual(out.failures.count, 0, "render must not fail; got: \(out.failures)")
+        XCTAssertEqual(out.renderedSlides, 1)
+
+        try assertOutputIsValidPNG(at: renderRoot.appendingPathComponent(filename))
+    }
+
+    /// Two images at the same slot with the same align should stack as a
+    /// horizontal group without crashing.
+    func testRender_withTwoImagesSameAlign_succeeds() async throws {
+        let runRoot = try perTestRoot("image-two-same-align")
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeSyntheticPNG(width: 1320, height: 2868, label: "Home", index: 0,
+                              to: capturedRoot.appendingPathComponent(filename))
+
+        let imgA = runRoot.appendingPathComponent("a.png")
+        let imgB = runRoot.appendingPathComponent("b.png")
+        try writeSolidColorPNG(width: 64, height: 64, color: .systemTeal, to: imgA)
+        try writeSolidColorPNG(width: 64, height: 64, color: .systemPink, to: imgB)
+
+        let manifest = singleSlideManifest(filename: filename, deviceType: "iPhone 6.9\"")
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#101820")),
+            images: [
+                ImageConfig(path: .shared(imgA.path),
+                            position: .aboveTitle, align: .center, maxHeightPct: 6),
+                ImageConfig(path: .shared(imgB.path),
+                            position: .aboveTitle, align: .center, maxHeightPct: 6),
+            ],
+            caption: CaptionConfig(
+                title: CaptionRole(font: .system, weight: .bold, fontSizePct: 5.0,
+                                   color: "#ffffff", align: .center),
+                minHeightPct: 20, paddingPct: 4
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#ffffff", strokeWidth: 3,
+                                 cornerRadius: .auto, paddingPct: 5),
+            slides: [
+                "01_Home": SlideOverride(caption: SlideCaption(title: .string("Pair"))),
+            ]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(
+            manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot
+        )
+
+        XCTAssertEqual(out.failures.count, 0, "render must not fail; got: \(out.failures)")
+        XCTAssertEqual(out.renderedSlides, 1)
+        try assertOutputIsValidPNG(at: renderRoot.appendingPathComponent(filename))
+    }
+
+    /// A config that uses only the legacy `logo:` block (no `images:`) must
+    /// still render — the resolver synthesizes an above_title image from it.
+    func testRender_legacyLogoStillWorks() async throws {
+        let runRoot = try perTestRoot("legacy-logo")
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeSyntheticPNG(width: 1320, height: 2868, label: "Home", index: 0,
+                              to: capturedRoot.appendingPathComponent(filename))
+
+        let logoURL = runRoot.appendingPathComponent("logo.png")
+        try writeSolidColorPNG(width: 96, height: 96, color: .systemOrange, to: logoURL)
+
+        let manifest = singleSlideManifest(filename: filename, deviceType: "iPhone 6.9\"")
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#221122")),
+            logo: LogoConfig(
+                path: .shared(logoURL.path),
+                placement: .firstOnly,
+                maxHeightPct: 8
+            ),
+            caption: CaptionConfig(
+                title: CaptionRole(font: .system, weight: .bold, fontSizePct: 5.0,
+                                   color: "#ffffff", align: .center),
+                minHeightPct: 20, paddingPct: 4
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#ffffff", strokeWidth: 3,
+                                 cornerRadius: .auto, paddingPct: 5),
+            slides: [
+                "01_Home": SlideOverride(caption: SlideCaption(title: .string("Legacy"))),
+            ]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(
+            manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot
+        )
+
+        XCTAssertEqual(out.failures.count, 0,
+                       "legacy logo: block must still render; got: \(out.failures)")
+        XCTAssertEqual(out.renderedSlides, 1)
+        try assertOutputIsValidPNG(at: renderRoot.appendingPathComponent(filename))
+    }
+
+    /// A laurel block under the caption should render without crashing.
+    func testRender_withLaurelBelowSubtitle_succeeds() async throws {
+        let runRoot = try perTestRoot("laurel-below-subtitle")
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeSyntheticPNG(width: 1320, height: 2868, label: "Home", index: 0,
+                              to: capturedRoot.appendingPathComponent(filename))
+
+        let manifest = singleSlideManifest(filename: filename, deviceType: "iPhone 6.9\"")
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#0a0a14")),
+            laurels: [
+                LaurelConfig(
+                    title: .string("Editor's Choice"),
+                    subtitle: .string("2026"),
+                    color: .shared("#ffffff"),
+                    position: .belowSubtitle,
+                    align: .center,
+                    maxHeightPct: 10
+                ),
+            ],
+            caption: CaptionConfig(
+                title: CaptionRole(font: .system, weight: .bold, fontSizePct: 5.0,
+                                   color: "#ffffff", align: .center),
+                subtitle: CaptionRole(font: .system, weight: .regular, fontSizePct: 2.8,
+                                      color: "#cccccc", align: .center),
+                minHeightPct: 22, paddingPct: 4
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#ffffff", strokeWidth: 3,
+                                 cornerRadius: .auto, paddingPct: 5),
+            slides: [
+                "01_Home": SlideOverride(caption: SlideCaption(
+                    title: .string("Featured"),
+                    subtitle: .string("Loved by readers")
+                )),
+            ]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(
+            manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot
+        )
+
+        XCTAssertEqual(out.failures.count, 0,
+                       "laurel render must not fail; got: \(out.failures)")
+        XCTAssertEqual(out.renderedSlides, 1)
+        try assertOutputIsValidPNG(at: renderRoot.appendingPathComponent(filename))
+    }
+
+    // MARK: - Image / manifest helpers
+
+    /// Builds a one-device, one-screenshot manifest for the simpler image+laurel
+    /// integration tests. Keeps the test bodies focused on the feature under test.
+    private func singleSlideManifest(filename: String, deviceType: String) -> CaptureManifest {
+        CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "image-laurel-test",
+            appName: "Fixture", displayName: "Fixture", scheme: "Fixture",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: deviceType,
+                    simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [CaptureManifest.Screenshot(
+                        name: "01_Home", filename: filename, capturedAt: Date()
+                    )]
+                ),
+            ]
+        )
+    }
+
+    /// Creates a tiny solid-colored PNG. Used for image-overlay assets in the
+    /// images / laurels render tests.
+    private func writeSolidColorPNG(width: Int, height: Int, color: NSColor, to url: URL) throws {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw NSError(domain: "image-fixture", code: 1) }
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let cg = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { throw NSError(domain: "image-fixture", code: 2) }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw NSError(domain: "image-fixture", code: 3)
+        }
+    }
+
+    /// Confirms that `url` exists, has non-zero file size, and decodes as a
+    /// valid PNG via ImageIO. Common assertion across the image + laurel tests.
+    private func assertOutputIsValidPNG(at url: URL) throws {
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+                      "expected output PNG at \(url.path)")
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attrs[.size] as? Int) ?? 0
+        XCTAssertGreaterThan(size, 0, "output PNG must be non-empty")
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let _ = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            XCTFail("output at \(url.path) is not a decodable PNG")
+            return
+        }
+    }
+
     // MARK: - Synthetic screenshots
 
     /// Creates a distinctively-colored PNG at the requested pixel size with a
