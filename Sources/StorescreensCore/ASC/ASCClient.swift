@@ -256,10 +256,26 @@ package final class ASCClient: @unchecked Sendable {
         return try decoder.decode(Response.self, from: data)
     }
 
+    /// Matches a leading "vDIGITS/" in a path component — callers use this
+    /// to target a non-default API version (e.g. "v2/appAvailabilities") by
+    /// prefixing the version explicitly. Without such a prefix we append to
+    /// the baseURL's built-in /v1.
+    private static let versionPrefixRegex = try! NSRegularExpression(pattern: "^v\\d+/")
+
     private func buildURL(path: String, query: [String: String]) throws -> URL {
         // Accept leading slash for ergonomics.
         let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        guard var comps = URLComponents(url: baseURL.appendingPathComponent(trimmed), resolvingAgainstBaseURL: false) else {
+        // If the path starts with "vN/", strip the default /v1 from
+        // baseURL and join at the host root so the explicit version wins.
+        // Otherwise append to baseURL as before.
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        let base: URL
+        if Self.versionPrefixRegex.firstMatch(in: trimmed, range: range) != nil {
+            base = baseURL.deletingLastPathComponent()
+        } else {
+            base = baseURL
+        }
+        guard var comps = URLComponents(url: base.appendingPathComponent(trimmed), resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "ASCClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "bad URL path \(path)"])
         }
         if !query.isEmpty {

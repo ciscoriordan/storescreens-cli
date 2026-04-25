@@ -32,6 +32,13 @@ package struct SubmitOrchestrator {
         package var attachedBuildNumber: String?      // ASC build number attached to the version
         package var exportComplianceSet: Bool         // true when we patched usesNonExemptEncryption
         package var reviewSubmissionID: String?
+        /// Set when pricing was applied this run (e.g. "free", or "unchanged"
+        /// when the schedule already existed). Nil when no pricing config was
+        /// supplied or when the step was skipped.
+        package var pricingStatus: String?
+        /// Set when availability was applied this run. Nil when no
+        /// availability config was supplied.
+        package var availabilityStatus: String?
         package var errors: [String]
 
         package struct MetadataUpdate: Sendable {
@@ -108,8 +115,21 @@ package struct SubmitOrchestrator {
             attachedBuildNumber: nil,
             exportComplianceSet: false,
             reviewSubmissionID: nil,
+            pricingStatus: nil,
+            availabilityStatus: nil,
             errors: []
         )
+
+        // 2b. Pricing & Availability. These live at the app level, not the
+        // version level, so they run once per submit and are gated on
+        // their own config blocks (nil config = skip). Errors here are
+        // non-fatal — append to the report and keep going so the rest of
+        // the submit flow still makes progress.
+        if config.pricing != nil || config.availability != nil {
+            await applyPricingAndAvailability(
+                appID: app.id, report: &report, progress: progress
+            )
+        }
 
         // 3. Metadata.
         if shouldUploadMetadata, let metadataRoot {
@@ -262,7 +282,7 @@ package struct SubmitOrchestrator {
         progress: ((String) -> Void)?
     ) async throws {
         var readWarnings: [String] = []
-        let byLocale: [String: LocalizationFields]
+        var byLocale: [String: LocalizationFields]
         do {
             byLocale = try MetadataReader.read(dir: metadataRoot) { readWarnings.append($0) }
         } catch {
@@ -270,6 +290,37 @@ package struct SubmitOrchestrator {
             return
         }
         for warning in readWarnings { progress?("  warn: \(warning)") }
+
+        // whatsNew (release notes) is only valid on an update — ASC rejects
+        // it on the first version of a brand-new app. Detect that case by
+        // listing the app's versions and checking whether any *other* version
+        // has reached a released or pending-release state. If none has, this
+        // is a first-version submission: strip whatsNew from every locale
+        // before the PATCH so the metadata step doesn't fail wholesale.
+        let platform = config.submit?.platform ?? "IOS"
+        let localesWithWhatsNew = byLocale.filter { $0.value.whatsNew != nil }.map(\.key)
+        if !localesWithWhatsNew.isEmpty {
+            let hasPrior: Bool
+            do {
+                hasPrior = try await appsAPI.hasPreviouslyReleasedVersion(
+                    appID: report.appID,
+                    excludingVersionID: versionID,
+                    platform: platform
+                )
+            } catch {
+                // If the check itself fails, don't silently drop release
+                // notes — let the PATCH go through and surface any ASC
+                // rejection through the normal error path.
+                progress?("whatsNew prior-version check failed: \(error) — sending release notes as-is")
+                hasPrior = true
+            }
+            if !hasPrior {
+                for locale in localesWithWhatsNew {
+                    byLocale[locale]?.whatsNew = nil
+                }
+                progress?("skipping whatsNew (\(localesWithWhatsNew.count) locale(s)): ASC rejects release notes on an app's first version")
+            }
+        }
 
         // Privacy URL lives on App Info, not the version. Resolve the
         // editable AppInfo lazily — only when at least one locale has a
@@ -372,6 +423,127 @@ package struct SubmitOrchestrator {
         if fields.supportURL != nil { names.append("supportURL") }
         if fields.marketingURL != nil { names.append("marketingURL") }
         return names
+    }
+
+    // MARK: - Pricing & Availability
+
+    /// Runs the Pricing and Availability API calls for the app. Both are
+    /// independent of the version localization flow — they sit at the app
+    /// level in ASC and are required-before-first-submit. The method reads
+    /// `config.pricing` and `config.availability` and applies whichever is
+    /// set, leaving a status line on the report for each. Errors are
+    /// captured in `report.errors` rather than thrown so the broader submit
+    /// flow can still finish.
+    private func applyPricingAndAvailability(
+        appID: String,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        let api = PricingAvailabilityAPI(client: client)
+
+        if let pricing = config.pricing {
+            do {
+                try await applyPricing(api: api, appID: appID, pricing: pricing, report: &report, progress: progress)
+            } catch {
+                report.errors.append("pricing: \(error)")
+            }
+        }
+
+        if let availability = config.availability {
+            do {
+                try await applyAvailability(api: api, appID: appID, availability: availability, report: &report, progress: progress)
+            } catch {
+                report.errors.append("availability: \(error)")
+            }
+        }
+    }
+
+    private func applyPricing(
+        api: PricingAvailabilityAPI,
+        appID: String,
+        pricing: PricingConfig,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async throws {
+        let free = pricing.free ?? false
+        guard free else {
+            // Paid pricing is not yet supported; surface a clear message
+            // rather than silently succeeding.
+            report.errors.append("pricing: only `free: true` is supported today; paid pricing is not implemented")
+            return
+        }
+
+        // Idempotent: if the app already has a price schedule, don't
+        // replace it — creating a new schedule is destructive to whatever
+        // the developer set up in the ASC web UI.
+        if try await api.hasExistingPriceSchedule(appID: appID) {
+            report.pricingStatus = "unchanged"
+            progress?("pricing: schedule already exists, leaving untouched")
+            return
+        }
+
+        let base = pricing.baseTerritory ?? "USA"
+        guard let pricePoint = try await api.findFreePricePoint(appID: appID, territoryID: base) else {
+            report.errors.append("pricing: no free price point for base territory \(base)")
+            return
+        }
+
+        _ = try await api.createPriceSchedule(
+            appID: appID, baseTerritoryID: base, pricePointID: pricePoint.id
+        )
+        report.pricingStatus = "free (base: \(base))"
+        progress?("pricing: set to free with base territory \(base)")
+    }
+
+    private func applyAvailability(
+        api: PricingAvailabilityAPI,
+        appID: String,
+        availability: AvailabilityConfig,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async throws {
+        guard let selection = availability.territories else {
+            // No territories = no-op; only availableInNewTerritories would
+            // be set, which needs a create call with the full territory
+            // list anyway. Skip to avoid accidental "limit to zero
+            // territories" API calls.
+            return
+        }
+        let desiredNewTerritories = availability.availableInNewTerritories ?? true
+
+        let desiredTerritoryIDs: Set<String>
+        switch selection {
+        case .all:
+            desiredTerritoryIDs = Set(try await api.listTerritories().map(\.id))
+        case .list(let list):
+            desiredTerritoryIDs = Set(list)
+        }
+        guard !desiredTerritoryIDs.isEmpty else {
+            report.errors.append("availability: territory list is empty")
+            return
+        }
+
+        // Diff against current availability when one exists so we don't
+        // re-POST for a no-op. A missing availability (new app) always
+        // means create.
+        if let current = try await api.getCurrentAvailability(appID: appID) {
+            let currentTerritories = (try? await api.listAvailableTerritories(availabilityID: current.id)) ?? []
+            let sameSet = currentTerritories == desiredTerritoryIDs
+            let sameNewFlag = current.attributes?.availableInNewTerritories == desiredNewTerritories
+            if sameSet && sameNewFlag {
+                report.availabilityStatus = "unchanged"
+                progress?("availability: unchanged (\(desiredTerritoryIDs.count) territories)")
+                return
+            }
+        }
+
+        _ = try await api.createAvailability(
+            appID: appID,
+            territoryIDs: Array(desiredTerritoryIDs),
+            availableInNewTerritories: desiredNewTerritories
+        )
+        report.availabilityStatus = "updated (\(desiredTerritoryIDs.count) territories, new territories: \(desiredNewTerritories))"
+        progress?("availability: set \(desiredTerritoryIDs.count) territories, availableInNewTerritories=\(desiredNewTerritories)")
     }
 
     // MARK: - Screenshots

@@ -17,19 +17,30 @@ package struct AppStoreConnectConfig: Codable, Sendable {
     /// Configuration for `storescreens upload-build`: archive + export + upload
     /// a fresh `.ipa` via `xcrun altool`.
     package var uploadBuild: UploadBuildConfig?
+    /// Pricing (free vs paid tier). Unset leaves the app's existing schedule
+    /// untouched — set it only on first-version submissions or when the
+    /// price tier changes.
+    package var pricing: PricingConfig?
+    /// Territory availability (which countries the app is available in).
+    /// Unset leaves current availability untouched.
+    package var availability: AvailabilityConfig?
 
     package init(
         appID: String? = nil,
         bundleID: String? = nil,
         metadataDir: String? = nil,
         submit: SubmitConfig? = nil,
-        uploadBuild: UploadBuildConfig? = nil
+        uploadBuild: UploadBuildConfig? = nil,
+        pricing: PricingConfig? = nil,
+        availability: AvailabilityConfig? = nil
     ) {
         self.appID = appID
         self.bundleID = bundleID
         self.metadataDir = metadataDir
         self.submit = submit
         self.uploadBuild = uploadBuild
+        self.pricing = pricing
+        self.availability = availability
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -38,6 +49,96 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         case metadataDir = "metadata_dir"
         case submit
         case uploadBuild = "upload_build"
+        case pricing
+        case availability
+    }
+}
+
+/// App-level pricing. Currently supports the "free" case (most common for a
+/// first submission). Setting a specific paid tier is doable via the same
+/// `createPriceSchedule` path but isn't exposed here yet — add a `price_tier`
+/// or `base_price` field when a real paid-app use case comes up.
+package struct PricingConfig: Codable, Sendable {
+    /// `true` sets the app to free in the base territory; Apple auto-computes
+    /// free prices for every other territory. `false` is currently rejected —
+    /// paid pricing needs more fields than this config exposes today.
+    package var free: Bool?
+
+    /// Territory used as the base for price equivalencing. Defaults to USA
+    /// (matches the ASC web UI default). Any ISO 3166-1 alpha-3 code works.
+    package var baseTerritory: String?
+
+    package init(free: Bool? = nil, baseTerritory: String? = nil) {
+        self.free = free
+        self.baseTerritory = baseTerritory
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case free
+        case baseTerritory = "base_territory"
+    }
+}
+
+/// Territory availability — which countries the app shows up in on the
+/// App Store. For a worldwide launch use `territories: .all`; for a limited
+/// rollout use `.list(["USA", "CAN", ...])`.
+package struct AvailabilityConfig: Codable, Sendable {
+    /// Either `all` for every supported territory, or an explicit list of
+    /// ISO 3166-1 alpha-3 codes. When unset, current availability stays as-is.
+    package var territories: TerritorySelection?
+    /// When Apple adds a new territory to the App Store, should the app auto-
+    /// enroll? Defaults to true — matches ASC's own default.
+    package var availableInNewTerritories: Bool?
+
+    package init(
+        territories: TerritorySelection? = nil,
+        availableInNewTerritories: Bool? = nil
+    ) {
+        self.territories = territories
+        self.availableInNewTerritories = availableInNewTerritories
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case territories
+        case availableInNewTerritories = "available_in_new_territories"
+    }
+}
+
+/// Two-case discriminator for availability: either worldwide or a specific
+/// list of territory codes. Decodes from either the string "all" or an
+/// array of strings in YAML/JSON.
+package enum TerritorySelection: Codable, Sendable, Equatable {
+    case all
+    case list([String])
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let s = try? container.decode(String.self) {
+            guard s == "all" else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "availability.territories must be \"all\" or a list of ISO alpha-3 codes; got \"\(s)\""
+                )
+            }
+            self = .all
+            return
+        }
+        if let arr = try? container.decode([String].self) {
+            self = .list(arr)
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "availability.territories must be \"all\" or a list of ISO alpha-3 codes"
+        )
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .all: try container.encode("all")
+        case .list(let a): try container.encode(a)
+        }
     }
 }
 

@@ -139,6 +139,40 @@ package struct AppsAPI {
         return try await createVersion(appID: appID, versionString: versionString, platform: platform)
     }
 
+    /// App-store states that indicate a version has been (or is about to
+    /// be) publicly available to customers. If any version *other than*
+    /// the one we're submitting to is in one of these states, the app
+    /// has a prior release and ASC will accept `whatsNew` release notes.
+    /// If none are in these states, ASC treats the submission as the
+    /// app's first version and rejects any whatsNew field.
+    package static let publiclyReleasedVersionStates: Set<String> = [
+        "READY_FOR_SALE",
+        "PENDING_DEVELOPER_RELEASE",
+        "PENDING_APPLE_RELEASE",
+        "PROCESSING_FOR_APP_STORE",
+        "REMOVED_FROM_SALE",
+        "REPLACED_WITH_NEW_VERSION",
+    ]
+
+    /// True if the app has at least one `appStoreVersion` (other than
+    /// `excludingVersionID`) that has reached a released or pending-release
+    /// state. Use this to decide whether to send the `whatsNew` attribute on
+    /// the version localization PATCH: ASC rejects whatsNew on a brand-new
+    /// app's very first version because release notes are semantically "what
+    /// changed since the last release."
+    package func hasPreviouslyReleasedVersion(
+        appID: String,
+        excludingVersionID: String,
+        platform: String = "IOS"
+    ) async throws -> Bool {
+        let versions = try await listVersions(appID: appID, platform: platform)
+        return versions.contains { v in
+            guard v.id != excludingVersionID else { return false }
+            let state = v.attributes?.appStoreState ?? ""
+            return Self.publiclyReleasedVersionStates.contains(state)
+        }
+    }
+
     /// PATCH `/v1/appStoreVersions/{id}` to attach a processed build
     /// to the version. Required for review submission — ASC rejects a
     /// reviewSubmission whose version has no build associated with it.

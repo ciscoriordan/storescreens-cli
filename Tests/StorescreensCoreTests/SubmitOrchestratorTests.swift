@@ -524,6 +524,431 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertNil(report.reviewSubmissionID)
     }
 
+    // MARK: - Pricing & Availability
+
+    /// Availability set to a specific territory list: POST to
+    /// /v2/appAvailabilities with exactly those territory IDs, no territory
+    /// list lookup needed.
+    func testSubmit_availability_explicitList_posts() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // New app: no current availability.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appAvailabilityV2") { _ in
+            (404, Data(#"{"errors":[{"code":"NOT_FOUND","title":"not found","detail":"no availability"}]}"#.utf8))
+        }
+        let postBodies = NSMutableArray()
+        ASCStub.add(method: "POST", suffix: "/v2/appAvailabilities") { _ in
+            postBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (201, Data(#"{"data":{"id":"AV-1","type":"appAvailabilities","attributes":{"availableInNewTerritories":true}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            availability: AvailabilityConfig(
+                territories: .list(["USA", "CAN", "GBR"]),
+                availableInNewTerritories: true
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false,
+            progress: nil
+        )
+
+        XCTAssertEqual(postBodies.count, 1, "expected one POST to /v2/appAvailabilities")
+        let bodyStr = String(data: postBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"USA\""), "USA must be in territory list: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"CAN\""), "CAN must be in territory list: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"GBR\""), "GBR must be in territory list: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"availableInNewTerritories\":true"), "availableInNewTerritories flag must be set: \(bodyStr)")
+        XCTAssertEqual(report.availabilityStatus, "updated (3 territories, new territories: true)")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// Availability set to `.all` resolves to the full territory list first,
+    /// then POSTs.
+    func testSubmit_availability_all_expandsTerritoryList() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/territories") { _ in
+            (200, Data(#"{"data":[{"id":"USA","type":"territories"},{"id":"CAN","type":"territories"},{"id":"GBR","type":"territories"},{"id":"DEU","type":"territories"}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appAvailabilityV2") { _ in
+            (404, Data(#"{"errors":[{"code":"NOT_FOUND","title":"not found","detail":"no availability"}]}"#.utf8))
+        }
+        let postBodies = NSMutableArray()
+        ASCStub.add(method: "POST", suffix: "/v2/appAvailabilities") { _ in
+            postBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (201, Data(#"{"data":{"id":"AV-1","type":"appAvailabilities","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            availability: AvailabilityConfig(territories: .all)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postBodies.count, 1)
+        let bodyStr = String(data: postBodies[0] as! Data, encoding: .utf8) ?? ""
+        for id in ["USA", "CAN", "GBR", "DEU"] {
+            XCTAssertTrue(bodyStr.contains("\"\(id)\""), "\(id) must be in the expanded territory list: \(bodyStr)")
+        }
+        XCTAssertEqual(report.availabilityStatus, "updated (4 territories, new territories: true)")
+    }
+
+    /// When current availability already matches desired, skip the POST and
+    /// report `unchanged` so idempotent re-runs aren't destructive.
+    func testSubmit_availability_unchanged_skipsPost() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appAvailabilityV2") { _ in
+            (200, Data(#"{"data":{"id":"AV-CURRENT","type":"appAvailabilities","attributes":{"availableInNewTerritories":true}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appAvailabilities/AV-CURRENT/availableTerritories") { _ in
+            (200, Data(#"{"data":[{"id":"USA","type":"territories"},{"id":"CAN","type":"territories"}]}"#.utf8))
+        }
+        var postHits = 0
+        ASCStub.add(method: "POST", suffix: "/v2/appAvailabilities") { _ in
+            postHits += 1
+            return (201, Data(#"{"data":{"id":"AV-2","type":"appAvailabilities","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            availability: AvailabilityConfig(
+                territories: .list(["USA", "CAN"]),
+                availableInNewTerritories: true
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postHits, 0, "matching current availability must not re-POST")
+        XCTAssertEqual(report.availabilityStatus, "unchanged")
+    }
+
+    /// Pricing `free: true` on a new app: look up the free price point for
+    /// the base territory, then POST a new appPriceSchedule referencing it.
+    func testSubmit_pricing_freeOnNewApp_createsSchedule() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // No existing price schedule → 404.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appPriceSchedule") { _ in
+            (404, Data(#"{"errors":[{"code":"NOT_FOUND","title":"not found","detail":"no schedule"}]}"#.utf8))
+        }
+        // Free USA price point lookup returns tier 0 first.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appPricePoints") { _ in
+            let body = """
+            {"data":[
+              {"id":"PP-FREE","type":"appPricePoints","attributes":{"customerPrice":"0","proceeds":"0"}},
+              {"id":"PP-099","type":"appPricePoints","attributes":{"customerPrice":"0.99","proceeds":"0.70"}}
+            ]}
+            """
+            return (200, Data(body.utf8))
+        }
+        let postBodies = NSMutableArray()
+        ASCStub.add(method: "POST", suffix: "/v1/appPriceSchedules") { _ in
+            postBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (201, Data(#"{"data":{"id":"PS-1","type":"appPriceSchedules"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            pricing: PricingConfig(free: true, baseTerritory: "USA")
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postBodies.count, 1, "expected one POST to /v1/appPriceSchedules")
+        let bodyStr = String(data: postBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"PP-FREE\""), "free price point ID must be in the schedule POST body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"USA\""), "base territory must be set: \(bodyStr)")
+        XCTAssertEqual(report.pricingStatus, "free (base: USA)")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// Pricing is idempotent: if a schedule already exists, leave it alone.
+    /// Blindly POSTing a new schedule would overwrite whatever the dev set
+    /// up by hand in the ASC web UI.
+    func testSubmit_pricing_existingSchedule_leavesUntouched() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appPriceSchedule") { _ in
+            (200, Data(#"{"data":{"id":"PS-EXISTING","type":"appPriceSchedules"}}"#.utf8))
+        }
+        var postHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/appPriceSchedules") { _ in
+            postHits += 1
+            return (201, Data(#"{"data":{"id":"PS-NEW","type":"appPriceSchedules"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            pricing: PricingConfig(free: true)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postHits, 0, "existing schedule must not be replaced")
+        XCTAssertEqual(report.pricingStatus, "unchanged")
+    }
+
+    /// Paid pricing is not yet implemented — surface a clear error rather
+    /// than silently skipping.
+    func testSubmit_pricing_paidNotSupported_reportsError() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            pricing: PricingConfig(free: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertTrue(report.errors.contains { $0.contains("only `free: true`") },
+                      "paid pricing must surface a clear error, got: \(report.errors)")
+        XCTAssertNil(report.pricingStatus)
+    }
+
+    // MARK: - First-version whatsNew skip
+
+    /// When the app has no prior released version, `whatsNew` must be
+    /// stripped before the PATCH goes out — ASC rejects release notes on
+    /// a brand-new app's first version.
+    func testSubmit_firstVersion_stripsWhatsNewFromPatch() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-first-version-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("initial release", to: metaRoot.appendingPathComponent("en-US/release_notes.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        // Only a PREPARE_FOR_SUBMISSION version exists — no prior released
+        // state anywhere, so this is the app's very first submission.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        let patchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            let body = ASCStub.requestBodies.last ?? Data()
+            patchBodies.add(body)
+            return (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        var progressLines: [String] = []
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: { progressLines.append($0) }
+        )
+
+        // PATCH went out (description needs updating) but whatsNew must
+        // not appear in the body.
+        XCTAssertEqual(patchBodies.count, 1, "expected one PATCH on the localization")
+        let bodyStr = String(data: patchBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertFalse(bodyStr.contains("whatsNew"), "whatsNew must be absent on first-version PATCH: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("English description"), "description must still be sent: \(bodyStr)")
+        XCTAssertTrue(progressLines.contains { $0.contains("skipping whatsNew") },
+                      "expected a progress line noting the skip, got: \(progressLines)")
+        // Report still reflects that a metadata update happened (description),
+        // just without whatsNew in the field list.
+        XCTAssertEqual(report.metadataUpdates.count, 1)
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated, ["description"])
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When a prior version is in a released state, whatsNew must go
+    /// through normally — the skip only applies on the app's first version.
+    func testSubmit_subsequentVersion_sendsWhatsNew() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-update-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("1.1 release notes", to: metaRoot.appendingPathComponent("en-US/release_notes.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        // Two versions: the current editable 1.1 + a prior 1.0 that's
+        // already READY_FOR_SALE, so whatsNew is legal on 1.1.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            let body = """
+            {"data":[
+              {"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.1.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}},
+              {"id":"VER-0","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS","appStoreState":"READY_FOR_SALE"}}
+            ]}
+            """
+            return (200, Data(body.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        let patchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            let body = ASCStub.requestBodies.last ?? Data()
+            patchBodies.add(body)
+            return (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.1.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(patchBodies.count, 1, "expected one PATCH on the localization")
+        let bodyStr = String(data: patchBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("whatsNew"), "whatsNew must be present when a prior version is released: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("1.1 release notes"), "whatsNew value must be the fixture content: \(bodyStr)")
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated.sorted(), ["description", "whatsNew"])
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
     // MARK: - Idempotency: skip unchanged fields and screenshots
 
     /// When every metadata field already matches ASC's current values, the

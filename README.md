@@ -1080,6 +1080,27 @@ Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create 
 
 Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version.
 
+### Pricing and availability
+
+A brand-new app can't be submitted for review without having Pricing and Availability set in App Store Connect. `submit` can do both via the ASC API so the whole setup lives in one yml:
+
+```yaml
+app_store_connect:
+  bundle_id: com.example.app
+
+  pricing:
+    free: true
+    base_territory: USA
+
+  availability:
+    territories: all                    # or ["USA", "CAN", "GBR"]
+    available_in_new_territories: true
+```
+
+Both blocks are optional and idempotent. `pricing` only supports `free: true` today (paid pricing requires price-tier lookup, which isn't wired up yet - set paid pricing in the ASC web UI). The step is a no-op if the app already has a price schedule, so re-runs don't overwrite manual edits. `availability` accepts either `"all"` (expanded to every territory Apple supports at submit time) or an explicit list of ISO 3166-1 alpha-3 codes; it diffs against the current availability and skips the POST if nothing changed.
+
+`release_notes.txt` (`whatsNew`) is also handled intelligently: ASC rejects release notes on the first version of a brand-new app, so `submit` detects that case (no prior released version on the app) and drops `whatsNew` from the metadata PATCH with a `skipping whatsNew` progress line. Leave your `release_notes.txt` in place - it'll be picked up automatically on subsequent submissions.
+
 ### Troubleshooting
 
 - "credentials not configured": run `storescreens auth login` or check the `ASC_*` env vars.
