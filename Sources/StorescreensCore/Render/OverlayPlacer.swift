@@ -590,17 +590,24 @@ package struct OverlayPlacer: @unchecked Sendable {
         let drawRight  = bordersOn && (borderSides.contains(.outer) || borderSides.contains(.right))
         let drawInner  = bordersOn && borderSides.contains(.inner)
 
-        // Vertical budget per cell: block height minus outer borders and
-        // inner border lines, divided by row count, minus the cell's own
-        // top + bottom padding.
+        // Vertical budget: block height minus outer borders, inner border
+        // lines, and the per-row top + bottom padding. The remaining space
+        // is divided across all *text lines* in the table (sum across rows
+        // of the max line count in that row), so a row containing a 2-line
+        // cell gets twice the height of a single-line row.
         let outerVBorder = (drawTop ? borderWidth : 0) + (drawBottom ? borderWidth : 0)
         let innerVBorder = drawInner ? CGFloat(numRows - 1) * borderWidth : 0
-        let perCellHeight = (blockHeight - outerVBorder - innerVBorder) / CGFloat(numRows)
-        let perCellTextHeight = max(0, perCellHeight - 2 * cellPadding)
+        let totalPaddingV = 2 * cellPadding * CGFloat(numRows)
+        let lineCounts: [Int] = grid.map { row in
+            row.map { $0.components(separatedBy: "\n").count }.max() ?? 1
+        }
+        let totalLines = max(1, lineCounts.reduce(0, +))
+        let textBudget = max(0, blockHeight - outerVBorder - innerVBorder - totalPaddingV)
 
-        // Auto-derive font size to fit the per-cell text height (line height
-        // ≈ 1.2 × font size). Override via `cell_style.font_size_pct`.
-        let autoFontSize = perCellTextHeight / 1.2
+        // Auto-derive font size so the table's text content (sum of all line
+        // boxes across all rows) fits the budget. Line height = font * 1.2.
+        // Override via `cell_style.font_size_pct`.
+        let autoFontSize = textBudget / CGFloat(totalLines) / 1.2
         let fontSize = cfg.cellStyle?.fontSizePct.map {
             canvasSize.height * CGFloat($0) / 100.0
         } ?? autoFontSize
@@ -619,21 +626,25 @@ package struct OverlayPlacer: @unchecked Sendable {
             align: cfg.cellStyle?.align ?? .center
         )
 
-        // Build framesetters per cell, measure each.
+        // Build framesetters per cell. Each cell honors per-column align if
+        // `column_aligns[c]` is set, otherwise inherits `cell_style.align`.
+        // Measurement runs at near-infinite width so explicit `\n` line
+        // breaks produce in-cell line wrapping but lines never wrap mid-text.
         var cells: [[CellArtifact]] = []
         var colWidths = Array(repeating: CGFloat(0), count: numCols)
         for r in 0..<numRows {
             var row: [CellArtifact] = []
             for c in 0..<numCols {
                 let text = grid[r][c]
+                let cellAlign = colAlign(at: c, columnAligns: cfg.columnAligns) ?? style.align
                 if text.isEmpty {
-                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: style.align))
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
                     continue
                 }
                 guard let attr = try? MarkdownAttributor.buildAttributed(
                     plainOrMarkdown: text, role: style, resolver: fontResolver
                 ) else {
-                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: style.align))
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
                     continue
                 }
                 let fs = AttributedFramesetter(attributed: attr)
@@ -642,15 +653,22 @@ package struct OverlayPlacer: @unchecked Sendable {
                     height: CGFloat.greatestFiniteMagnitude
                 ))
                 if size.width > colWidths[c] { colWidths[c] = size.width }
-                row.append(CellArtifact(framesetter: fs, textSize: size, align: style.align))
+                row.append(CellArtifact(framesetter: fs, textSize: size, align: cellAlign))
             }
             cells.append(row)
         }
 
         // Column widths include left + right cell padding.
         let paddedColWidths = colWidths.map { $0 + 2 * cellPadding }
-        // Row heights are uniform = perCellHeight (already includes padding).
-        let rowHeights = Array(repeating: perCellHeight, count: numRows)
+        // Row heights are content-driven: max cell text height in that row
+        // plus the cell's top+bottom padding. A row with 2-line cells comes
+        // out twice as tall as a single-line row.
+        var rowHeights: [CGFloat] = []
+        rowHeights.reserveCapacity(numRows)
+        for r in 0..<numRows {
+            let maxTextH = cells[r].map(\.textSize.height).max() ?? 0
+            rowHeights.append(maxTextH + 2 * cellPadding)
+        }
 
         let outerHBorder = (drawLeft ? borderWidth : 0) + (drawRight ? borderWidth : 0)
         let innerHBorder = drawInner ? CGFloat(numCols - 1) * borderWidth : 0
@@ -684,6 +702,14 @@ package struct OverlayPlacer: @unchecked Sendable {
             width: totalWidth,
             height: totalHeight
         )
+    }
+
+    /// Resolve the alignment for column `c` from a `column_aligns` array.
+    /// Returns nil when the array is missing or shorter than `c+1` so the
+    /// caller can fall back to the cell-style default.
+    private func colAlign(at c: Int, columnAligns: [CaptionAlign]?) -> CaptionAlign? {
+        guard let aligns = columnAligns, c < aligns.count else { return nil }
+        return aligns[c]
     }
 
     /// Pad each row with empty strings so all rows have the same column count

@@ -59,6 +59,39 @@ final class CaptionPlacementTests: XCTestCase {
             "top->bottom gap must equal band slack (\(expectedSlack)), got \(bottomY - topY)")
     }
 
+    /// Multi-line dense caption: with vertical_align: center, the slack
+    /// space (band - block) must split equally above and below the block.
+    /// User reported 2% above + 8% below on a 5-line caption in a 22% band,
+    /// which would imply a 6-percentage-point top bias.
+    func testVerticalAlign_centersDenseMultiLineCaption() async throws {
+        let topY = try await renderAndFindCaptionBounds(
+            title: ["Line one", "Line two", "Line three", "Line four", "Line five"],
+            verticalAlign: .center, minHeightPct: 40, fontSizePct: 4
+        )
+        let canvasH = 1434
+        let bandH = Int(Double(canvasH) * 40.0 / 100.0)
+        let topSlack = topY.top
+        let bottomSlack = bandH - topY.bottom
+        XCTAssertEqual(topSlack, bottomSlack, accuracy: 6,
+            "5-line caption (roomy band): center should split slack equally. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH)")
+    }
+
+    /// Same as above but with the user's reported scenario: 22% band, default
+    /// font size that produces a tight fit. We expect either no slack (block
+    /// fills band) or the small slack to be split evenly.
+    func testVerticalAlign_centersDenseCaption_tightBand() async throws {
+        let bounds = try await renderAndFindCaptionBounds(
+            title: ["Line one", "Line two", "Line three", "Line four", "Line five"],
+            verticalAlign: .center, minHeightPct: 22, fontSizePct: 5.5
+        )
+        let canvasH = 1434
+        let bandH = Int(Double(canvasH) * 22.0 / 100.0)
+        let topSlack = bounds.top
+        let bottomSlack = bandH - bounds.bottom
+        XCTAssertEqual(topSlack, bottomSlack, accuracy: 8,
+            "5-line caption (tight band): center should have roughly equal slack. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH)")
+    }
+
     func testNudgeY_shiftsCaptionInDirection() async throws {
         let baselineY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
         // Positive y_pct should move the caption up (toward screen top =
@@ -70,6 +103,97 @@ final class CaptionPlacementTests: XCTestCase {
         let nudgedDown = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: -5)
         XCTAssertGreaterThan(nudgedDown, baselineY,
             "nudge.y_pct: -5 must move text down — got nudgedDown=\(nudgedDown), baseline=\(baselineY)")
+    }
+
+    // MARK: - Multi-line harness
+
+    private struct CaptionBounds { let top: Int; let bottom: Int }
+
+    private func renderAndFindCaptionBounds(
+        title: [String], verticalAlign: VerticalAlign,
+        minHeightPct: Double = 40, fontSizePct: Double = 4
+    ) async throws -> CaptionBounds {
+        let width = 660
+        let height = 1434
+
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("caption-multi-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeBlackPNG(width: width, height: height, to: capturedRoot.appendingPathComponent(filename))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "caption-placement-test",
+            appName: "CP", displayName: "CP", scheme: "CP",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"", simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [CaptureManifest.Screenshot(name: "01_Home", filename: filename, capturedAt: Date())]
+                ),
+            ]
+        )
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#000000")),
+            caption: CaptionConfig(
+                title: CaptionRole(
+                    font: .system, weight: .bold,
+                    fontSizePct: fontSizePct, color: "#FFFFFF", align: .center
+                ),
+                minHeightPct: minHeightPct, paddingPct: 4,
+                verticalAlign: verticalAlign
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#222222",
+                                 strokeWidth: 2, cornerRadius: .auto, shadow: false, paddingPct: 5),
+            slides: ["01_Home": SlideOverride(caption: SlideCaption(title: .array(title)))]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot)
+        XCTAssertEqual(out.failures.count, 0, "render failed: \(out.failures)")
+
+        let outURL = renderRoot.appendingPathComponent(filename)
+        return try findCaptionBounds(at: outURL)
+    }
+
+    private func findCaptionBounds(at url: URL) throws -> CaptionBounds {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let data = img.dataProvider?.data as Data? else {
+            throw NSError(domain: "CaptionPlacementTests", code: 1)
+        }
+        let bpp = 4
+        var first = -1
+        var last = -1
+        let xStart = img.width / 3
+        let xEnd = 2 * img.width / 3
+        for y in 0..<img.height {
+            var rowHasBright = false
+            for x in stride(from: xStart, through: xEnd, by: max(1, (xEnd - xStart) / 60)) {
+                let off = y * img.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                if r > 220 && g > 220 && b > 220 {
+                    rowHasBright = true
+                    break
+                }
+            }
+            if rowHasBright {
+                if first < 0 { first = y }
+                last = y
+            }
+        }
+        guard first >= 0 else {
+            throw NSError(domain: "CaptionPlacementTests", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "no bright pixels found"])
+        }
+        return CaptionBounds(top: first, bottom: last)
     }
 
     // MARK: - Harness

@@ -552,9 +552,13 @@ package struct TableConfig: Codable, Sendable {
     /// Border color (default white).
     package var borderColor: AppearanceVariant<String>?
     /// Cell text style. When `font_size_pct` is omitted, the renderer picks
-    /// a single auto-derived size that fits inside `max_height_pct / rows`,
-    /// applied uniformly to every cell.
+    /// a single auto-derived size that fits inside `max_height_pct` divided
+    /// across the row line totals, applied uniformly to every cell.
     package var cellStyle: CaptionRole?
+    /// Per-column horizontal alignment override. Index 0 is the leftmost
+    /// column. Cells without an entry (or columns past the array length)
+    /// inherit `cell_style.align` (default center).
+    package var columnAligns: [CaptionAlign]?
     /// Border configuration. Default: enabled, all outer + inner sides,
     /// `width_pct: 0.15` (% of canvas height).
     package var border: TableBorderConfig?
@@ -578,6 +582,7 @@ package struct TableConfig: Codable, Sendable {
         textColor: AppearanceVariant<String>? = nil,
         borderColor: AppearanceVariant<String>? = nil,
         cellStyle: CaptionRole? = nil,
+        columnAligns: [CaptionAlign]? = nil,
         border: TableBorderConfig? = nil,
         cellPaddingPct: Double? = nil,
         position: OverlayPosition? = nil,
@@ -591,6 +596,7 @@ package struct TableConfig: Codable, Sendable {
         self.textColor = textColor
         self.borderColor = borderColor
         self.cellStyle = cellStyle
+        self.columnAligns = columnAligns
         self.border = border
         self.cellPaddingPct = cellPaddingPct
         self.position = position
@@ -605,6 +611,7 @@ package struct TableConfig: Codable, Sendable {
         case textColor = "text_color"
         case borderColor = "border_color"
         case cellStyle = "cell_style"
+        case columnAligns = "column_aligns"
         case cellPaddingPct = "cell_padding_pct"
         case maxHeightPct = "max_height_pct"
     }

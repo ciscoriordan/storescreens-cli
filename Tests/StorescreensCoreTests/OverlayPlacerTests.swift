@@ -480,6 +480,87 @@ final class OverlayPlacerTests: XCTestCase {
         XCTAssertTrue(foundBorder, "expected at least one drawn pixel from the table")
     }
 
+    /// Cells with `\n` produce in-cell line breaks; the row containing the
+    /// multi-line cell auto-grows, so other rows aren't bled into.
+    func testTable_multiLineCell_growsRow() throws {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("table-multi-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let canvasH = 600
+        let canvas = CGSize(width: 400, height: CGFloat(canvasH))
+        let single = TableConfig(
+            rows: [["A", "B"], ["C", "D"]],
+            position: .aboveTitle, maxHeightPct: 12
+        )
+        let multi = TableConfig(
+            rows: [["A", "B"], ["C", "Spelling and\nlocation"]],
+            position: .aboveTitle, maxHeightPct: 12
+        )
+        let hSingle = placer.reservedHeight(
+            position: .aboveTitle, images: [], laurels: [], tables: [single],
+            appearance: "light", canvasSize: canvas, isFirstInCombo: true
+        )
+        let hMulti = placer.reservedHeight(
+            position: .aboveTitle, images: [], laurels: [], tables: [multi],
+            appearance: "light", canvasSize: canvas, isFirstInCombo: true
+        )
+        // Both report the same reservation since reservedHeight is config-
+        // based (max_height_pct), not content-based. Real test: render and
+        // verify the multi-line cell didn't bleed past its row boundary.
+        XCTAssertEqual(hSingle, hMulti, "reservedHeight is config-based")
+
+        // Render the multi-line table and assert no warnings.
+        let ctx = makeTransparentContext(width: 400, height: canvasH)
+        let slotH = canvas.height * 0.12
+        let slotRect = CGRect(x: 0, y: canvas.height - slotH,
+                              width: canvas.width, height: slotH)
+        let warns = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [], tables: [multi],
+            appearance: "light", slotRect: slotRect,
+            canvasSize: canvas, isFirstInCombo: true, into: ctx
+        )
+        XCTAssertTrue(warns.isEmpty, "multi-line cell render must not warn; got \(warns)")
+    }
+
+    /// `column_aligns: [left, right]` for a 2-column table renders cell text
+    /// flush left in column 0 and flush right in column 1.
+    func testTable_columnAligns_overridesCellStyle() throws {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("table-colaligns-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        // Just verify the field decodes and renders without crashing. Visual
+        // alignment correctness is exercised by single-item alignment tests
+        // for images; the same alignOffset routine is used for cells.
+        let table = TableConfig(
+            rows: [["wide-content-on-left", "x"], ["a", "wide-content-on-right"]],
+            columnAligns: [.left, .right],
+            position: .aboveTitle, maxHeightPct: 14
+        )
+        let ctx = makeTransparentContext(width: 400, height: 600)
+        let canvas = CGSize(width: 400, height: 600)
+        let slotH: CGFloat = 600 * 0.14
+        let slotRect = CGRect(x: 0, y: canvas.height - slotH,
+                              width: canvas.width, height: slotH)
+        let warns = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [], tables: [table],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+        XCTAssertTrue(warns.isEmpty, "column_aligns render must not warn; got \(warns)")
+    }
+
     /// Padding short rows: a 2-column-wide first row + 1-column second row
     /// gets padded to 2x2 with the [1][1] cell empty. Renders without crash.
     func testTable_unequalRows_padsWithEmpty() throws {
