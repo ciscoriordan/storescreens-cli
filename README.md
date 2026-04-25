@@ -938,7 +938,7 @@ render:
 Slot distribution rules:
 
 - 1 item: respects its `align` (default `center`), centered vertically in the slot, with `nudge` applied last.
-- 2 items: auto-distribute at canvas thirds. Each item's center lands at `canvas_width × 1/3` and `× 2/3` regardless of either item's `align`. The `align` field still controls the item's own internal text alignment (e.g. laurel title alignment) but does not affect anchoring in the slot. Use `nudge.x_pct` to fine-tune from a third.
+- 2 items: auto-distribute with equal whitespace. `gap = (canvas_width - item1_width - item2_width) / 3`; item 1 left at `gap`, item 2 left at `canvas_width - gap - item2_width`. Items never overlap as long as their combined width fits the canvas. The `align` field controls each item's internal text alignment (e.g. laurel title alignment) but does not affect anchoring. If the items are too wide together, they're clamped to abut at the midline and a warning is logged - lower `max_height_pct` to fit.
 
 `path` accepts a `{ light:, dark: }` variant the same way `background.image` does, so a wordmark can swap between dark/light files when rendering both appearances.
 

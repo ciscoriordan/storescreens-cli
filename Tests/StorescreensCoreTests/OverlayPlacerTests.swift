@@ -242,23 +242,76 @@ final class OverlayPlacerTests: XCTestCase {
             "align: left should pin item at slot.minX; got leftX=\(probe.itemLeftX)")
     }
 
-    /// Two items in the same slot auto-distribute at canvas thirds, regardless
-    /// of each item's `align`. Item centers at x = canvasW * 1/3 and 2/3.
-    func testDrawSlot_twoItems_distributesAtThirds() throws {
-        let probe = try probeTwoItems(aligns: (.left, .right))
-        XCTAssertEqual(probe.firstItemCenterX, probe.canvasW / 3, accuracy: 2,
-            "first item center should be at canvas/3; got \(probe.firstItemCenterX)")
-        XCTAssertEqual(probe.secondItemCenterX, probe.canvasW * 2 / 3, accuracy: 2,
-            "second item center should be at canvas*2/3; got \(probe.secondItemCenterX)")
+    /// Two narrow items: equal whitespace with a comfortable margin on each
+    /// side. canvas=120, items 20px wide, total gap = 80, gap = 80/3 ≈ 26.7.
+    /// Item 1 left at 26.7, item 2 left at 73.3.
+    func testDrawSlot_twoItems_narrow_equalWhitespace() throws {
+        let probe = try probeTwoItems(itemWidth: 20, itemHeight: 20, canvasW: 120,
+                                      aligns: (.left, .right))
+        // Expected: gap = (120 - 40) / 3 = 26.67 (truncated to 26 by px math).
+        XCTAssertEqual(probe.firstItemLeftX, 26, accuracy: 2,
+            "item 1 left edge should be at gap (~26); got \(probe.firstItemLeftX)")
+        XCTAssertEqual(probe.secondItemLeftX, 74, accuracy: 2,
+            "item 2 left edge should be at canvas - gap - w (~74); got \(probe.secondItemLeftX)")
     }
 
-    /// Same auto-distribute even when both items default-align (no align set).
-    func testDrawSlot_twoItems_noAlign_distributesAtThirds() throws {
-        let probe = try probeTwoItems(aligns: (nil, nil))
-        XCTAssertEqual(probe.firstItemCenterX, probe.canvasW / 3, accuracy: 2,
-            "first item should distribute to canvas/3 even with no align; got \(probe.firstItemCenterX)")
-        XCTAssertEqual(probe.secondItemCenterX, probe.canvasW * 2 / 3, accuracy: 2,
-            "second item should distribute to canvas*2/3 even with no align; got \(probe.secondItemCenterX)")
+    /// Two items at canvas/3 wide each: gap = (120 - 80)/3 = 13. Items at
+    /// x=13 and x=67. Verifies the equal-whitespace formula at the size the
+    /// old "centers at thirds" rule used to call equal.
+    func testDrawSlot_twoItems_thirdsWide_equalWhitespace() throws {
+        let probe = try probeTwoItems(itemWidth: 40, itemHeight: 20, canvasW: 120,
+                                      aligns: (nil, nil))
+        XCTAssertEqual(probe.firstItemLeftX, 13, accuracy: 2,
+            "item 1 left should be at gap (~13); got \(probe.firstItemLeftX)")
+        XCTAssertEqual(probe.secondItemLeftX, 67, accuracy: 2,
+            "item 2 left should be at canvas - gap - w (~67); got \(probe.secondItemLeftX)")
+        XCTAssertLessThan(probe.firstItemLeftX + 40, probe.secondItemLeftX,
+            "items must not touch with this much canvas left over")
+    }
+
+    /// Two items each exactly canvas/2 wide: gap collapses to 0, items abut
+    /// at the midline with no overlap and no whitespace.
+    func testDrawSlot_twoItems_halfEach_abutWithZeroGap() throws {
+        let probe = try probeTwoItems(itemWidth: 60, itemHeight: 20, canvasW: 120,
+                                      aligns: (nil, nil))
+        XCTAssertEqual(probe.firstItemLeftX, 0, accuracy: 2,
+            "item 1 should abut canvas left; got \(probe.firstItemLeftX)")
+        XCTAssertEqual(probe.secondItemLeftX, 60, accuracy: 2,
+            "item 2 should start at midline (60); got \(probe.secondItemLeftX)")
+    }
+
+    /// Two items wider than canvas/3 but still fitting: equal whitespace must
+    /// keep them from overlapping. canvas=120, items 50px each, total = 100,
+    /// total gap = 20, gap = 6.7. Item 1 left ≈ 6.7, item 2 left ≈ 63.
+    func testDrawSlot_twoItems_widerThanThirds_noOverlap() throws {
+        let probe = try probeTwoItems(itemWidth: 50, itemHeight: 20, canvasW: 120,
+                                      aligns: (nil, nil))
+        XCTAssertEqual(probe.firstItemLeftX, 6, accuracy: 2,
+            "item 1 left should be at gap (~6); got \(probe.firstItemLeftX)")
+        XCTAssertEqual(probe.secondItemLeftX, 63, accuracy: 2,
+            "item 2 left should leave equal gap on right; got \(probe.secondItemLeftX)")
+        // Inner edges must not overlap: item1.right < item2.left.
+        XCTAssertLessThan(probe.firstItemLeftX + 50, probe.secondItemLeftX,
+            "items must not overlap; item1.right=\(probe.firstItemLeftX + 50) item2.left=\(probe.secondItemLeftX)")
+    }
+
+    /// Two items genuinely wider than the canvas: clamp to abut at the
+    /// midline and emit a warning. canvas=120, items 80px each. Item 1 is
+    /// placed at x=-20 (left half off-canvas) so its visible portion ends at
+    /// the midline; item 2 starts at the midline. Visible portions of the
+    /// two items must not overlap.
+    func testDrawSlot_twoItems_overflow_clampedAtMidlineWithWarning() throws {
+        let probe = try probeTwoItems(itemWidth: 80, itemHeight: 20, canvasW: 120,
+                                      aligns: (nil, nil), captureWarnings: true)
+        // Item 1 placed at -20 means visible left edge clips to 0 (no probe
+        // can detect the off-canvas portion). The visible right edge of red
+        // and the visible left edge of blue must both be at the midline (60).
+        XCTAssertEqual(probe.firstItemLeftX, 0, accuracy: 1,
+            "item 1's visible left edge should clip to 0; got \(probe.firstItemLeftX)")
+        XCTAssertEqual(probe.secondItemLeftX, 60, accuracy: 2,
+            "item 2 must start at the midline (60); got \(probe.secondItemLeftX)")
+        XCTAssertTrue(probe.warnings.contains(where: { $0.contains("exceeds canvas") }),
+            "overflow case must emit a warning; got \(probe.warnings)")
     }
 
     // MARK: - Laurel inset_pct
@@ -388,14 +441,22 @@ final class OverlayPlacerTests: XCTestCase {
 
     private struct TwoItemsProbe {
         let canvasW: CGFloat
+        let firstItemLeftX: Int
+        let secondItemLeftX: Int
         let firstItemCenterX: CGFloat
         let secondItemCenterX: CGFloat
+        let warnings: [String]
     }
 
-    /// Renders two items in the same slot with the given aligns and returns
-    /// the centers of each rendered image found by scanning for distinct
-    /// colors. Two items share a slot, item 1 is red, item 2 is blue.
-    private func probeTwoItems(aligns: (CaptionAlign?, CaptionAlign?)) throws -> TwoItemsProbe {
+    /// Renders two items in the same slot at given pixel widths/heights, with
+    /// the given aligns. Source PNGs are written at exactly `itemWidth × itemHeight`
+    /// so when the renderer scales by `maxHeightPct = itemHeight/canvasH * 100`
+    /// the final pixel width matches `itemWidth`. Returns the leftmost x of
+    /// each item (located by scanning for distinct red and blue color runs).
+    private func probeTwoItems(
+        itemWidth: Int = 10, itemHeight: Int = 10, canvasW: Int = 120,
+        aligns: (CaptionAlign?, CaptionAlign?), captureWarnings: Bool = false
+    ) throws -> TwoItemsProbe {
         let runRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("overlay-probe-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
@@ -403,10 +464,11 @@ final class OverlayPlacerTests: XCTestCase {
 
         let redURL = runRoot.appendingPathComponent("red.png")
         let blueURL = runRoot.appendingPathComponent("blue.png")
-        try writeSolidColorPNG(width: 10, height: 10, color: .red, to: redURL)
-        try writeSolidColorPNG(width: 10, height: 10, color: .blue, to: blueURL)
+        try writeSolidColorPNG(width: itemWidth, height: itemHeight, color: .red, to: redURL)
+        try writeSolidColorPNG(width: itemWidth, height: itemHeight, color: .blue, to: blueURL)
 
-        let canvasW = 120, canvasH = 200
+        let canvasH = 200
+        let maxHeightPct = Double(itemHeight) / Double(canvasH) * 100.0
         let ctx = makeTransparentContext(width: canvasW, height: canvasH)
         let placer = OverlayPlacer(
             baseDirectory: runRoot,
@@ -414,30 +476,33 @@ final class OverlayPlacerTests: XCTestCase {
         )
         let img1 = ImageConfig(
             path: .shared(redURL.path),
-            position: .aboveTitle, align: aligns.0, maxHeightPct: 5
+            position: .aboveTitle, align: aligns.0, maxHeightPct: maxHeightPct
         )
         let img2 = ImageConfig(
             path: .shared(blueURL.path),
-            position: .aboveTitle, align: aligns.1, maxHeightPct: 5
+            position: .aboveTitle, align: aligns.1, maxHeightPct: maxHeightPct
         )
-        let slotH: CGFloat = 10
+        let slotH = CGFloat(itemHeight)
         let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
                               width: CGFloat(canvasW), height: slotH)
         let canvas = CGSize(width: canvasW, height: canvasH)
 
-        _ = placer.drawSlot(
+        let warns = placer.drawSlot(
             position: .aboveTitle, images: [img1, img2], laurels: [],
             appearance: "light", slotRect: slotRect, canvasSize: canvas,
             isFirstInCombo: true, into: ctx
         )
 
         let cg = ctx.makeImage()!
-        let redCenter = colorCenterX(in: cg, scanRowFromTop: 5, channel: .red)
-        let blueCenter = colorCenterX(in: cg, scanRowFromTop: 5, channel: .blue)
+        let redBounds = colorBoundsX(in: cg, scanRowFromTop: itemHeight / 2, channel: .red)
+        let blueBounds = colorBoundsX(in: cg, scanRowFromTop: itemHeight / 2, channel: .blue)
         return TwoItemsProbe(
             canvasW: CGFloat(canvasW),
-            firstItemCenterX: CGFloat(redCenter),
-            secondItemCenterX: CGFloat(blueCenter)
+            firstItemLeftX: redBounds.minX,
+            secondItemLeftX: blueBounds.minX,
+            firstItemCenterX: CGFloat(redBounds.minX + redBounds.maxX) / 2,
+            secondItemCenterX: CGFloat(blueBounds.minX + blueBounds.maxX) / 2,
+            warnings: captureWarnings ? warns : []
         )
     }
 
@@ -471,9 +536,10 @@ final class OverlayPlacerTests: XCTestCase {
 
     private enum ColorChannel { case red, blue }
 
-    /// Finds the horizontal center of the run of pixels matching the given
-    /// channel (red: r>200,g<60,b<60; blue: b>200,r<60,g<60) on the given row.
-    private func colorCenterX(in cg: CGImage, scanRowFromTop y: Int, channel: ColorChannel) -> Int {
+    /// Finds the leftmost and rightmost x where the row's pixel matches the
+    /// given color channel. Items partially clipped off-canvas are still
+    /// detected via their visible portion.
+    private func colorBoundsX(in cg: CGImage, scanRowFromTop y: Int, channel: ColorChannel) -> (minX: Int, maxX: Int) {
         let data = cg.dataProvider!.data! as Data
         let bpp = 4
         var minX = cg.width
@@ -491,7 +557,7 @@ final class OverlayPlacerTests: XCTestCase {
                 if x > maxX { maxX = x }
             }
         }
-        return (minX + maxX) / 2
+        return (minX, maxX)
     }
 
     // MARK: - Helpers

@@ -110,24 +110,51 @@ package struct OverlayPlacer: @unchecked Sendable {
         }
         if measured.isEmpty { return warnings }
 
-        // Two-item slots auto-distribute at canvas thirds (item centers at
-        // x = canvas_width * 1/3 and 2/3) regardless of each item's `align`.
-        // The previous "align-respects-edges" rule made `align: left` +
-        // `align: right` pin items to canvas edges, which produced visibly
-        // bad output when the items (e.g. wide laurels) overlapped in the
-        // middle. Equal-thirds is the layout designers actually want when
-        // they put two items in one slot. `align` still affects the item's
-        // own internal text alignment (e.g. laurel title alignment).
+        // Two-item slots auto-distribute with equal whitespace: the gaps
+        // canvas_left -> item1, between item1 and item2, and item2 ->
+        // canvas_right are all the same. With identical-sized items their
+        // centers land symmetrically; with different sizes the larger item's
+        // center sits closer to its outer edge.
+        //
+        // Earlier versions placed item centers at canvas * 1/3 and 2/3, which
+        // collapsed to overlap once each item's width approached canvas / 3
+        // (typical for wide laurels). Equal-whitespace placement guarantees
+        // items never overlap as long as they fit on the canvas.
+        //
+        // When items are wider than the canvas, abut them at the midline and
+        // warn so the user knows to drop max_height_pct.
         if measured.count == 2 {
-            for (i, item) in measured.enumerated() {
-                let centerX = canvasSize.width * (i == 0 ? (1.0 / 3.0) : (2.0 / 3.0))
-                let nudgeX = CGFloat(item.nudgeXPct) * canvasSize.width / 100.0
-                let nudgeY = CGFloat(item.nudgeYPct) * canvasSize.height / 100.0
-                let xLeft = centerX - item.width / 2 + nudgeX
-                let yBottom = slotRect.minY + (slotRect.height - item.height) / 2 + nudgeY
-                let drawRect = CGRect(x: xLeft, y: yBottom, width: item.width, height: item.height)
-                drawItem(item, in: drawRect, into: ctx)
+            let item1 = measured[0]
+            let item2 = measured[1]
+            let totalItemWidth = item1.width + item2.width
+            let totalGap = canvasSize.width - totalItemWidth
+            let gap = totalGap / 3.0
+
+            let item1XBase: CGFloat
+            let item2XBase: CGFloat
+            if gap < 0 {
+                warnings.append(
+                    "two-item slot: combined width (\(Int(totalItemWidth))px) exceeds canvas (\(Int(canvasSize.width))px); clamping items to abut at the midline. Lower max_height_pct to fix."
+                )
+                let mid = canvasSize.width / 2
+                item1XBase = mid - item1.width
+                item2XBase = mid
+            } else {
+                item1XBase = gap
+                item2XBase = canvasSize.width - gap - item2.width
             }
+
+            let nudgeX1 = CGFloat(item1.nudgeXPct) * canvasSize.width / 100.0
+            let nudgeY1 = CGFloat(item1.nudgeYPct) * canvasSize.height / 100.0
+            let nudgeX2 = CGFloat(item2.nudgeXPct) * canvasSize.width / 100.0
+            let nudgeY2 = CGFloat(item2.nudgeYPct) * canvasSize.height / 100.0
+            let yBottom1 = slotRect.minY + (slotRect.height - item1.height) / 2 + nudgeY1
+            let yBottom2 = slotRect.minY + (slotRect.height - item2.height) / 2 + nudgeY2
+
+            drawItem(item1, in: CGRect(x: item1XBase + nudgeX1, y: yBottom1,
+                                       width: item1.width, height: item1.height), into: ctx)
+            drawItem(item2, in: CGRect(x: item2XBase + nudgeX2, y: yBottom2,
+                                       width: item2.width, height: item2.height), into: ctx)
             return warnings
         }
 
