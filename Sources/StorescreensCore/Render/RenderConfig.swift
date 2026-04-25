@@ -483,6 +483,13 @@ package struct LaurelConfig: Codable, Sendable {
     package var placement: OverlayPlacement?
     /// Fine-tune position.
     package var nudge: NudgeConfig?
+    /// How far each laurel half nudges toward (or away from) the text, as a
+    /// percentage of laurel block height. Positive shifts the left laurel
+    /// right and the right laurel left, tightening the badge or letting the
+    /// laurel branches overlap the text edges (usually safe given the laurel's
+    /// open bow shape). Negative pushes both halves outward. The text region
+    /// stays put; only the laurels move. Default: 4.
+    package var insetPct: Double?
 
     package init(
         title: CaptionText? = nil,
@@ -494,7 +501,8 @@ package struct LaurelConfig: Codable, Sendable {
         align: CaptionAlign? = nil,
         maxHeightPct: Double? = nil,
         placement: OverlayPlacement? = nil,
-        nudge: NudgeConfig? = nil
+        nudge: NudgeConfig? = nil,
+        insetPct: Double? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
@@ -506,6 +514,7 @@ package struct LaurelConfig: Codable, Sendable {
         self.maxHeightPct = maxHeightPct
         self.placement = placement
         self.nudge = nudge
+        self.insetPct = insetPct
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -513,6 +522,7 @@ package struct LaurelConfig: Codable, Sendable {
         case titleStyle = "title_style"
         case subtitleStyle = "subtitle_style"
         case maxHeightPct = "max_height_pct"
+        case insetPct = "inset_pct"
     }
 }
 

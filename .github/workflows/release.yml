@@ -52,17 +52,6 @@ jobs:
           cp .build/release/storescreens-cli "$STAGE/storescreens"
           cp .build/release/storescreens-mcp "$STAGE/storescreens-mcp"
           cp LICENSE "$STAGE/LICENSE"
-          # SwiftPM emits the StorescreensCore resource bundle (laurel
-          # SVGs etc.) next to the binaries. Bundle.module looks for it
-          # at the same dir as the executable at runtime, so it must
-          # ride along in the tarball or laurel rendering crashes with
-          # "could not load resource bundle".
-          BUNDLE=".build/release/storescreens-cli_StorescreensCore.bundle"
-          if [ ! -d "$BUNDLE" ]; then
-            echo "::error::Resource bundle missing at $BUNDLE"
-            exit 1
-          fi
-          cp -R "$BUNDLE" "$STAGE/"
           chmod +x "$STAGE/storescreens" "$STAGE/storescreens-mcp"
           "$STAGE/storescreens" --version
           TARBALL="storescreens-v${VERSION}-macos.tar.gz"

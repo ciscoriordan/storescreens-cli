@@ -283,6 +283,7 @@ final class RenderConfigTests: XCTestCase {
                 nudge:
                   x_pct: 0.5
                   y_pct: 1
+                inset_pct: 6
             """
         let laurels: [LaurelConfig] = try decodeNested(yaml, key: "laurels")
         XCTAssertEqual(laurels.count, 1)
@@ -299,6 +300,7 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertEqual(l.placement, .all)
         XCTAssertEqual(l.nudge?.xPct, 0.5)
         XCTAssertEqual(l.nudge?.yPct, 1)
+        XCTAssertEqual(l.insetPct, 6)
     }
 
     // MARK: - Resolved images / laurels

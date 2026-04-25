@@ -935,10 +935,10 @@ render:
       max_height_pct: 9
 ```
 
-Stacking and conflict rules when two items land in the same slot:
+Slot distribution rules:
 
-- Same `align` value: stacked horizontally as a single group, then aligned together inside the slot.
-- Different `align` values: each placed independently at its own align (may overlap if the slot is narrow).
+- 1 item: respects its `align` (default `center`), centered vertically in the slot, with `nudge` applied last.
+- 2 items: auto-distribute at canvas thirds. Each item's center lands at `canvas_width × 1/3` and `× 2/3` regardless of either item's `align`. The `align` field still controls the item's own internal text alignment (e.g. laurel title alignment) but does not affect anchoring in the slot. Use `nudge.x_pct` to fine-tune from a third.
 
 `path` accepts a `{ light:, dark: }` variant the same way `background.image` does, so a wordmark can swap between dark/light files when rendering both appearances.
 
@@ -976,6 +976,7 @@ render:
       subtitle_style:
         font_size_pct: 2.4
         italic: true
+      inset_pct: 4                     # default 4. Positive = laurels closer to text (may overlap); negative = wider gap.
 ```
 
 The laurel SVGs ship with the renderer; `color` tints both leaves with a solid fill (alpha-mask, so any color works). Two laurels in the same slot follow the same same-align/different-align rules as images.

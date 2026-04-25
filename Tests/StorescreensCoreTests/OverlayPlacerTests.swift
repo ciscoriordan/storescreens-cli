@@ -225,6 +225,275 @@ final class OverlayPlacerTests: XCTestCase {
                              "expected drawn pixel near center of above_title slot; alpha=\(alpha)")
     }
 
+    // MARK: - drawSlot positioning
+
+    /// One item with no `align` set must land at the slot's horizontal center
+    /// (defaults are: `align: center`, vertically centered in the slot rect).
+    func testDrawSlot_singleItem_defaultAlignCentersHorizontally() throws {
+        let probe = try probeSingleItemX(align: nil)
+        XCTAssertEqual(probe.itemCenterX, probe.canvasW / 2, accuracy: 2,
+            "default align should center the item; got centerX=\(probe.itemCenterX) canvasW=\(probe.canvasW)")
+    }
+
+    /// One item with `align: left` lands flush to the slot's left edge.
+    func testDrawSlot_singleItem_alignLeft_pinsLeft() throws {
+        let probe = try probeSingleItemX(align: .left)
+        XCTAssertEqual(probe.itemLeftX, 0, accuracy: 2,
+            "align: left should pin item at slot.minX; got leftX=\(probe.itemLeftX)")
+    }
+
+    /// Two items in the same slot auto-distribute at canvas thirds, regardless
+    /// of each item's `align`. Item centers at x = canvasW * 1/3 and 2/3.
+    func testDrawSlot_twoItems_distributesAtThirds() throws {
+        let probe = try probeTwoItems(aligns: (.left, .right))
+        XCTAssertEqual(probe.firstItemCenterX, probe.canvasW / 3, accuracy: 2,
+            "first item center should be at canvas/3; got \(probe.firstItemCenterX)")
+        XCTAssertEqual(probe.secondItemCenterX, probe.canvasW * 2 / 3, accuracy: 2,
+            "second item center should be at canvas*2/3; got \(probe.secondItemCenterX)")
+    }
+
+    /// Same auto-distribute even when both items default-align (no align set).
+    func testDrawSlot_twoItems_noAlign_distributesAtThirds() throws {
+        let probe = try probeTwoItems(aligns: (nil, nil))
+        XCTAssertEqual(probe.firstItemCenterX, probe.canvasW / 3, accuracy: 2,
+            "first item should distribute to canvas/3 even with no align; got \(probe.firstItemCenterX)")
+        XCTAssertEqual(probe.secondItemCenterX, probe.canvasW * 2 / 3, accuracy: 2,
+            "second item should distribute to canvas*2/3 even with no align; got \(probe.secondItemCenterX)")
+    }
+
+    // MARK: - Laurel inset_pct
+
+    /// inset_pct shifts the left laurel right and the right laurel left by
+    /// `inset_pct` percent of the laurel block height. Renders a laurel with
+    /// two different inset values, scans for the leftmost laurel pixel near
+    /// the top of the block (text doesn't reach there), and confirms the
+    /// shift matches.
+    func testLaurel_insetPct_shiftsLeftLaurelRight() throws {
+        let baseLeft = try probeLaurelLeftEdge(insetPct: 0)
+        let insetLeft = try probeLaurelLeftEdge(insetPct: 12)
+
+        let canvasH: CGFloat = 600
+        let blockH = canvasH * 0.10  // max_height_pct = 10
+        let expectedShift = blockH * 12 / 100  // 12% of 60 = 7.2 px
+
+        let actualShift = CGFloat(insetLeft - baseLeft)
+        XCTAssertEqual(actualShift, expectedShift, accuracy: 2,
+            "inset_pct: 12 should shift the left laurel right by ~\(expectedShift)px; got \(actualShift)")
+    }
+
+    private func probeLaurelLeftEdge(insetPct: Double) throws -> Int {
+        let canvasW = 400, canvasH = 600
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("laurel-inset-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        // Use a recognizable color so we can scan for laurel pixels and not
+        // accidentally pick up alpha noise from anti-aliasing.
+        let laurel = LaurelConfig(
+            title: .string("X"),
+            color: .shared("#FF00FF"),
+            position: .aboveTitle,
+            maxHeightPct: 10,
+            insetPct: insetPct
+        )
+        // Slot at the top of the canvas, full width.
+        let slotH = CGFloat(canvasH) * 0.10
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        _ = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [laurel],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+
+        let cg = ctx.makeImage()!
+        // Scan a row near the top of the laurel block (block top is at y=0 in
+        // CG, image data is top-down so screen-y=2 is the top edge area).
+        return findLeftmostMagentaX(in: cg, scanRowFromTop: 6)
+    }
+
+    /// Finds the leftmost x where r>200 && b>200 && g<60 (magenta laurel tint).
+    /// Skips alpha-only pixels so anti-aliasing edges don't fool the probe.
+    private func findLeftmostMagentaX(in cg: CGImage, scanRowFromTop y: Int) -> Int {
+        let data = cg.dataProvider!.data! as Data
+        let bpp = 4
+        for x in 0..<cg.width {
+            let off = y * cg.bytesPerRow + x * bpp
+            let r = data[off], g = data[off + 1], b = data[off + 2]
+            if r > 200 && g < 60 && b > 200 {
+                return x
+            }
+        }
+        return cg.width  // not found, return rightmost
+    }
+
+    // MARK: - Probe helpers
+
+    private struct SinglePositionProbe {
+        let canvasW: CGFloat
+        let itemLeftX: CGFloat
+        let itemCenterX: CGFloat
+    }
+
+    /// Renders a single-item slot with the given align and returns the bounds
+    /// of the rendered image found by scanning for non-transparent pixels.
+    private func probeSingleItemX(align: CaptionAlign?) throws -> SinglePositionProbe {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("overlay-probe-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let pngURL = runRoot.appendingPathComponent("a.png")
+        try writeSolidColorPNG(width: 10, height: 10, color: .red, to: pngURL)
+
+        let canvasW = 100, canvasH = 200
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let img = ImageConfig(
+            path: .shared(pngURL.path),
+            position: .aboveTitle,
+            align: align,
+            maxHeightPct: 5
+        )
+        let slotH: CGFloat = 10
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        _ = placer.drawSlot(
+            position: .aboveTitle, images: [img], laurels: [],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+
+        let cg = ctx.makeImage()!
+        let bounds = nonTransparentBoundsX(in: cg, scanRowFromTop: 5)
+        return SinglePositionProbe(
+            canvasW: CGFloat(canvasW),
+            itemLeftX: CGFloat(bounds.minX),
+            itemCenterX: CGFloat(bounds.minX + bounds.maxX) / 2
+        )
+    }
+
+    private struct TwoItemsProbe {
+        let canvasW: CGFloat
+        let firstItemCenterX: CGFloat
+        let secondItemCenterX: CGFloat
+    }
+
+    /// Renders two items in the same slot with the given aligns and returns
+    /// the centers of each rendered image found by scanning for distinct
+    /// colors. Two items share a slot, item 1 is red, item 2 is blue.
+    private func probeTwoItems(aligns: (CaptionAlign?, CaptionAlign?)) throws -> TwoItemsProbe {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("overlay-probe-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let redURL = runRoot.appendingPathComponent("red.png")
+        let blueURL = runRoot.appendingPathComponent("blue.png")
+        try writeSolidColorPNG(width: 10, height: 10, color: .red, to: redURL)
+        try writeSolidColorPNG(width: 10, height: 10, color: .blue, to: blueURL)
+
+        let canvasW = 120, canvasH = 200
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let img1 = ImageConfig(
+            path: .shared(redURL.path),
+            position: .aboveTitle, align: aligns.0, maxHeightPct: 5
+        )
+        let img2 = ImageConfig(
+            path: .shared(blueURL.path),
+            position: .aboveTitle, align: aligns.1, maxHeightPct: 5
+        )
+        let slotH: CGFloat = 10
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        _ = placer.drawSlot(
+            position: .aboveTitle, images: [img1, img2], laurels: [],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+
+        let cg = ctx.makeImage()!
+        let redCenter = colorCenterX(in: cg, scanRowFromTop: 5, channel: .red)
+        let blueCenter = colorCenterX(in: cg, scanRowFromTop: 5, channel: .blue)
+        return TwoItemsProbe(
+            canvasW: CGFloat(canvasW),
+            firstItemCenterX: CGFloat(redCenter),
+            secondItemCenterX: CGFloat(blueCenter)
+        )
+    }
+
+    private func makeTransparentContext(width: Int, height: Int) -> CGContext {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx
+    }
+
+    /// Scans one row of `cg` (counted from the top) and returns the leftmost
+    /// and rightmost columns where alpha > 0.
+    private func nonTransparentBoundsX(in cg: CGImage, scanRowFromTop y: Int) -> (minX: Int, maxX: Int) {
+        let data = cg.dataProvider!.data! as Data
+        let bpp = 4
+        var minX = cg.width
+        var maxX = -1
+        for x in 0..<cg.width {
+            let off = y * cg.bytesPerRow + x * bpp
+            if data[off + 3] > 0 {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+            }
+        }
+        return (minX, maxX)
+    }
+
+    private enum ColorChannel { case red, blue }
+
+    /// Finds the horizontal center of the run of pixels matching the given
+    /// channel (red: r>200,g<60,b<60; blue: b>200,r<60,g<60) on the given row.
+    private func colorCenterX(in cg: CGImage, scanRowFromTop y: Int, channel: ColorChannel) -> Int {
+        let data = cg.dataProvider!.data! as Data
+        let bpp = 4
+        var minX = cg.width
+        var maxX = -1
+        for x in 0..<cg.width {
+            let off = y * cg.bytesPerRow + x * bpp
+            let r = data[off], g = data[off + 1], b = data[off + 2]
+            let match: Bool
+            switch channel {
+            case .red:  match = r > 200 && g < 60 && b < 60
+            case .blue: match = b > 200 && r < 60 && g < 60
+            }
+            if match {
+                if x < minX { minX = x }
+                if x > maxX { maxX = x }
+            }
+        }
+        return (minX + maxX) / 2
+    }
+
     // MARK: - Helpers
 
     private func makePlacer() -> OverlayPlacer {

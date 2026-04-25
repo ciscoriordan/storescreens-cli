@@ -110,39 +110,41 @@ package struct OverlayPlacer: @unchecked Sendable {
         }
         if measured.isEmpty { return warnings }
 
-        // Group by align: items sharing an align are placed as a single
-        // horizontal group; items with distinct aligns are placed solo.
-        let gap = canvasSize.width * 0.015
-        let groups = groupByAlign(measured)
-
-        for group in groups {
-            let groupWidth: CGFloat = group.reduce(0) { acc, item in
-                acc + item.width
-            } + CGFloat(max(0, group.count - 1)) * gap
-
-            // X position of the group's left edge inside slotRect.
-            let groupLeft: CGFloat
-            switch group[0].align {
-            case .left:   groupLeft = slotRect.minX
-            case .center: groupLeft = slotRect.minX + (slotRect.width - groupWidth) / 2
-            case .right:  groupLeft = slotRect.maxX - groupWidth
-            }
-
-            var cursor = groupLeft
-            for item in group {
-                // Center each item vertically within slotRect, then apply
-                // its individual nudge.
+        // Two-item slots auto-distribute at canvas thirds (item centers at
+        // x = canvas_width * 1/3 and 2/3) regardless of each item's `align`.
+        // The previous "align-respects-edges" rule made `align: left` +
+        // `align: right` pin items to canvas edges, which produced visibly
+        // bad output when the items (e.g. wide laurels) overlapped in the
+        // middle. Equal-thirds is the layout designers actually want when
+        // they put two items in one slot. `align` still affects the item's
+        // own internal text alignment (e.g. laurel title alignment).
+        if measured.count == 2 {
+            for (i, item) in measured.enumerated() {
+                let centerX = canvasSize.width * (i == 0 ? (1.0 / 3.0) : (2.0 / 3.0))
                 let nudgeX = CGFloat(item.nudgeXPct) * canvasSize.width / 100.0
                 let nudgeY = CGFloat(item.nudgeYPct) * canvasSize.height / 100.0
+                let xLeft = centerX - item.width / 2 + nudgeX
                 let yBottom = slotRect.minY + (slotRect.height - item.height) / 2 + nudgeY
-                let xLeft = cursor + nudgeX
-
                 let drawRect = CGRect(x: xLeft, y: yBottom, width: item.width, height: item.height)
                 drawItem(item, in: drawRect, into: ctx)
-
-                cursor += item.width + gap
             }
+            return warnings
         }
+
+        // Single item: place at its `align` (or center by default), centered
+        // vertically in slotRect, with nudge applied last.
+        let item = measured[0]
+        let nudgeX = CGFloat(item.nudgeXPct) * canvasSize.width / 100.0
+        let nudgeY = CGFloat(item.nudgeYPct) * canvasSize.height / 100.0
+        let xLeft: CGFloat
+        switch item.align {
+        case .left:   xLeft = slotRect.minX + nudgeX
+        case .center: xLeft = slotRect.minX + (slotRect.width - item.width) / 2 + nudgeX
+        case .right:  xLeft = slotRect.maxX - item.width + nudgeX
+        }
+        let yBottom = slotRect.minY + (slotRect.height - item.height) / 2 + nudgeY
+        let drawRect = CGRect(x: xLeft, y: yBottom, width: item.width, height: item.height)
+        drawItem(item, in: drawRect, into: ctx)
 
         return warnings
     }
@@ -213,16 +215,6 @@ package struct OverlayPlacer: @unchecked Sendable {
         }
     }
 
-    // MARK: - Grouping by align
-
-    private func groupByAlign(_ items: [MeasuredItem]) -> [[MeasuredItem]] {
-        // Two items, same align → one group. Otherwise one group per item.
-        if items.count == 2 && items[0].align == items[1].align {
-            return [items]
-        }
-        return items.map { [$0] }
-    }
-
     // MARK: - Measured item model
 
     private enum MeasuredKind {
@@ -242,6 +234,11 @@ package struct OverlayPlacer: @unchecked Sendable {
         let horizontalPad: CGFloat
         let textSpacing: CGFloat
         let tintColor: NSColor
+        /// How far each half nudges toward (positive) or away from (negative)
+        /// the text, in pixels. The text region stays anchored at the un-inset
+        /// position so the laurels can encroach on text edges as the user
+        /// dials this up.
+        let inset: CGFloat
     }
 
     private struct MeasuredItem {
@@ -309,20 +306,25 @@ package struct OverlayPlacer: @unchecked Sendable {
         let tintHex = cfg.color?.value(for: appearance)
         let tint: NSColor = tintHex.flatMap(RenderColors.parseHex) ?? .white
 
-        // Build attributed strings for title + subtitle. Default font sizes
-        // are fractions of the laurel block height so text scales with the
-        // badge. Explicit `font_size_pct` overrides are treated as percent of
-        // canvas height (matches the convention in CaptionRole everywhere else).
+        // Build attributed strings for title + subtitle. By default, title and
+        // subtitle share a single auto-derived font size so two-line laurels
+        // read as balanced typography rather than headline + footnote. The
+        // weight defaults still differ (title bold, subtitle regular) to
+        // preserve visual hierarchy. Explicit `font_size_pct` overrides on
+        // either side are treated as percent of canvas height (matches the
+        // CaptionRole convention everywhere else) and break the link.
         let titleColor = cfg.titleStyle?.color.flatMap(RenderColors.parseHex) ?? tint
         let subtitleColor = cfg.subtitleStyle?.color.flatMap(RenderColors.parseHex) ?? tint
 
+        // 0.27 of block height gives two lines plus spacing room for ~31%
+        // breathing space inside the block, scaling cleanly with max_height_pct.
+        let autoPt = blockHeight * 0.27
         let titlePt: CGFloat = cfg.titleStyle?.fontSizePct.map {
             canvasSize.height * CGFloat($0) / 100.0
-        } ?? (blockHeight * 0.30)
-
+        } ?? autoPt
         let subtitlePt: CGFloat = cfg.subtitleStyle?.fontSizePct.map {
             canvasSize.height * CGFloat($0) / 100.0
-        } ?? (blockHeight * 0.18)
+        } ?? autoPt
 
         let titleStyle = ResolvedRoleStyle(
             font: cfg.titleStyle?.font ?? .system,
@@ -370,6 +372,11 @@ package struct OverlayPlacer: @unchecked Sendable {
             return nil
         }
 
+        // Default inset of 4% of block height gives a slightly tighter badge
+        // without bleeding into the text at typical max_height_pct values.
+        // Users can dial up (overlap) or down (extra breathing room).
+        let inset = blockHeight * CGFloat(cfg.insetPct ?? 4) / 100.0
+
         let art = LaurelArtifacts(
             leftCG: leftCG,
             rightCG: rightCG,
@@ -381,7 +388,8 @@ package struct OverlayPlacer: @unchecked Sendable {
             laurelWidth: laurelW,
             horizontalPad: horizontalPad,
             textSpacing: textSpacing,
-            tintColor: tint
+            tintColor: tint,
+            inset: inset
         )
 
         return MeasuredItem(
@@ -397,17 +405,23 @@ package struct OverlayPlacer: @unchecked Sendable {
     // MARK: - Laurel drawing
 
     private func drawLaurel(_ art: LaurelArtifacts, in rect: CGRect, into ctx: CGContext) {
-        // Left laurel sits flush against the left edge of `rect`; right laurel
-        // flush against the right edge. Both are alpha-mask tinted.
-        let leftRect = CGRect(x: rect.minX, y: rect.minY, width: art.laurelWidth, height: rect.height)
-        let rightRect = CGRect(x: rect.maxX - art.laurelWidth, y: rect.minY, width: art.laurelWidth, height: rect.height)
+        // The laurel halves are nudged toward (positive inset) or away from
+        // (negative inset) the text. The text region is computed from the
+        // un-inset positions so it stays put when the user dials inset; the
+        // laurels then encroach on its edges (or pull away) without forcing a
+        // re-layout. The bow shape leaves enough open space between leaves
+        // that modest overlap usually reads cleanly.
+        let leftRect = CGRect(x: rect.minX + art.inset, y: rect.minY,
+                              width: art.laurelWidth, height: rect.height)
+        let rightRect = CGRect(x: rect.maxX - art.laurelWidth - art.inset, y: rect.minY,
+                               width: art.laurelWidth, height: rect.height)
 
         tintMask(art.leftCG, in: leftRect, color: art.tintColor, into: ctx)
         tintMask(art.rightCG, in: rightRect, color: art.tintColor, into: ctx)
 
-        // Text region fills the gap between the two laurels.
-        let textLeft = leftRect.maxX + art.horizontalPad
-        let textRight = rightRect.minX - art.horizontalPad
+        // Text region: between the original (un-inset) laurel inner edges.
+        let textLeft = rect.minX + art.laurelWidth + art.horizontalPad
+        let textRight = rect.maxX - art.laurelWidth - art.horizontalPad
         let textRegionRect = CGRect(
             x: textLeft, y: rect.minY,
             width: max(0, textRight - textLeft),
@@ -454,12 +468,24 @@ package struct OverlayPlacer: @unchecked Sendable {
         ctx.restoreGState()
     }
 
-    /// Loads `name.svg` from `Bundle.module` and rasterizes it to a transparent
-    /// CGImage of the given height. Width preserves the SVG's 420:802 aspect.
+    /// Rasterizes one of the bundled laurel SVGs (now embedded as a string
+    /// constant in `LaurelAssets`) to a transparent CGImage of the given
+    /// height. Width preserves the SVG's 420:802 aspect.
+    ///
+    /// The SVG was previously read from `Bundle.module`. Homebrew installs
+    /// did not symlink the resource bundle directory next to the binary,
+    /// which crashed laurel rendering at runtime, so the bytes now live
+    /// inside the binary itself.
     private func loadLaurelImage(_ name: String, height: CGFloat) -> CGImage? {
         let width = height * Self.laurelAspect
-        guard let url = Bundle.module.url(forResource: name, withExtension: "svg"),
-              let ns = NSImage(contentsOf: url) else { return nil }
+        let svgString: String
+        switch name {
+        case "laurel-left":  svgString = LaurelAssets.leftSVG
+        case "laurel-right": svgString = LaurelAssets.rightSVG
+        default: return nil
+        }
+        guard let data = svgString.data(using: .utf8),
+              let ns = NSImage(data: data) else { return nil }
 
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let bmp = CGContext(

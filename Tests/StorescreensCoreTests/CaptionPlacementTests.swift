@@ -24,6 +24,41 @@ final class CaptionPlacementTests: XCTestCase {
             "vertical_align: center must be higher than bottom — got center=\(centerY), bottom=\(bottomY)")
     }
 
+    /// Verifies absolute pixel position of each vertical_align value, not
+    /// just ordering. With a 1434px canvas and min_height_pct=22 (band ~315px),
+    /// the gap between top->center and center->bottom must each equal half
+    /// the band's slack space. Pixel-scanning hits the topmost visible glyph,
+    /// which sits one font-ascender (~20px for system bold at 5.5%) below the
+    /// line-box top, but that offset is uniform across all three positions
+    /// and cancels out of the expected_step math.
+    func testVerticalAlign_centersBlockInBand() async throws {
+        let canvasH = 1434
+        let bandPct = 22.0
+        let bandH = Int(Double(canvasH) * bandPct / 100.0)
+
+        let topY = try await renderAndFindCaptionTop(verticalAlign: .top, nudgeYPct: nil)
+        let centerY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
+        let bottomY = try await renderAndFindCaptionTop(verticalAlign: .bottom, nudgeYPct: nil)
+
+        // bottom places block bottom at band bottom; top places block top at
+        // band top. (bottomY - topY) = bandH - blockH because top->bottom
+        // shifts by the slack space exactly.
+        let derivedBlockH = bandH - (bottomY - topY)
+        XCTAssertGreaterThan(derivedBlockH, 40,
+            "sanity: derived block-height should be substantial (got \(derivedBlockH))")
+
+        // Center should sit halfway between top and bottom positions.
+        let expectedCenterY = (topY + bottomY) / 2
+        let tolerance = 4
+        XCTAssertLessThan(abs(centerY - expectedCenterY), tolerance,
+            "vertical_align: center should be midway between top (\(topY)) and bottom (\(bottomY)), got \(centerY); expected \(expectedCenterY)")
+
+        // The full slack between top and bottom must equal band - block.
+        let expectedSlack = bandH - derivedBlockH
+        XCTAssertEqual(bottomY - topY, expectedSlack,
+            "top->bottom gap must equal band slack (\(expectedSlack)), got \(bottomY - topY)")
+    }
+
     func testNudgeY_shiftsCaptionInDirection() async throws {
         let baselineY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
         // Positive y_pct should move the caption up (toward screen top =
