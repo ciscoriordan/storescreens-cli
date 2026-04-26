@@ -83,6 +83,13 @@ package struct SlideOverride: Codable, Sendable {
     package var tables: [TableConfig]?
     package var caption: SlideCaption?
     package var chrome: ChromeConfig?
+    /// Per-slide appearance override. When set, this slide is captured in
+    /// the named appearance ("light" or "dark") and rendered with the
+    /// matching `{ light:, dark: }` variant of every chrome field. Capture
+    /// groups slides by their effective appearance so each appearance runs
+    /// at most once per (device, locale) combo. Skips over the legacy
+    /// `appearances:` cross-product for slides that have an override here.
+    package var appearance: String?
 
     /// Per-locale title overrides. Keyed by Xcode locale code
     /// (`en-US`, `el`, `ja`, `zh-Hans`, …). When the current render's
@@ -107,7 +114,8 @@ package struct SlideOverride: Codable, Sendable {
         tables: [TableConfig]? = nil,
         caption: SlideCaption? = nil,
         chrome: ChromeConfig? = nil,
-        captionLocales: [String: CaptionText]? = nil
+        captionLocales: [String: CaptionText]? = nil,
+        appearance: String? = nil
     ) {
         self.background = background
         self.scrim = scrim
@@ -118,10 +126,11 @@ package struct SlideOverride: Codable, Sendable {
         self.caption = caption
         self.chrome = chrome
         self.captionLocales = captionLocales
+        self.appearance = appearance
     }
 
     package enum CodingKeys: String, CodingKey {
-        case background, scrim, logo, images, laurels, tables, caption, chrome
+        case background, scrim, logo, images, laurels, tables, caption, chrome, appearance
         case captionLocales = "caption_locales"
     }
 }

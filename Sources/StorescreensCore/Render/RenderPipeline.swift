@@ -87,7 +87,7 @@ package struct RenderPipeline {
                         sourceURL: sourceURL,
                         outputURL: outputURL,
                         productFamily: pf,
-                        appearance: device.appearance ?? "light",
+                        appearance: shot.appearance ?? device.appearance ?? "light",
                         locale: device.locale,
                         slideIndex: slideIndex,
                         slidesInCombo: slidesInCombo

@@ -279,9 +279,34 @@ struct CaptureCommand: AsyncParsableCommand {
             ? [nil]
             : config.locales!.map { $0 as String? }
 
-        // Determine appearances to iterate (default: both light and dark)
-        let configuredAppearances = config.appearances ?? ["light", "dark"]
-        let multipleAppearances = configuredAppearances.count > 1
+        // Determine appearances to iterate (default: both light and dark).
+        let topLevelAppearances = config.appearances ?? ["light", "dark"]
+
+        // Per-slide appearance overrides. When ANY slide has an override, we
+        // switch to "per-slide mode": each slide is captured exactly once in
+        // its effective appearance (override or top-level), output goes to a
+        // flat folder (no `<appearance>/` subdir), and each manifest entry
+        // carries its own `appearance`. Without overrides, the legacy
+        // multiplier behavior is preserved (cross-product captures + the
+        // `<locale>/<appearance>/` subfolder layout).
+        let perSlideAppearances: [String: String] =
+            (config.render?.slides ?? [:]).compactMapValues { $0.appearance }
+        let perSlideMode = !perSlideAppearances.isEmpty
+
+        // Distinct appearances we actually need to capture in. In legacy
+        // mode this is just `topLevelAppearances`. In per-slide mode it's
+        // the union of top-level appearances plus any override values not
+        // already in top-level.
+        let configuredAppearances: [String] = {
+            guard perSlideMode else { return topLevelAppearances }
+            var out: [String] = []
+            var seen = Set<String>()
+            for a in topLevelAppearances + Array(perSlideAppearances.values) {
+                if !seen.contains(a) { out.append(a); seen.insert(a) }
+            }
+            return out
+        }()
+        let multipleAppearances = !perSlideMode && configuredAppearances.count > 1
 
         var manifestDevices: [CaptureManifest.DeviceCapture] = []
 
@@ -336,7 +361,15 @@ struct CaptureCommand: AsyncParsableCommand {
                         if multipleAppearances {
                             logger.header("Appearance: \(currentAppearance)")
                         }
-                        let effectiveAppearance: String? = multipleAppearances ? currentAppearance : nil
+                        let effectiveAppearance: String? = perSlideMode
+                            ? nil
+                            : (multipleAppearances ? currentAppearance : nil)
+                        let filterForRun = filteredScreenshots(
+                            for: currentAppearance, all: config.screenshots,
+                            perSlideAppearances: perSlideAppearances,
+                            topLevelAppearances: topLevelAppearances,
+                            perSlideMode: perSlideMode
+                        )
 
                         for (index, device) in resolvedDevices.enumerated() {
                             let colorCode = Self.deviceColors[index % Self.deviceColors.count]
@@ -348,12 +381,13 @@ struct CaptureCommand: AsyncParsableCommand {
                             let captures = try await runDeviceAppearance(
                                 device: device, logLine: logLine,
                                 appearance: currentAppearance, effectiveAppearance: effectiveAppearance,
+                                perSlideAppearance: perSlideMode ? currentAppearance : nil,
                                 locale: currentLocale, testLanguage: testLanguage, testRegion: testRegion,
                                 tempDir: tempDir, config: config, derivedDataPath: derivedData,
                                 xctestrunPath: xctestrunPath,
                                 testTarget: config.testTarget, testClass: config.testClass,
                                 outputOrganizer: outputOrganizer, outputDir: effectiveOutputDir,
-                                screenshotFilter: config.screenshots,
+                                screenshotFilter: filterForRun,
                                 logDir: logDir
                             )
                             manifestDevices.append(contentsOf: captures)
@@ -391,17 +425,30 @@ struct CaptureCommand: AsyncParsableCommand {
                                 }
                                 var deviceCaptures: [CaptureManifest.DeviceCapture] = []
                                 for currentAppearance in configuredAppearances {
-                                    let effectiveAppearance: String? = multipleAppearances ? currentAppearance : nil
+                                    let effectiveAppearance: String? = perSlideMode
+                                        ? nil
+                                        : (multipleAppearances ? currentAppearance : nil)
+                                    let filterForRun = self.filteredScreenshots(
+                                        for: currentAppearance, all: config.screenshots,
+                                        perSlideAppearances: perSlideAppearances,
+                                        topLevelAppearances: topLevelAppearances,
+                                        perSlideMode: perSlideMode
+                                    )
+                                    if perSlideMode, filterForRun?.isEmpty == true {
+                                        // No slides resolve to this appearance; skip the run.
+                                        continue
+                                    }
                                     let captures = try await self.runDeviceAppearance(
                                         device: device,
                                         logLine: logLine,
                                         appearance: currentAppearance, effectiveAppearance: effectiveAppearance,
+                                        perSlideAppearance: perSlideMode ? currentAppearance : nil,
                                         locale: currentLocale, testLanguage: testLanguage, testRegion: testRegion,
                                         tempDir: tempDir, config: config, derivedDataPath: derivedData,
                                         xctestrunPath: xctestrunPath,
                                         testTarget: config.testTarget, testClass: config.testClass,
                                         outputOrganizer: outputOrganizer, outputDir: effectiveOutputDir,
-                                        screenshotFilter: config.screenshots,
+                                        screenshotFilter: filterForRun,
                                         logDir: logDir
                                     )
                                     deviceCaptures.append(contentsOf: captures)
@@ -471,6 +518,30 @@ struct CaptureCommand: AsyncParsableCommand {
         return CaptureResult(manifest: finalManifest, outputDir: outputDirURL)
     }
 
+    // MARK: - Per-slide appearance helpers
+
+    /// Returns the screenshot list filtered to the slides that should be
+    /// captured in the given appearance. In legacy mode (no per-slide
+    /// overrides), the full list applies to every appearance. In per-slide
+    /// mode, a slide is included if its override matches the appearance,
+    /// or it has no override and the appearance is in the top-level list.
+    fileprivate func filteredScreenshots(
+        for appearance: String,
+        all: [String]?,
+        perSlideAppearances: [String: String],
+        topLevelAppearances: [String],
+        perSlideMode: Bool
+    ) -> [String]? {
+        guard perSlideMode else { return all }
+        guard let all else { return nil }
+        return all.filter { name in
+            if let override = perSlideAppearances[name] {
+                return override == appearance
+            }
+            return topLevelAppearances.contains(appearance)
+        }
+    }
+
     // MARK: - Per-Device Appearance Capture
 
     /// Runs tests for one device × one appearance and returns the captured screenshots.
@@ -481,6 +552,7 @@ struct CaptureCommand: AsyncParsableCommand {
         logLine: @escaping @Sendable (String) -> Void,
         appearance: String,
         effectiveAppearance: String?,
+        perSlideAppearance: String?,
         locale: String?,
         testLanguage: String?,
         testRegion: String?,
@@ -712,12 +784,21 @@ struct CaptureCommand: AsyncParsableCommand {
         }
         logLine("✓ \(screenshots.count) screenshots")
 
+        // In per-slide mode each shot carries its own appearance so the
+        // renderer + submit can pick the right `{ light:, dark: }` variant
+        // even though the DeviceCapture's appearance field is nil (flat
+        // output layout).
+        let stampedScreenshots: [CaptureManifest.Screenshot] = perSlideAppearance.map { app in
+            screenshots.map {
+                CaptureManifest.Screenshot(name: $0.name, filename: $0.filename, capturedAt: $0.capturedAt, appearance: app)
+            }
+        } ?? screenshots
         return [CaptureManifest.DeviceCapture(
             deviceType: device.appStoreSize.deviceTypeRawValue,
             simulatorName: device.simulatorName,
             locale: locale,
             appearance: effectiveAppearance,
-            screenshots: screenshots
+            screenshots: stampedScreenshots
         )]
     }
 

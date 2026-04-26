@@ -39,11 +39,17 @@ package struct CaptureManifest: Codable, Sendable {
         package let name: String
         package let filename: String
         package let capturedAt: Date
+        /// Per-slide appearance override. When set, the renderer pulls the
+        /// matching `{ light:, dark: }` variant for every chrome field
+        /// regardless of `DeviceCapture.appearance`. nil means inherit
+        /// from the device's appearance (legacy multiplier path).
+        package let appearance: String?
 
-        package init(name: String, filename: String, capturedAt: Date) {
+        package init(name: String, filename: String, capturedAt: Date, appearance: String? = nil) {
             self.name = name
             self.filename = filename
             self.capturedAt = capturedAt
+            self.appearance = appearance
         }
     }
 }

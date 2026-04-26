@@ -537,6 +537,23 @@ final class RenderConfigTests: XCTestCase {
 
     // MARK: - Resolver merge
 
+    func testSlideOverride_decodesAppearance() throws {
+        let yaml = """
+            slides:
+              "02_StudyDark":
+                appearance: dark
+              "03_DetailDark":
+                appearance: dark
+              "01_Home":
+                caption: "Home"
+            """
+        let slides: [String: SlideOverride] = try decodeNested(yaml, key: "slides")
+        XCTAssertEqual(slides["02_StudyDark"]?.appearance, "dark")
+        XCTAssertEqual(slides["03_DetailDark"]?.appearance, "dark")
+        XCTAssertNil(slides["01_Home"]?.appearance,
+                     "slide without override should leave appearance nil")
+    }
+
     func testResolver_slideOverridesDefault_chrome_strokeOnly() throws {
         let config = RenderConfig(
             chrome: ChromeConfig(style: .stroke, strokeColor: "#ffffff", strokeWidth: 3),
