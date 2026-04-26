@@ -314,6 +314,105 @@ final class OverlayPlacerTests: XCTestCase {
             "overflow case must emit a warning; got \(probe.warnings)")
     }
 
+    // MARK: - Laurel multi-line text alignment
+
+    /// Laurel subtitle supplied as an array (`["short", "longer line"]`)
+    /// must center each line independently on the laurel pair's text-area
+    /// midline. Without paragraph.alignment applied to the attributed
+    /// string, Core Text falls back to left-flush layout and the shorter
+    /// line drifts left of the longer line's center.
+    func testLaurel_multiLineSubtitle_centersEachLine() throws {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("laurel-multiline-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let canvasW = 800, canvasH = 600
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        // Laurels in white (default), subtitle text in magenta so we can
+        // pixel-scan independently. The two subtitle lines have very
+        // different widths to expose any flush-left fallback.
+        let laurel = LaurelConfig(
+            title: .string("X"),
+            subtitle: .array(["WW", "WWWWWWWW"]),  // 2x width difference
+            subtitleStyle: CaptionRole(color: "#FF00FF"),
+            color: .shared("#FFFFFF"),
+            position: .aboveTitle,
+            maxHeightPct: 18,
+            insetPct: 0
+        )
+        let slotH = CGFloat(canvasH) * 0.18
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        _ = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [laurel],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+        let cg = ctx.makeImage()!
+
+        // Find rows of magenta pixels - those are the subtitle lines. Group
+        // contiguous magenta rows into runs and compute each run's center x.
+        let magentaRows = magentaRowCentersX(in: cg)
+        XCTAssertGreaterThanOrEqual(magentaRows.count, 2,
+            "expected at least 2 magenta text lines; got \(magentaRows.count)")
+        // Each line's center x should be within a few pixels of the canvas
+        // mid-x (the laurel pair is centered horizontally in the slot).
+        let midX = canvasW / 2
+        for (i, lineCenterX) in magentaRows.enumerated() {
+            XCTAssertEqual(lineCenterX, midX, accuracy: 8,
+                "subtitle line \(i) center x=\(lineCenterX) should be within tolerance of canvas center \(midX)")
+        }
+    }
+
+    /// Walks the rendered image, finds runs of rows with magenta pixels
+    /// (text lines), and returns the horizontal midpoint of each run.
+    private func magentaRowCentersX(in cg: CGImage) -> [Int] {
+        let data = cg.dataProvider!.data! as Data
+        let bpp = 4
+        var rowMidpoints: [Int] = []
+        // Collect (rowMin, rowMax) pairs for contiguous magenta-bearing rows.
+        var inRun = false
+        var runMinX = cg.width
+        var runMaxX = -1
+        var runRowCount = 0
+        for y in 0..<cg.height {
+            var rowHasMagenta = false
+            var rowMin = cg.width
+            var rowMax = -1
+            for x in 0..<cg.width {
+                let off = y * cg.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                if r > 200 && g < 60 && b > 200 {
+                    rowHasMagenta = true
+                    if x < rowMin { rowMin = x }
+                    if x > rowMax { rowMax = x }
+                }
+            }
+            if rowHasMagenta {
+                if !inRun { inRun = true; runMinX = cg.width; runMaxX = -1; runRowCount = 0 }
+                runMinX = min(runMinX, rowMin)
+                runMaxX = max(runMaxX, rowMax)
+                runRowCount += 1
+            } else if inRun {
+                if runRowCount >= 2 {
+                    rowMidpoints.append((runMinX + runMaxX) / 2)
+                }
+                inRun = false
+            }
+        }
+        if inRun, runRowCount >= 2 {
+            rowMidpoints.append((runMinX + runMaxX) / 2)
+        }
+        return rowMidpoints
+    }
+
     // MARK: - Laurel inset_pct
 
     /// inset_pct shifts the left laurel right and the right laurel left by

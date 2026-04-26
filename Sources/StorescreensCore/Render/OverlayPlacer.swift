@@ -349,6 +349,31 @@ package struct OverlayPlacer: @unchecked Sendable {
         return URL(fileURLWithPath: path, relativeTo: baseDirectory).standardized
     }
 
+    // MARK: - Paragraph alignment helper
+
+    /// Wraps an attributed string with a paragraph style that pins line
+    /// alignment, so multi-line text centers line-by-line inside the
+    /// framesetter's draw rect rather than falling back to default
+    /// (left-flush) layout. `MarkdownAttributor.buildAttributed` doesn't
+    /// add paragraph alignment of its own; CaptionLayouter applies it,
+    /// and overlay code (laurels, table cells) needs to do the same.
+    private static func applyParagraphAlignment(
+        _ attr: NSAttributedString, align: CaptionAlign
+    ) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: attr)
+        let paragraph = NSMutableParagraphStyle()
+        switch align {
+        case .left:   paragraph.alignment = .left
+        case .center: paragraph.alignment = .center
+        case .right:  paragraph.alignment = .right
+        }
+        mutable.addAttribute(
+            .paragraphStyle, value: paragraph,
+            range: NSRange(location: 0, length: mutable.length)
+        )
+        return mutable
+    }
+
     // MARK: - Laurel measurement
 
     /// SVG aspect: width 420, height 802, so each laurel renders at
@@ -406,17 +431,25 @@ package struct OverlayPlacer: @unchecked Sendable {
             align: cfg.subtitleStyle?.align ?? .center
         )
 
+        // Note: MarkdownAttributor doesn't apply paragraph alignment, so for
+        // multi-line laurel text we need to add it ourselves. Without this
+        // each line's framesetter rect lays out lines flush-left within the
+        // measured rect (which is the width of the widest line), so a
+        // 2-line subtitle whose lines have different widths comes out with
+        // narrower lines visibly off-center vs the laurels' midline.
         let titleAttr = cfg.title.flatMap { text -> NSAttributedString? in
             let joined = text.lines.joined(separator: "\n")
-            return try? MarkdownAttributor.buildAttributed(
+            guard let raw = try? MarkdownAttributor.buildAttributed(
                 plainOrMarkdown: joined, role: titleStyle, resolver: fontResolver
-            )
+            ) else { return nil }
+            return Self.applyParagraphAlignment(raw, align: titleStyle.align)
         }
         let subtitleAttr = cfg.subtitle.flatMap { text -> NSAttributedString? in
             let joined = text.lines.joined(separator: "\n")
-            return try? MarkdownAttributor.buildAttributed(
+            guard let raw = try? MarkdownAttributor.buildAttributed(
                 plainOrMarkdown: joined, role: subtitleStyle, resolver: fontResolver
-            )
+            ) else { return nil }
+            return Self.applyParagraphAlignment(raw, align: subtitleStyle.align)
         }
 
         // Measure at near-infinite width; the text region grows to fit content.
@@ -641,12 +674,16 @@ package struct OverlayPlacer: @unchecked Sendable {
                     row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
                     continue
                 }
-                guard let attr = try? MarkdownAttributor.buildAttributed(
+                guard let raw = try? MarkdownAttributor.buildAttributed(
                     plainOrMarkdown: text, role: style, resolver: fontResolver
                 ) else {
                     row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
                     continue
                 }
+                // Apply per-cell horizontal alignment so multi-line cell
+                // text centers (or left/right-aligns) line by line within
+                // the measured cell rect.
+                let attr = Self.applyParagraphAlignment(raw, align: cellAlign)
                 let fs = AttributedFramesetter(attributed: attr)
                 let size = fs.suggestedSize(constrainedTo: CGSize(
                     width: CGFloat.greatestFiniteMagnitude,
