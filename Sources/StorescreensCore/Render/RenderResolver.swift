@@ -280,6 +280,8 @@ package enum RenderResolver {
             shadow: override?.shadow ?? base?.shadow,
             paddingPct: override?.paddingPct ?? base?.paddingPct,
             fit: override?.fit ?? base?.fit,
+            topPct: override?.topPct ?? base?.topPct,
+            deviceHeightPct: override?.deviceHeightPct ?? base?.deviceHeightPct,
             modelPreference: override?.modelPreference ?? base?.modelPreference,
             colorwayPreference: override?.colorwayPreference ?? base?.colorwayPreference
         )

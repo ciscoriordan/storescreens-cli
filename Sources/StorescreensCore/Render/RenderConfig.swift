@@ -684,6 +684,28 @@ package struct ChromeConfig: Codable, Sendable {
     /// vertically. `contain` fits both dimensions inside the padded rect.
     /// Default: `width`.
     package var fit: ChromeFit?
+    /// Pin the device's top edge to a fixed y-percentage of the canvas.
+    /// When set, the device chrome ignores the natural band stack-up
+    /// (caption + above_title + below_subtitle + chrome inset) and anchors
+    /// directly to this y. All overlays/captions are rendered into the
+    /// available space ABOVE this anchor; whatever space remains below
+    /// goes to the device. Use this to guarantee the device sits at the
+    /// same y-position across slides regardless of how much content sits
+    /// above it (e.g. when one slide has a table + title and another only
+    /// has a caption — they should both put the device at the same y).
+    /// Value is the percentage from canvas TOP (0–100).
+    package var topPct: Double?
+    /// Lock the device to occupy a fixed percentage of the canvas height.
+    /// Caption bands above the device auto-compress so the natural
+    /// `caption.min_height_pct` floor is overridden by whatever space
+    /// remains after `above_title` + `middle_slot` + `below_subtitle`
+    /// overlays are subtracted from `(100 - device_height_pct)%` of the
+    /// canvas. Use this to enforce a uniform device size across slides
+    /// whose overlay bands differ — slides with bigger overlays get a
+    /// smaller caption band, but the device remains the same size.
+    /// Value is the percentage of the canvas height the device fills (0–100).
+    /// Takes precedence over `top_pct` when both are set.
+    package var deviceHeightPct: Double?
     /// User-supplied preference order for bezel model (e.g. ["Pro Max", "Pro"]).
     /// Overrides the built-in default when set; applied at `bezels import` time,
     /// not at render time.
@@ -698,6 +720,8 @@ package struct ChromeConfig: Codable, Sendable {
         shadow: Bool? = nil,
         paddingPct: Double? = nil,
         fit: ChromeFit? = nil,
+        topPct: Double? = nil,
+        deviceHeightPct: Double? = nil,
         modelPreference: [String]? = nil,
         colorwayPreference: [String]? = nil
     ) {
@@ -708,6 +732,8 @@ package struct ChromeConfig: Codable, Sendable {
         self.shadow = shadow
         self.paddingPct = paddingPct
         self.fit = fit
+        self.topPct = topPct
+        self.deviceHeightPct = deviceHeightPct
         self.modelPreference = modelPreference
         self.colorwayPreference = colorwayPreference
     }
@@ -720,6 +746,8 @@ package struct ChromeConfig: Codable, Sendable {
         case shadow
         case paddingPct = "padding_pct"
         case fit
+        case topPct = "top_pct"
+        case deviceHeightPct = "device_height_pct"
         case modelPreference = "model_preference"
         case colorwayPreference = "colorway_preference"
     }

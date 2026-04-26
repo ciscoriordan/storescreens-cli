@@ -239,7 +239,23 @@ package struct RenderPipeline {
             guard let cr = captionResolved else { return false }
             return cr.title != nil || cr.subtitle != nil
         }()
+        let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
+
+        // Caption text band height. Two paths:
+        //   1. `chrome.device_height_pct` is set → device size is canonical.
+        //      Caption band absorbs whatever space remains after the
+        //      overlay bands take their cut, ignoring `min_height_pct`.
+        //      This guarantees uniform device size across slides.
+        //   2. Default → `caption.min_height_pct` floors the band.
         let captionTextH: CGFloat = {
+            if let dhp = chromeConfig?.deviceHeightPct {
+                let availableForBands = canvasSize.height * (100 - CGFloat(dhp)) / 100.0
+                let leftover = availableForBands - aboveTitleBandH - middleSlotH - belowSubtitleBandH
+                if leftover < 0 {
+                    warnings.append("[\(slideName)] chrome.device_height_pct (\(dhp)%) leaves no room for caption — overlay bands (~\(Int((aboveTitleBandH + middleSlotH + belowSubtitleBandH) / canvasSize.height * 100))%) already exceed the available space (~\(Int((100 - dhp)))%)")
+                }
+                return max(0, leftover)
+            }
             guard hasCaption, let cr = captionResolved else { return 0 }
             let minHeightPct = CGFloat(cr.minHeightPct ?? 22)
             return canvasSize.height * minHeightPct / 100.0
@@ -250,14 +266,33 @@ package struct RenderPipeline {
         let captionBandH = captionTextH + middleSlotH
 
         let reservedTop = aboveTitleBandH + captionBandH + belowSubtitleBandH
-        let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
         let chromePaddingPct = CGFloat(chromeConfig?.paddingPct ?? 4)
         let chromeInsetDy = (canvasSize.height - reservedTop) * chromePaddingPct / 100.0
-        // Top of the visible device in screen coordinates (distance
-        // from canvas top). In bottom-left CG coords this is
-        // `canvasSize.height - deviceTopY`.
-        let deviceTopY = reservedTop + chromeInsetDy
-        let deviceTopBL = canvasSize.height - deviceTopY
+        // Top of the chrome rect (the band where the bezel + screenshot
+        // get drawn). Caption + overlays sit above this y. With
+        // `device_height_pct` set this equals canvas * (100 - dhp)/100; with
+        // `top_pct` it equals the pinned y; otherwise it's the natural
+        // stack-up.
+        let chromeRectTopY: CGFloat = {
+            if let dhp = chromeConfig?.deviceHeightPct {
+                return canvasSize.height * (100 - CGFloat(dhp)) / 100.0
+            }
+            if let topPct = chromeConfig?.topPct {
+                let pinned = canvasSize.height * CGFloat(topPct) / 100.0
+                if pinned < reservedTop {
+                    warnings.append("[\(slideName)] chrome.top_pct (\(topPct)%) is above the natural top of the bands (~\(Int(reservedTop / canvasSize.height * 100))% of canvas) — overlays/caption may overflow the device anchor")
+                }
+                return pinned
+            }
+            return reservedTop
+        }()
+        // Visual device top: where the bezel is *actually drawn* after the
+        // `chrome.padding_pct` inset (default 4%) shrinks the bezel away from
+        // the chromeRect top edge. Caption centering must target this y, not
+        // the bare chromeRect top — otherwise short captions float above the
+        // bezel with a fat gap below them. Cached as `deviceTopY` so the
+        // existing layout / centering names keep their meaning.
+        let deviceTopY = chromeRectTopY + chromeInsetDy
 
         // --- Layer 3: above_title overlays ---
         if aboveTitleBandH > 0 {
