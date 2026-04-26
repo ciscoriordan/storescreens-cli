@@ -312,7 +312,24 @@ package struct RenderPipeline {
                 case .top:
                     return captionBandTopBL - out.measuredHeight
                 case .center:
-                    let mid = (captionBandTopBL + captionBandBottomBL) / 2
+                    // Center the block between the top of the caption area
+                    // (canvas top, or logo band's bottom edge if an
+                    // above_title overlay is present) and the next physical
+                    // boundary below the caption — either the top of the
+                    // below_subtitle overlay band, or, when no such overlay
+                    // exists, the visible top of the device. Including the
+                    // chrome inset in the centering range when no overlay
+                    // sits between caption and device produces visually
+                    // balanced gaps above and below the caption regardless
+                    // of how much slack `min_height_pct` reserves.
+                    let topAnchorBL = captionBandTopBL
+                    let bottomAnchorBL: CGFloat
+                    if belowSubtitleBandH > 0 {
+                        bottomAnchorBL = captionBandBottomBL
+                    } else {
+                        bottomAnchorBL = canvasSize.height - deviceTopY
+                    }
+                    let mid = (topAnchorBL + bottomAnchorBL) / 2
                     return mid - out.measuredHeight / 2
                 case .bottom:
                     return captionBandBottomBL
