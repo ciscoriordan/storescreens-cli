@@ -267,7 +267,6 @@ package struct RenderPipeline {
 
         let reservedTop = aboveTitleBandH + captionBandH + belowSubtitleBandH
         let chromePaddingPct = CGFloat(chromeConfig?.paddingPct ?? 4)
-        let chromeInsetDy = (canvasSize.height - reservedTop) * chromePaddingPct / 100.0
         // Top of the chrome rect (the band where the bezel + screenshot
         // get drawn). Caption + overlays sit above this y. With
         // `device_height_pct` set this equals canvas * (100 - dhp)/100; with
@@ -286,6 +285,11 @@ package struct RenderPipeline {
             }
             return reservedTop
         }()
+        // Padding inset shrinks the bezel away from chromeRect's top edge.
+        // Use chromeRectTopY (not reservedTop) so that when device_height_pct or
+        // top_pct overrides the natural stack-up, the inset and chromeRect height
+        // both honour the anchor instead of the bands' natural extent.
+        let chromeInsetDy = (canvasSize.height - chromeRectTopY) * chromePaddingPct / 100.0
         // Visual device top: where the bezel is *actually drawn* after the
         // `chrome.padding_pct` inset (default 4%) shrinks the bezel away from
         // the chromeRect top edge. Caption centering must target this y, not
@@ -432,7 +436,7 @@ package struct RenderPipeline {
             x: 0,
             y: 0,
             width: canvasSize.width,
-            height: canvasSize.height - reservedTop
+            height: canvasSize.height - chromeRectTopY
         )
         try chromeRenderer.drawChrome(
             chromeConfig,
