@@ -559,6 +559,12 @@ package struct TableConfig: Codable, Sendable {
     /// column. Cells without an entry (or columns past the array length)
     /// inherit `cell_style.align` (default center).
     package var columnAligns: [CaptionAlign]?
+    /// Per-column vertical alignment override. Mirrors `column_aligns` but
+    /// for the y axis. Cells without an entry inherit
+    /// `cell_style.vertical_align` (default center). Useful when one row
+    /// auto-grows for a multi-line cell and you want its single-line
+    /// neighbors to top-align with that cell's first line.
+    package var columnValigns: [VerticalAlign]?
     /// Border configuration. Default: enabled, all outer + inner sides,
     /// `width_pct: 0.15` (% of canvas height).
     package var border: TableBorderConfig?
@@ -583,6 +589,7 @@ package struct TableConfig: Codable, Sendable {
         borderColor: AppearanceVariant<String>? = nil,
         cellStyle: CaptionRole? = nil,
         columnAligns: [CaptionAlign]? = nil,
+        columnValigns: [VerticalAlign]? = nil,
         border: TableBorderConfig? = nil,
         cellPaddingPct: Double? = nil,
         position: OverlayPosition? = nil,
@@ -597,6 +604,7 @@ package struct TableConfig: Codable, Sendable {
         self.borderColor = borderColor
         self.cellStyle = cellStyle
         self.columnAligns = columnAligns
+        self.columnValigns = columnValigns
         self.border = border
         self.cellPaddingPct = cellPaddingPct
         self.position = position
@@ -612,6 +620,7 @@ package struct TableConfig: Codable, Sendable {
         case borderColor = "border_color"
         case cellStyle = "cell_style"
         case columnAligns = "column_aligns"
+        case columnValigns = "column_valigns"
         case cellPaddingPct = "cell_padding_pct"
         case maxHeightPct = "max_height_pct"
     }

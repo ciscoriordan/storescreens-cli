@@ -569,6 +569,7 @@ package struct OverlayPlacer: @unchecked Sendable {
         let framesetter: AttributedFramesetter?
         let textSize: CGSize
         let align: CaptionAlign
+        let verticalAlign: VerticalAlign
     }
 
     /// Lays out the table into a `MeasuredItem` so the slot-distribution code
@@ -659,10 +660,14 @@ package struct OverlayPlacer: @unchecked Sendable {
             align: cfg.cellStyle?.align ?? .center
         )
 
-        // Build framesetters per cell. Each cell honors per-column align if
-        // `column_aligns[c]` is set, otherwise inherits `cell_style.align`.
-        // Measurement runs at near-infinite width so explicit `\n` line
-        // breaks produce in-cell line wrapping but lines never wrap mid-text.
+        // Build framesetters per cell. Each cell honors per-column horizontal
+        // align (column_aligns[c]) and per-column vertical align
+        // (column_valigns[c]); both fall back to cell_style.align /
+        // cell_style.vertical_align (default center / center) when the
+        // arrays don't cover this column. Measurement runs at near-infinite
+        // width so explicit `\n` line breaks produce in-cell line wrapping
+        // but lines never wrap mid-text.
+        let cellStyleVAlign = cfg.cellStyle?.verticalAlign ?? .center
         var cells: [[CellArtifact]] = []
         var colWidths = Array(repeating: CGFloat(0), count: numCols)
         for r in 0..<numRows {
@@ -670,14 +675,17 @@ package struct OverlayPlacer: @unchecked Sendable {
             for c in 0..<numCols {
                 let text = grid[r][c]
                 let cellAlign = colAlign(at: c, columnAligns: cfg.columnAligns) ?? style.align
+                let cellVAlign = colVAlign(at: c, columnValigns: cfg.columnValigns) ?? cellStyleVAlign
                 if text.isEmpty {
-                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero,
+                                            align: cellAlign, verticalAlign: cellVAlign))
                     continue
                 }
                 guard let raw = try? MarkdownAttributor.buildAttributed(
                     plainOrMarkdown: text, role: style, resolver: fontResolver
                 ) else {
-                    row.append(CellArtifact(framesetter: nil, textSize: .zero, align: cellAlign))
+                    row.append(CellArtifact(framesetter: nil, textSize: .zero,
+                                            align: cellAlign, verticalAlign: cellVAlign))
                     continue
                 }
                 // Apply per-cell horizontal alignment so multi-line cell
@@ -690,7 +698,8 @@ package struct OverlayPlacer: @unchecked Sendable {
                     height: CGFloat.greatestFiniteMagnitude
                 ))
                 if size.width > colWidths[c] { colWidths[c] = size.width }
-                row.append(CellArtifact(framesetter: fs, textSize: size, align: cellAlign))
+                row.append(CellArtifact(framesetter: fs, textSize: size,
+                                        align: cellAlign, verticalAlign: cellVAlign))
             }
             cells.append(row)
         }
@@ -746,6 +755,12 @@ package struct OverlayPlacer: @unchecked Sendable {
     /// caller can fall back to the cell-style default.
     private func colAlign(at c: Int, columnAligns: [CaptionAlign]?) -> CaptionAlign? {
         guard let aligns = columnAligns, c < aligns.count else { return nil }
+        return aligns[c]
+    }
+
+    /// Resolve the vertical alignment for column `c` from `column_valigns`.
+    private func colVAlign(at c: Int, columnValigns: [VerticalAlign]?) -> VerticalAlign? {
+        guard let aligns = columnValigns, c < aligns.count else { return nil }
         return aligns[c]
     }
 
@@ -869,8 +884,16 @@ package struct OverlayPlacer: @unchecked Sendable {
                 case .right:  xOffset = max(0, cellWidth - cell.textSize.width)
                 }
                 let textX = cellLeft + xOffset
-                // Vertical center: text bottom = cellBottom + (cellHeight - textH)/2.
-                let textY = cellBottom + max(0, (cellHeight - cell.textSize.height) / 2)
+                // Vertical alignment within the cell. CG y-axis is bottom-up,
+                // so cellBottom is the *low* y-edge and `textY` (= text rect's
+                // low edge) increases as text moves UP within the cell.
+                let slack = max(0, cellHeight - cell.textSize.height)
+                let textY: CGFloat
+                switch cell.verticalAlign {
+                case .top:    textY = cellBottom + slack       // text rect's bottom hugs the cell's text-area top
+                case .center: textY = cellBottom + slack / 2
+                case .bottom: textY = cellBottom              // text rect's bottom hugs the cell's text-area bottom
+                }
                 fs.draw(in: ctx, rect: CGRect(
                     x: textX, y: textY,
                     width: min(cell.textSize.width, cellWidth),

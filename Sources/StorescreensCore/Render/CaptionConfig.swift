@@ -53,6 +53,11 @@ package struct CaptionRole: Codable, Sendable {
     package var minFontSizePct: Double?
     package var color: String?
     package var align: CaptionAlign?
+    /// Vertical alignment within the role's container. Currently only
+    /// honored by table cells (positioning text within the row's height
+    /// when the row auto-grows for multi-line cells); ignored by captions
+    /// and laurels, which use their own block-level positioning.
+    package var verticalAlign: VerticalAlign?
 
     package init(
         font: FontSpec? = nil,
@@ -61,7 +66,8 @@ package struct CaptionRole: Codable, Sendable {
         fontSizePct: Double? = nil,
         minFontSizePct: Double? = nil,
         color: String? = nil,
-        align: CaptionAlign? = nil
+        align: CaptionAlign? = nil,
+        verticalAlign: VerticalAlign? = nil
     ) {
         self.font = font
         self.weight = weight
@@ -70,12 +76,14 @@ package struct CaptionRole: Codable, Sendable {
         self.minFontSizePct = minFontSizePct
         self.color = color
         self.align = align
+        self.verticalAlign = verticalAlign
     }
 
     package enum CodingKeys: String, CodingKey {
         case font, weight, italic, color, align
         case fontSizePct = "font_size_pct"
         case minFontSizePct = "min_font_size_pct"
+        case verticalAlign = "vertical_align"
     }
 }
 

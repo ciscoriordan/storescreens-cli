@@ -349,10 +349,19 @@ package struct RenderPipeline {
         }
 
         // --- Layer 6: below_subtitle overlays ---
+        //
+        // Slot sits flush against the caption band's bottom (no gap).
+        // chrome.padding_pct is the gap BEFORE the device, applied below
+        // this slot (between slot bottom and device top), not BEFORE every
+        // slot. Pre-2.7 we positioned the slot at `deviceTopBL` which let
+        // chromeInsetDy slip in between caption and below_subtitle bands,
+        // creating an unreachable phantom gap users could not close even
+        // with min_height_pct floored and aggressive nudge.
         if belowSubtitleBandH > 0 {
+            let slotTopBL = canvasSize.height - aboveTitleBandH - captionBandH
             let belowRect = CGRect(
                 x: 0,
-                y: deviceTopBL,
+                y: slotTopBL - belowSubtitleBandH,
                 width: canvasSize.width,
                 height: belowSubtitleBandH
             )

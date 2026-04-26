@@ -660,6 +660,95 @@ final class OverlayPlacerTests: XCTestCase {
         XCTAssertTrue(warns.isEmpty, "column_aligns render must not warn; got \(warns)")
     }
 
+    /// In a 2-cell row where the right cell is 2-line and the left is
+    /// single-line, the row auto-grows. With column_valigns: [top, top],
+    /// the left cell's single line should sit near the top of that row,
+    /// not in its vertical center.
+    func testTable_columnValigns_top_pinsSingleLineToTopOfRow() throws {
+        let topProbe = try probeRowOneLeftCellY(verticalAlign: .top)
+        let centerProbe = try probeRowOneLeftCellY(verticalAlign: .center)
+        let bottomProbe = try probeRowOneLeftCellY(verticalAlign: .bottom)
+
+        // top should sit higher (smaller y-from-image-top) than center,
+        // which sits higher than bottom. Each step should be substantial.
+        XCTAssertLessThan(topProbe, centerProbe,
+            "vertical_align: top should be above vertical_align: center; got top=\(topProbe), center=\(centerProbe)")
+        XCTAssertLessThan(centerProbe, bottomProbe,
+            "vertical_align: center should be above vertical_align: bottom; got center=\(centerProbe), bottom=\(bottomProbe)")
+        // The top->bottom gap should match the row's slack for a 2-line
+        // cell vs 1-line cell at the same font size.
+        XCTAssertGreaterThan(bottomProbe - topProbe, 20,
+            "top->bottom shift should be substantial for a multi-line row; got \(bottomProbe - topProbe)")
+    }
+
+    /// Renders a 1-row, 2-cell table where the right cell has a `\n`
+    /// (2 lines) and the left cell is single-line. Returns the y of the
+    /// topmost magenta pixel in col 0's known x range. Canvas + content are
+    /// chosen so col 0's text is clearly to the left of col 1's text.
+    private func probeRowOneLeftCellY(verticalAlign: VerticalAlign) throws -> Int {
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("table-valign-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+
+        let canvasW = 1200, canvasH = 800
+        let ctx = makeTransparentContext(width: canvasW, height: canvasH)
+        let placer = OverlayPlacer(
+            baseDirectory: runRoot,
+            fontResolver: FontResolver(baseDirectory: runRoot)
+        )
+        let table = TableConfig(
+            // Long enough text in col 0 so col 0's pixels are clearly to
+            // the left of col 1's pixels (not just a few px apart).
+            rows: [["AAAAAAAAAAAA", "BBBBBB\nCCCCCC"]],
+            textColor: .shared("#FF00FF"),
+            borderColor: .shared("#FFFFFF"),
+            cellStyle: CaptionRole(verticalAlign: verticalAlign),
+            position: .aboveTitle,
+            maxHeightPct: 25
+        )
+        let slotH = CGFloat(canvasH) * 0.25
+        let slotRect = CGRect(x: 0, y: CGFloat(canvasH) - slotH,
+                              width: CGFloat(canvasW), height: slotH)
+        let canvas = CGSize(width: canvasW, height: canvasH)
+
+        _ = placer.drawSlot(
+            position: .aboveTitle, images: [], laurels: [], tables: [table],
+            appearance: "light", slotRect: slotRect, canvasSize: canvas,
+            isFirstInCombo: true, into: ctx
+        )
+
+        let cg = ctx.makeImage()!
+        let data = cg.dataProvider!.data! as Data
+        let bpp = 4
+        // Find all magenta pixels first, group by column. The leftmost
+        // cluster is col 0; compute its topmost row.
+        var magentaXs = Set<Int>()
+        var rowsByX: [Int: Int] = [:]  // smallest y for each x
+        for y in 0..<cg.height {
+            for x in 0..<cg.width {
+                let off = y * cg.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                if r > 200 && g < 60 && b > 200 {
+                    magentaXs.insert(x)
+                    if rowsByX[x] == nil { rowsByX[x] = y }
+                }
+            }
+        }
+        guard let minX = magentaXs.min(), let maxX = magentaXs.max() else {
+            XCTFail("no magenta pixels found")
+            return -1
+        }
+        // Split at the midpoint between leftmost and rightmost text x.
+        // Col 0 = pixels in [minX, midX]; col 1 = (midX, maxX].
+        let midX = (minX + maxX) / 2
+        var col0Top = Int.max
+        for x in minX...midX {
+            if let y = rowsByX[x], y < col0Top { col0Top = y }
+        }
+        return col0Top
+    }
+
     /// Padding short rows: a 2-column-wide first row + 1-column second row
     /// gets padded to 2x2 with the [1][1] cell empty. Renders without crash.
     func testTable_unequalRows_padsWithEmpty() throws {

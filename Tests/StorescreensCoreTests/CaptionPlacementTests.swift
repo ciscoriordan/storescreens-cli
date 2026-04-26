@@ -98,6 +98,115 @@ final class CaptionPlacementTests: XCTestCase {
     /// Block is observed to render past the band's bottom edge instead of
     /// shrinking to fit - the actual rendered block bottom lands ~30 px
     /// below where the layouter thinks it ends.
+    /// With a below_subtitle overlay (table) and vertical_align: bottom on
+    /// the caption, the caption block bottom must sit flush against the
+    /// overlay's top edge - no chrome-inset gap between them. Pre-2.7
+    /// the below_subtitle slot was positioned at deviceTopBL (which has
+    /// chromeInsetDy already subtracted), creating an unreachable phantom
+    /// gap users could not close even with min_height_pct floored.
+    func testCaption_belowSubtitleOverlay_tightBelowCaption() async throws {
+        let canvasW = 660, canvasH = 1434
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attach-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeBlackPNG(width: canvasW, height: canvasH, to: capturedRoot.appendingPathComponent(filename))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "attach-test",
+            appName: "CP", displayName: "CP", scheme: "CP",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"", simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [CaptureManifest.Screenshot(name: "01_Home", filename: filename, capturedAt: Date())]
+                ),
+            ]
+        )
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#000000")),
+            tables: [
+                TableConfig(
+                    rows: [["A"]],
+                    textColor: .shared("#FF00FF"),  // magenta so it's distinguishable
+                    borderColor: .shared("#00FF00"),
+                    position: .belowSubtitle,
+                    maxHeightPct: 10
+                ),
+            ],
+            caption: CaptionConfig(
+                title: CaptionRole(
+                    font: .system, weight: .bold, fontSizePct: 4,
+                    color: "#FFFFFF", align: .center
+                ),
+                minHeightPct: 8, paddingPct: 4,
+                verticalAlign: .bottom
+            ),
+            chrome: ChromeConfig(
+                style: .stroke, strokeColor: "#222222", strokeWidth: 2,
+                cornerRadius: .auto, shadow: false, paddingPct: 5
+            ),
+            slides: ["01_Home": SlideOverride(caption: SlideCaption(title: .string("Title")))]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot)
+        XCTAssertEqual(out.failures.count, 0)
+
+        let outURL = renderRoot.appendingPathComponent(filename)
+        guard let src = CGImageSourceCreateWithURL(outURL as CFURL, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let data = img.dataProvider?.data as Data? else {
+            return XCTFail("could not read rendered PNG")
+        }
+        let bpp = 4
+        // Find the caption block's visible bottom: scan rows top-down,
+        // last row with a white pixel near the center is the caption.
+        // Use an upper bound (above the table) to ignore table content.
+        var captionBottomY = -1
+        let captionScanLimit = img.height / 4  // caption is in the top quarter
+        for y in 0..<captionScanLimit {
+            for x in stride(from: img.width / 4, through: 3 * img.width / 4, by: 4) {
+                let off = y * img.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                if r > 220 && g > 220 && b > 220 {
+                    captionBottomY = y
+                    break
+                }
+            }
+        }
+        // Find the table's top edge: scan rows top-down, first row with
+        // green border pixels.
+        var tableTopY = -1
+        for y in 0..<img.height {
+            for x in 0..<img.width {
+                let off = y * img.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                if r < 60 && g > 200 && b < 60 {
+                    tableTopY = y
+                    break
+                }
+            }
+            if tableTopY >= 0 { break }
+        }
+        XCTAssertGreaterThan(captionBottomY, 0, "caption text not found")
+        XCTAssertGreaterThan(tableTopY, 0, "table not found")
+        XCTAssertGreaterThan(tableTopY, captionBottomY,
+            "table must be below caption")
+        let gap = tableTopY - captionBottomY
+        // Tight: ≤ 30 px on a 1434 canvas (~2% of canvas) accounts for
+        // descender padding below the caption's last line; the chrome-inset
+        // phantom gap (4% of canvas = ~57 px) is gone after the layout fix.
+        XCTAssertLessThanOrEqual(gap, 30,
+            "caption-to-table gap must be tight; got \(gap)px on \(img.height)px canvas. The chrome-inset phantom gap should not appear here.")
+    }
+
     /// Regression guard for a real user repro: iPhone 17 Pro Max canvas
     /// (1320x2868), 5-line title with markdown bold inside a `weight: medium`
     /// base style, font_size_pct 3.8 / min_font_size_pct 3.5, min_height_pct
