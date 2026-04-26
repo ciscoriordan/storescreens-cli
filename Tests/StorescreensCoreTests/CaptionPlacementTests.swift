@@ -25,71 +25,86 @@ final class CaptionPlacementTests: XCTestCase {
     }
 
     /// Verifies absolute pixel position of each vertical_align value, not
-    /// just ordering. With a 1434px canvas and min_height_pct=22 (band ~315px),
-    /// the gap between top->center and center->bottom must each equal half
-    /// the band's slack space. Pixel-scanning hits the topmost visible glyph,
-    /// which sits one font-ascender (~20px for system bold at 5.5%) below the
-    /// line-box top, but that offset is uniform across all three positions
-    /// and cancels out of the expected_step math.
-    func testVerticalAlign_centersBlockInBand() async throws {
+    /// just ordering. `vertical_align: center` balances the block visually
+    /// between the top of the caption area and the visible top of the device,
+    /// which means the centered position is offset from the band midpoint by
+    /// half the chrome inset. (This is the post-2.7.2 visual-balance behavior;
+    /// pre-2.7.2 the block centered within the band only and the chrome inset
+    /// produced an unintentional gap below.)
+    func testVerticalAlign_centersBlockBetweenCanvasAndDevice() async throws {
         let canvasH = 1434
         let bandPct = 22.0
         let bandH = Int(Double(canvasH) * bandPct / 100.0)
+        let chromePaddingPct = 5.0
+        let chromeInsetDy = Int(Double(canvasH - bandH) * chromePaddingPct / 100.0)
 
         let topY = try await renderAndFindCaptionTop(verticalAlign: .top, nudgeYPct: nil)
         let centerY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
         let bottomY = try await renderAndFindCaptionTop(verticalAlign: .bottom, nudgeYPct: nil)
 
-        // bottom places block bottom at band bottom; top places block top at
-        // band top. (bottomY - topY) = bandH - blockH because top->bottom
-        // shifts by the slack space exactly.
+        // top/bottom are unchanged: top places block top at band top, bottom
+        // places block bottom at band bottom. (bottomY - topY) = bandH - blockH.
         let derivedBlockH = bandH - (bottomY - topY)
         XCTAssertGreaterThan(derivedBlockH, 40,
             "sanity: derived block-height should be substantial (got \(derivedBlockH))")
 
-        // Center should sit halfway between top and bottom positions.
-        let expectedCenterY = (topY + bottomY) / 2
-        let tolerance = 4
+        // center sits halfway between (topY) and (bottomY + chromeInsetDy)
+        // — i.e. the band midpoint plus half the chrome inset, because the
+        // centering range now extends to device top, not band bottom.
+        let expectedCenterY = (topY + bottomY + chromeInsetDy) / 2
+        let tolerance = 6
         XCTAssertLessThan(abs(centerY - expectedCenterY), tolerance,
-            "vertical_align: center should be midway between top (\(topY)) and bottom (\(bottomY)), got \(centerY); expected \(expectedCenterY)")
+            "vertical_align: center should sit at the canvas-to-device midpoint. top=\(topY), bottom=\(bottomY), chromeInset=\(chromeInsetDy); expected \(expectedCenterY); got \(centerY)")
 
-        // The full slack between top and bottom must equal band - block.
         let expectedSlack = bandH - derivedBlockH
         XCTAssertEqual(bottomY - topY, expectedSlack,
             "top->bottom gap must equal band slack (\(expectedSlack)), got \(bottomY - topY)")
     }
 
-    /// Multi-line dense caption: with vertical_align: center, the slack
-    /// space (band - block) must split equally above and below the block.
-    /// User reported 2% above + 8% below on a 5-line caption in a 22% band,
-    /// which would imply a 6-percentage-point top bias.
+    /// Multi-line dense caption with vertical_align: center: visual gap above
+    /// the block must equal the visual gap below the block, where "below"
+    /// extends to the top of the device (not just the band bottom). Pre-2.7.2
+    /// users reported ~3% above + ~8% below on a 5-line caption in a 22%
+    /// band — the chrome inset (~4% of canvas) was sitting unbalanced below
+    /// the block.
     func testVerticalAlign_centersDenseMultiLineCaption() async throws {
-        let topY = try await renderAndFindCaptionBounds(
-            title: ["Line one", "Line two", "Line three", "Line four", "Line five"],
-            verticalAlign: .center, minHeightPct: 40, fontSizePct: 4
-        )
         let canvasH = 1434
-        let bandH = Int(Double(canvasH) * 40.0 / 100.0)
-        let topSlack = topY.top
-        let bottomSlack = bandH - topY.bottom
-        XCTAssertEqual(topSlack, bottomSlack, accuracy: 6,
-            "5-line caption (roomy band): center should split slack equally. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH)")
-    }
+        let bandPct = 40.0
+        let bandH = Int(Double(canvasH) * bandPct / 100.0)
+        let chromePaddingPct = 5.0
+        let chromeInsetDy = Int(Double(canvasH - bandH) * chromePaddingPct / 100.0)
 
-    /// Same as above but with the user's reported scenario: 22% band, default
-    /// font size that produces a tight fit. We expect either no slack (block
-    /// fills band) or the small slack to be split evenly.
-    func testVerticalAlign_centersDenseCaption_tightBand() async throws {
         let bounds = try await renderAndFindCaptionBounds(
             title: ["Line one", "Line two", "Line three", "Line four", "Line five"],
-            verticalAlign: .center, minHeightPct: 22, fontSizePct: 5.5
+            verticalAlign: .center, minHeightPct: bandPct, fontSizePct: 4
         )
+        // Visual top gap = bounds.top (canvas top to first visible glyph).
+        // Visual bottom gap = (bandH + chromeInsetDy) - bounds.bottom
+        // (last visible glyph to top of device).
+        let topGap = bounds.top
+        let bottomGap = bandH + chromeInsetDy - bounds.bottom
+        XCTAssertEqual(topGap, bottomGap, accuracy: 8,
+            "5-line caption (roomy band): center should split visual whitespace equally above and below the block. top=\(topGap), bottom=\(bottomGap)")
+    }
+
+    /// Same scenario but tight band (22%). With visual-balance centering the
+    /// block can extend past the band's bottom edge into the chrome-inset
+    /// zone — that's expected and produces the visually balanced result.
+    func testVerticalAlign_centersDenseCaption_tightBand() async throws {
         let canvasH = 1434
-        let bandH = Int(Double(canvasH) * 22.0 / 100.0)
-        let topSlack = bounds.top
-        let bottomSlack = bandH - bounds.bottom
-        XCTAssertEqual(topSlack, bottomSlack, accuracy: 8,
-            "5-line caption (tight band): center should have roughly equal slack. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH)")
+        let bandPct = 22.0
+        let bandH = Int(Double(canvasH) * bandPct / 100.0)
+        let chromePaddingPct = 5.0
+        let chromeInsetDy = Int(Double(canvasH - bandH) * chromePaddingPct / 100.0)
+
+        let bounds = try await renderAndFindCaptionBounds(
+            title: ["Line one", "Line two", "Line three", "Line four", "Line five"],
+            verticalAlign: .center, minHeightPct: bandPct, fontSizePct: 5.5
+        )
+        let topGap = bounds.top
+        let bottomGap = bandH + chromeInsetDy - bounds.bottom
+        XCTAssertEqual(topGap, bottomGap, accuracy: 10,
+            "5-line caption (tight band): center should still split visual whitespace evenly even when block extends past the band. top=\(topGap), bottom=\(bottomGap)")
     }
 
     /// Reproduces a real user report: iPhone 17 Pro Max canvas (1320×2868),
@@ -207,24 +222,28 @@ final class CaptionPlacementTests: XCTestCase {
             "caption-to-table gap must be tight; got \(gap)px on \(img.height)px canvas. The chrome-inset phantom gap should not appear here.")
     }
 
-    /// Regression guard for a real user repro: iPhone 17 Pro Max canvas
-    /// (1320x2868), 5-line title with markdown bold inside a `weight: medium`
-    /// base style, font_size_pct 3.8 / min_font_size_pct 3.5, min_height_pct
-    /// 22, vertical_align center.
+    /// Regression guard for the user's real repro on iPhone 17 Pro Max
+    /// canvas (1320x2868), 5-line title with markdown bold inside a
+    /// `weight: medium` base style, font_size_pct 3.8 / min_font_size_pct
+    /// 3.5, min_height_pct 22, vertical_align center.
     ///
     /// The user reported visible asymmetry (~3% above caption vs ~8% below).
-    /// Investigation showed the asymmetry is between
-    /// "canvas top -> caption block" (band slack, ~1-2% of canvas) and
-    /// "caption block -> device top" (band slack + chrome.padding_pct,
-    /// ~5% of canvas). The block IS centered in the caption band. The
-    /// imbalance is the chrome inset by design - to address visually,
-    /// drop chrome.padding_pct or use the planned equal-whitespace layout.
-    ///
-    /// This test asserts the band-centering math is correct; the
-    /// chrome-inset asymmetry is intentional and not a bug.
+    /// Pre-2.7.2 the block was centered within the 22% band (correct math),
+    /// but the chrome inset (~4% of canvas) sat unbalanced below the band,
+    /// pushing device-top further down and producing the visible asymmetry.
+    /// 2.7.2 changed `vertical_align: center` to balance against the visible
+    /// top of the device (band + chrome inset) rather than the abstract band
+    /// bottom. This test asserts the visual gaps above and below the block
+    /// match.
     func testVerticalAlign_userRepro_iPhonePro_mediumWithMarkdown() async throws {
+        let canvasH = 2868
+        let bandPct = 22.0
+        let bandH = Int(Double(canvasH) * bandPct / 100.0)
+        let chromePaddingPct = 5.0  // matches renderAndFindCaptionBounds default
+        let chromeInsetDy = Int(Double(canvasH - bandH) * chromePaddingPct / 100.0)
+
         let bounds = try await renderAndFindCaptionBounds(
-            canvasW: 1320, canvasH: 2868,
+            canvasW: 1320, canvasH: canvasH,
             title: [
                 "Approach **native-level**",
                 "pronunciation with",
@@ -233,18 +252,16 @@ final class CaptionPlacementTests: XCTestCase {
                 "recognition models",
             ],
             verticalAlign: .center,
-            minHeightPct: 22, fontSizePct: 3.8, minFontSizePct: 3.5,
+            minHeightPct: bandPct, fontSizePct: 3.8, minFontSizePct: 3.5,
             weight: .medium
         )
-        let bandH = Int(2868.0 * 22.0 / 100.0)
-        // Block must not extend past the band's bottom edge.
-        XCTAssertLessThanOrEqual(bounds.bottom, bandH + 20,
-            "block bottom (\(bounds.bottom)) must not exceed bandH (\(bandH)) + tolerance")
-        // Top + bottom slack split evenly within the band.
-        let topSlack = bounds.top
-        let bottomSlack = bandH - bounds.bottom
-        XCTAssertEqual(topSlack, bottomSlack, accuracy: 30,
-            "center alignment must split slack evenly within the band. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH), blockH=\(bounds.bottom-bounds.top)")
+        let topGap = bounds.top
+        let bottomGap = bandH + chromeInsetDy - bounds.bottom
+        // Tolerance accounts for typographic ascender > descender asymmetry
+        // (~0.7% of canvas) within the block — that's inherent to the font,
+        // not a centering bug.
+        XCTAssertEqual(topGap, bottomGap, accuracy: 30,
+            "user repro: visual gaps above and below caption must match within ±1% of canvas. top=\(topGap)px (\(Double(topGap)/Double(canvasH)*100)%), bottom=\(bottomGap)px (\(Double(bottomGap)/Double(canvasH)*100)%)")
     }
 
     func testNudgeY_shiftsCaptionInDirection() async throws {
