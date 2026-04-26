@@ -92,6 +92,52 @@ final class CaptionPlacementTests: XCTestCase {
             "5-line caption (tight band): center should have roughly equal slack. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH)")
     }
 
+    /// Reproduces a real user report: iPhone 17 Pro Max canvas (1320×2868),
+    /// min_height_pct=22, 5-line title with `weight: medium` base and
+    /// `**markdown**` bold inside, font_size_pct=3.8 / min_font_size_pct=3.5.
+    /// Block is observed to render past the band's bottom edge instead of
+    /// shrinking to fit - the actual rendered block bottom lands ~30 px
+    /// below where the layouter thinks it ends.
+    /// Regression guard for a real user repro: iPhone 17 Pro Max canvas
+    /// (1320x2868), 5-line title with markdown bold inside a `weight: medium`
+    /// base style, font_size_pct 3.8 / min_font_size_pct 3.5, min_height_pct
+    /// 22, vertical_align center.
+    ///
+    /// The user reported visible asymmetry (~3% above caption vs ~8% below).
+    /// Investigation showed the asymmetry is between
+    /// "canvas top -> caption block" (band slack, ~1-2% of canvas) and
+    /// "caption block -> device top" (band slack + chrome.padding_pct,
+    /// ~5% of canvas). The block IS centered in the caption band. The
+    /// imbalance is the chrome inset by design - to address visually,
+    /// drop chrome.padding_pct or use the planned equal-whitespace layout.
+    ///
+    /// This test asserts the band-centering math is correct; the
+    /// chrome-inset asymmetry is intentional and not a bug.
+    func testVerticalAlign_userRepro_iPhonePro_mediumWithMarkdown() async throws {
+        let bounds = try await renderAndFindCaptionBounds(
+            canvasW: 1320, canvasH: 2868,
+            title: [
+                "Approach **native-level**",
+                "pronunciation with",
+                "**highly-accurate**",
+                "GPU-accelerated speech",
+                "recognition models",
+            ],
+            verticalAlign: .center,
+            minHeightPct: 22, fontSizePct: 3.8, minFontSizePct: 3.5,
+            weight: .medium
+        )
+        let bandH = Int(2868.0 * 22.0 / 100.0)
+        // Block must not extend past the band's bottom edge.
+        XCTAssertLessThanOrEqual(bounds.bottom, bandH + 20,
+            "block bottom (\(bounds.bottom)) must not exceed bandH (\(bandH)) + tolerance")
+        // Top + bottom slack split evenly within the band.
+        let topSlack = bounds.top
+        let bottomSlack = bandH - bounds.bottom
+        XCTAssertEqual(topSlack, bottomSlack, accuracy: 30,
+            "center alignment must split slack evenly within the band. top=\(topSlack), bottom=\(bottomSlack), bandH=\(bandH), blockH=\(bounds.bottom-bounds.top)")
+    }
+
     func testNudgeY_shiftsCaptionInDirection() async throws {
         let baselineY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
         // Positive y_pct should move the caption up (toward screen top =
@@ -110,11 +156,14 @@ final class CaptionPlacementTests: XCTestCase {
     private struct CaptionBounds { let top: Int; let bottom: Int }
 
     private func renderAndFindCaptionBounds(
+        canvasW: Int = 660, canvasH: Int = 1434,
         title: [String], verticalAlign: VerticalAlign,
-        minHeightPct: Double = 40, fontSizePct: Double = 4
+        minHeightPct: Double = 40, fontSizePct: Double = 4,
+        minFontSizePct: Double? = nil,
+        weight: FontWeight = .bold
     ) async throws -> CaptionBounds {
-        let width = 660
-        let height = 1434
+        let width = canvasW
+        let height = canvasH
 
         let runRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("caption-multi-\(UUID())", isDirectory: true)
@@ -143,8 +192,10 @@ final class CaptionPlacementTests: XCTestCase {
             background: BackgroundConfig(color: .solid("#000000")),
             caption: CaptionConfig(
                 title: CaptionRole(
-                    font: .system, weight: .bold,
-                    fontSizePct: fontSizePct, color: "#FFFFFF", align: .center
+                    font: .system, weight: weight,
+                    fontSizePct: fontSizePct,
+                    minFontSizePct: minFontSizePct,
+                    color: "#FFFFFF", align: .center
                 ),
                 minHeightPct: minHeightPct, paddingPct: 4,
                 verticalAlign: verticalAlign
