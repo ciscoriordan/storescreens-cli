@@ -279,6 +279,7 @@ package enum RenderResolver {
             cornerRadius: override?.cornerRadius ?? base?.cornerRadius,
             shadow: override?.shadow ?? base?.shadow,
             paddingPct: override?.paddingPct ?? base?.paddingPct,
+            fit: override?.fit ?? base?.fit,
             modelPreference: override?.modelPreference ?? base?.modelPreference,
             colorwayPreference: override?.colorwayPreference ?? base?.colorwayPreference
         )
