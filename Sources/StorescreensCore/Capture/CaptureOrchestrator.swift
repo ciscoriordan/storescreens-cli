@@ -96,7 +96,30 @@ package struct CaptureOrchestrator: Sendable {
     package static let breadcrumbFile = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".storescreens-cache-dir")
 
+    /// Parent directory of `screenshotFilterFile`. Lives under HOME (not cwd)
+    /// because simulator-side test code reads it via `SIMULATOR_HOST_HOME`.
+    /// Cleaning it up keeps `~/.storescreens-cache` from accumulating across runs.
+    package static let homeFilterCacheDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".storescreens-cache")
+
     package static let deviceColors = [36, 35, 33, 32] // cyan, magenta, yellow, green
+
+    /// Removes the screenshot cache directories and breadcrumb file. Safe to
+    /// call before a run starts (clears leftovers from prior failed runs) and
+    /// after a successful run completes. Path arguments default to the
+    /// production locations; pass explicit URLs for tests.
+    package static func cleanScreenshotCache(
+        cacheDir: URL? = nil,
+        homeFilterDir: URL? = nil,
+        breadcrumb: URL? = nil
+    ) {
+        let cwdCache = cacheDir ?? screenshotsCacheDir
+        let homeCache = homeFilterDir ?? homeFilterCacheDir
+        let crumb = breadcrumb ?? breadcrumbFile
+        try? FileManager.default.removeItem(at: cwdCache)
+        try? FileManager.default.removeItem(at: homeCache)
+        try? FileManager.default.removeItem(at: crumb)
+    }
 
     /// Human-readable name for a product family ID.
     package static func familyDisplayName(_ family: Int) -> String {
@@ -241,6 +264,11 @@ package struct CaptureOrchestrator: Sendable {
 
         var manifestDevices: [CaptureManifest.DeviceCapture] = []
 
+        // Clear leftovers from any prior (possibly failed) run before we write
+        // a fresh cache. Without this, stale device subdirs, pipes, and old
+        // PNGs accumulate over time.
+        Self.cleanScreenshotCache()
+
         // Ensure cache dir exists (for pipes and screenshots)
         try FileManager.default.createDirectory(at: Self.screenshotsCacheDir, withIntermediateDirectories: true)
 
@@ -378,8 +406,7 @@ package struct CaptureOrchestrator: Sendable {
             try historyManager.finalizeCapture(destination)
 
             // Clean up cache and breadcrumb
-            try? FileManager.default.removeItem(at: Self.screenshotsCacheDir)
-            try? FileManager.default.removeItem(at: Self.breadcrumbFile)
+            Self.cleanScreenshotCache()
 
             let finalManifest = CaptureManifest(
                 version: 2,
@@ -934,8 +961,7 @@ package struct CaptureOrchestrator: Sendable {
             throw error
         }
 
-        try? FileManager.default.removeItem(at: Self.screenshotsCacheDir)
-        try? FileManager.default.removeItem(at: Self.breadcrumbFile)
+        Self.cleanScreenshotCache()
 
         let totalScreenshots = manifestDevices.reduce(0) { $0 + $1.screenshots.count }
         await eventHandler(.phase("Done! \(totalScreenshots) screenshots saved to \(config.outputDir)"))

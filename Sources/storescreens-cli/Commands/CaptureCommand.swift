@@ -310,6 +310,12 @@ struct CaptureCommand: AsyncParsableCommand {
 
         var manifestDevices: [CaptureManifest.DeviceCapture] = []
 
+        // Clear leftovers from any prior (possibly failed) run before we write
+        // a fresh cache. Without this, stale device subdirs, pipes, and old
+        // PNGs accumulate in `<cwd>/.storescreens-cache` and `~/.storescreens-cache`
+        // over time.
+        CaptureOrchestrator.cleanScreenshotCache()
+
         // Ensure top-level screenshots cache dir exists (for pipes and screenshots)
         try FileManager.default.createDirectory(at: Self.screenshotsCacheDir, withIntermediateDirectories: true)
 
@@ -491,6 +497,11 @@ struct CaptureCommand: AsyncParsableCommand {
             }
 
             try historyManager.finalizeCapture(destination)
+
+            // Clean up the screenshot cache and breadcrumb on success.
+            // (On failure we deliberately leave them for debugging; the next
+            // run starts by clearing leftovers.)
+            CaptureOrchestrator.cleanScreenshotCache()
         } catch {
             historyManager.handleFailure(destination)
             throw error
