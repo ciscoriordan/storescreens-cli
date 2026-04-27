@@ -42,9 +42,23 @@ package struct SubmitOrchestrator {
         package var appID: String
         package var versionID: String
         package var versionString: String
+        /// Per-locale field updates against `appStoreVersionLocalizations`.
+        /// Covers description, keywords, promotionalText, whatsNew,
+        /// supportURL, marketingURL.
         package var metadataUpdates: [MetadataUpdate]
+        /// Per-locale field updates against `appInfoLocalizations` (the
+        /// app-level resource where name, subtitle, and the privacy URLs
+        /// live). Empty when no `name.txt` / `subtitle.txt` /
+        /// `privacy_url.txt` / `privacy_choices_url.txt` were present, or
+        /// when none of them differed from ASC's current value, or when
+        /// no editable AppInfo could be located.
+        package var appInfoUpdates: [MetadataUpdate]
         package var screenshotUploads: [ScreenshotUpload]
-        package var privacyURLUpdates: [String]       // locales where privacy URL was set
+        /// Locales where the privacy policy URL was successfully PATCHed
+        /// onto `appInfoLocalizations`. Kept for backwards-compatibility
+        /// with earlier report consumers; same data is also reflected in
+        /// `appInfoUpdates` under the `privacyPolicyURL` field.
+        package var privacyURLUpdates: [String]
         package var attachedBuildNumber: String?      // ASC build number attached to the version
         package var exportComplianceSet: Bool         // true when we patched usesNonExemptEncryption
         package var reviewSubmissionID: String?
@@ -69,6 +83,13 @@ package struct SubmitOrchestrator {
         /// Set when availability was applied this run. Nil when no
         /// availability config was supplied.
         package var availabilityStatus: String?
+        /// Set when the orchestrator detected appInfo-level fields
+        /// (name/subtitle/privacy URLs) but couldn't find an editable
+        /// AppInfo to PATCH them onto. Common cause: the live version is
+        /// `READY_FOR_SALE` and no new editable version has been created
+        /// yet. Surfaced for the CLI report so the operator sees why
+        /// name/subtitle weren't applied.
+        package var appInfoSkipped: AppInfoSkipReason?
         package var errors: [String]
 
         package struct MetadataUpdate: Sendable {
@@ -80,6 +101,16 @@ package struct SubmitOrchestrator {
             package let locale: String
             package let displayType: String
             package let count: Int
+        }
+
+        package enum AppInfoSkipReason: Sendable {
+            /// `GET /v1/apps/{id}/appInfos` returned no record in any
+            /// editable state. Operator must create a new editable version
+            /// to unblock name/subtitle updates.
+            case noEditableAppInfo
+            /// `GET /v1/apps/{id}/appInfos` itself failed (network /
+            /// auth / 5xx). Surfaces the underlying message.
+            case lookupFailed(message: String)
         }
     }
 
@@ -146,6 +177,7 @@ package struct SubmitOrchestrator {
             versionID: version.id,
             versionString: createVersion,
             metadataUpdates: [],
+            appInfoUpdates: [],
             screenshotUploads: [],
             privacyURLUpdates: [],
             attachedBuildNumber: nil,
@@ -156,6 +188,7 @@ package struct SubmitOrchestrator {
             reviewDetailUpdated: false,
             pricingStatus: nil,
             availabilityStatus: nil,
+            appInfoSkipped: nil,
             errors: []
         )
 
@@ -543,19 +576,37 @@ package struct SubmitOrchestrator {
             }
         }
 
-        // Privacy URL lives on App Info, not the version. Resolve the
-        // editable AppInfo lazily — only when at least one locale has a
-        // privacy URL set.
+        // appInfoLocalizations carry name, subtitle, privacyPolicyUrl, and
+        // privacyChoicesUrl — all four live at the app level, not on the
+        // version localization. Resolve the editable AppInfo lazily and
+        // only when at least one locale has any of those fields set, so
+        // submits that only touch description/keywords don't pay the
+        // appInfos GET. When no editable AppInfo exists (e.g. the live
+        // version is READY_FOR_SALE and no new editable version has been
+        // created yet) ASC won't accept these PATCHes — we log a clear
+        // skip reason and continue with the version-level fields rather
+        // than failing the whole submit.
         var editableAppInfo: AppsAPI.AppInfo?
-        let anyPrivacyURLSet = byLocale.values.contains { $0.privacyPolicyURL != nil }
-        if anyPrivacyURLSet {
+        let anyAppInfoFieldSet = byLocale.values.contains { fields in
+            MetadataReader.hasAppInfoFields(fields)
+        }
+        if anyAppInfoFieldSet {
             do {
                 editableAppInfo = try await appsAPI.findEditableAppInfo(appID: report.appID)
-                if editableAppInfo == nil {
-                    report.errors.append("privacy URL: no editable appInfo for app \(report.appID)")
+                if let editable = editableAppInfo {
+                    let state = editable.attributes?.state
+                        ?? editable.attributes?.appStoreState ?? "?"
+                    progress?("appInfo: editable record \(editable.id) (state: \(state))")
+                } else {
+                    let names = appInfoFieldsSummary(byLocale: byLocale)
+                    report.appInfoSkipped = .noEditableAppInfo
+                    progress?(
+                        "Skipped \(names) update — no editable appInfo (create a new editable version first)"
+                    )
                 }
             } catch {
-                report.errors.append("privacy URL: failed to list appInfos: \(error)")
+                report.appInfoSkipped = .lookupFailed(message: "\(error)")
+                report.errors.append("appInfo lookup: \(error)")
             }
         }
 
@@ -565,47 +616,107 @@ package struct SubmitOrchestrator {
             // Version localization PATCH — covers description / keywords /
             // whatsNew / support / marketing / promotional. Diff against the
             // current ASC values so unchanged fields don't re-PATCH; if
-            // nothing differs we skip the PATCH entirely.
-            do {
-                let localization = try await appsAPI.findOrCreateLocalization(
-                    versionID: versionID, locale: locale
-                )
-                let diff = changedVersionLocalizationFields(
-                    desired: fields, current: localization.attributes
-                )
-                if diff.hasAnyField {
-                    _ = try await appsAPI.updateLocalization(id: localization.id, fields: diff)
-                    let names = updatedFieldNames(diff)
-                    report.metadataUpdates.append(.init(locale: locale, fieldsUpdated: names))
-                    progress?("metadata \(locale): updated \(names.joined(separator: ", "))")
-                } else {
-                    progress?("metadata \(locale): unchanged")
-                }
-            } catch {
-                report.errors.append("metadata \(locale): \(error)")
-            }
-
-            // AppInfo localization PATCH — privacy URL only. Skip if the
-            // current value on ASC already matches.
-            if let privacyURL = fields.privacyPolicyURL, let appInfo = editableAppInfo {
+            // nothing differs we skip the PATCH entirely. Skip the
+            // find-or-create entirely when the locale only has appInfo
+            // fields — no need to reach the version localization endpoint.
+            if MetadataReader.hasVersionLocalizationFields(fields) {
                 do {
-                    let ail = try await appsAPI.findOrCreateAppInfoLocalization(
-                        appInfoID: appInfo.id, locale: locale
+                    let localization = try await appsAPI.findOrCreateLocalization(
+                        versionID: versionID, locale: locale
                     )
-                    if ail.attributes?.privacyPolicyUrl == privacyURL {
-                        progress?("privacy \(locale): unchanged")
+                    let diff = changedVersionLocalizationFields(
+                        desired: fields, current: localization.attributes
+                    )
+                    if diff.hasAnyField {
+                        _ = try await appsAPI.updateLocalization(id: localization.id, fields: diff)
+                        let names = updatedFieldNames(diff)
+                        report.metadataUpdates.append(.init(locale: locale, fieldsUpdated: names))
+                        progress?("metadata \(locale) [version]: updated \(names.joined(separator: ", "))")
                     } else {
-                        _ = try await appsAPI.updateAppInfoLocalization(
-                            id: ail.id, privacyPolicyURL: privacyURL
-                        )
-                        report.privacyURLUpdates.append(locale)
-                        progress?("privacy \(locale): updated privacyPolicyUrl")
+                        progress?("metadata \(locale) [version]: unchanged")
                     }
                 } catch {
-                    report.errors.append("privacy URL \(locale): \(error)")
+                    report.errors.append("metadata \(locale): \(error)")
                 }
             }
+
+            // AppInfoLocalization PATCH — covers name, subtitle,
+            // privacyPolicyUrl, privacyChoicesUrl. Skip when no editable
+            // AppInfo was located (warning already logged above) or when
+            // the locale carries no appInfo-level fields.
+            guard MetadataReader.hasAppInfoFields(fields), let appInfo = editableAppInfo else {
+                continue
+            }
+            do {
+                let ail = try await appsAPI.findOrCreateAppInfoLocalization(
+                    appInfoID: appInfo.id, locale: locale
+                )
+                let diff = changedAppInfoLocalizationFields(
+                    desired: fields, current: ail.attributes
+                )
+                if diff.hasAnyField {
+                    _ = try await appsAPI.updateAppInfoLocalization(
+                        id: ail.id, fields: diff
+                    )
+                    let names = appInfoUpdatedFieldNames(diff)
+                    report.appInfoUpdates.append(.init(locale: locale, fieldsUpdated: names))
+                    if diff.privacyPolicyURL != nil {
+                        report.privacyURLUpdates.append(locale)
+                    }
+                    progress?("metadata \(locale) [appInfo]: updated \(names.joined(separator: ", "))")
+                } else {
+                    progress?("metadata \(locale) [appInfo]: unchanged")
+                }
+            } catch {
+                report.errors.append("appInfo \(locale): \(error)")
+            }
         }
+    }
+
+    /// Returns a comma-separated list of appInfo-level fields that were
+    /// requested across any locale, for use in the
+    /// "Skipped name/subtitle update" log message.
+    private func appInfoFieldsSummary(byLocale: [String: LocalizationFields]) -> String {
+        var names: Set<String> = []
+        for fields in byLocale.values {
+            if fields.name != nil { names.insert("name") }
+            if fields.subtitle != nil { names.insert("subtitle") }
+            if fields.privacyPolicyURL != nil { names.insert("privacyPolicyUrl") }
+            if fields.privacyChoicesURL != nil { names.insert("privacyChoicesUrl") }
+        }
+        // Stable order: name, subtitle, privacy URLs.
+        let ordered = ["name", "subtitle", "privacyPolicyUrl", "privacyChoicesUrl"]
+            .filter { names.contains($0) }
+        return ordered.joined(separator: "/")
+    }
+
+    /// Diff `desired` (read from `metadata/<locale>/`) against the live
+    /// AppInfoLocalization attributes from ASC. Returns only the fields
+    /// that actually differ; matches the version-localization diff helper
+    /// in spirit.
+    private func changedAppInfoLocalizationFields(
+        desired: LocalizationFields,
+        current: AppsAPI.AppInfoLocalization.Attributes?
+    ) -> AppsAPI.AppInfoLocalizationFields {
+        func diff(_ new: String?, _ old: String?) -> String? {
+            guard let new else { return nil }
+            return new == (old ?? "") ? nil : new
+        }
+        return AppsAPI.AppInfoLocalizationFields(
+            name:              diff(desired.name,             current?.name),
+            subtitle:          diff(desired.subtitle,         current?.subtitle),
+            privacyPolicyURL:  diff(desired.privacyPolicyURL, current?.privacyPolicyUrl),
+            privacyChoicesURL: diff(desired.privacyChoicesURL, current?.privacyChoicesUrl)
+        )
+    }
+
+    private func appInfoUpdatedFieldNames(_ fields: AppsAPI.AppInfoLocalizationFields) -> [String] {
+        var names: [String] = []
+        if fields.name != nil { names.append("name") }
+        if fields.subtitle != nil { names.append("subtitle") }
+        if fields.privacyPolicyURL != nil { names.append("privacyPolicyUrl") }
+        if fields.privacyChoicesURL != nil { names.append("privacyChoicesUrl") }
+        return names
     }
 
     /// Find-or-create the version's `appStoreReviewDetails` resource and
@@ -701,10 +812,10 @@ package struct SubmitOrchestrator {
     }
 
     private func updatedFieldNames(_ fields: LocalizationFields) -> [String] {
-        // Only lists fields that actually went out in the PATCH. Version
-        // localization doesn't carry name/subtitle (those live on the
-        // appInfoLocalization) and privacyPolicyURL is reported separately
-        // via `report.privacyURLUpdates`.
+        // Only lists fields that actually went out in the
+        // appStoreVersionLocalizations PATCH. Name, subtitle, and the two
+        // privacy URLs live on appInfoLocalizations and are reported via
+        // `report.appInfoUpdates` instead.
         var names: [String] = []
         if fields.description != nil { names.append("description") }
         if fields.keywords != nil { names.append("keywords") }

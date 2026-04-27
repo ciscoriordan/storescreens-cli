@@ -335,6 +335,7 @@ package struct AppsAPI {
             package let name: String?
             package let subtitle: String?
             package let privacyPolicyUrl: String?
+            package let privacyChoicesUrl: String?
         }
     }
 
@@ -394,13 +395,46 @@ package struct AppsAPI {
         return try await createAppInfoLocalization(appInfoID: appInfoID, locale: locale)
     }
 
-    /// PATCH the app-info localization's privacy URL. Nil leaves the existing
-    /// value untouched.
+    /// Fields that live on `appInfoLocalizations`. PATCHed onto the
+    /// editable AppInfo's per-locale record. Nil fields are omitted from
+    /// the wire body so they stay untouched on App Store Connect.
+    package struct AppInfoLocalizationFields: Sendable, Equatable {
+        package var name: String?
+        package var subtitle: String?
+        package var privacyPolicyURL: String?
+        package var privacyChoicesURL: String?
+
+        package init(
+            name: String? = nil,
+            subtitle: String? = nil,
+            privacyPolicyURL: String? = nil,
+            privacyChoicesURL: String? = nil
+        ) {
+            self.name = name
+            self.subtitle = subtitle
+            self.privacyPolicyURL = privacyPolicyURL
+            self.privacyChoicesURL = privacyChoicesURL
+        }
+
+        package var hasAnyField: Bool {
+            name != nil || subtitle != nil
+                || privacyPolicyURL != nil || privacyChoicesURL != nil
+        }
+    }
+
+    /// PATCH the app-info localization with any non-nil fields (name,
+    /// subtitle, privacyPolicyUrl, privacyChoicesUrl). Nil leaves the
+    /// existing ASC value untouched.
     @discardableResult
     package func updateAppInfoLocalization(
-        id: String, privacyPolicyURL: String?
+        id: String, fields: AppInfoLocalizationFields
     ) async throws -> AppInfoLocalization {
-        struct AttrsPatch: Encodable { var privacyPolicyUrl: String? }
+        struct AttrsPatch: Encodable {
+            var name: String?
+            var subtitle: String?
+            var privacyPolicyUrl: String?
+            var privacyChoicesUrl: String?
+        }
         struct Body: Encodable {
             struct Data: Encodable {
                 let type = "appInfoLocalizations"
@@ -410,13 +444,31 @@ package struct AppsAPI {
             let data: Data
         }
         let body = Body(data: .init(
-            id: id, attributes: .init(privacyPolicyUrl: privacyPolicyURL)
+            id: id,
+            attributes: AttrsPatch(
+                name: fields.name,
+                subtitle: fields.subtitle,
+                privacyPolicyUrl: fields.privacyPolicyURL,
+                privacyChoicesUrl: fields.privacyChoicesURL
+            )
         ))
         struct Resp: Decodable { let data: AppInfoLocalization }
         let resp: Resp = try await client.patch(
             path: "appInfoLocalizations/\(id)", body: body, as: Resp.self
         )
         return resp.data
+    }
+
+    /// Convenience wrapper kept for the privacy-only call sites still in
+    /// the orchestrator. Forwards through `updateAppInfoLocalization(id:fields:)`.
+    @discardableResult
+    package func updateAppInfoLocalization(
+        id: String, privacyPolicyURL: String?
+    ) async throws -> AppInfoLocalization {
+        try await updateAppInfoLocalization(
+            id: id,
+            fields: AppInfoLocalizationFields(privacyPolicyURL: privacyPolicyURL)
+        )
     }
 
     // MARK: - Submit for review (reviewSubmissions API)

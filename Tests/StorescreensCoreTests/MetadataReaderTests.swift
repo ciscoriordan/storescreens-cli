@@ -172,4 +172,76 @@ final class MetadataReaderTests: XCTestCase {
         XCTAssertTrue(ReviewDetailFields(contactEmail: "a@b.c").hasAnyField)
         XCTAssertTrue(ReviewDetailFields(demoAccountRequired: true).hasAnyField)
     }
+
+    // MARK: - Field routing (appInfo vs version localization)
+
+    /// Regression test for the bug where `name.txt` / `subtitle.txt` were
+    /// either silently ignored or pushed to the wrong endpoint. These
+    /// fields live on `appInfoLocalizations` (per app, not per version);
+    /// the four routing helpers below are what the orchestrator uses to
+    /// decide which API endpoint to PATCH for each filename it reads. If
+    /// any of them regress, name/subtitle on the live App Store will stop
+    /// updating after a `submit`.
+    func testRouting_nameSubtitlePrivacyURLs_classifiedAsAppInfo() {
+        XCTAssertTrue(MetadataReader.appInfoFilenames.contains("name.txt"))
+        XCTAssertTrue(MetadataReader.appInfoFilenames.contains("subtitle.txt"))
+        XCTAssertTrue(MetadataReader.appInfoFilenames.contains("privacy_url.txt"))
+        XCTAssertTrue(MetadataReader.appInfoFilenames.contains("privacy_choices_url.txt"))
+    }
+
+    func testRouting_versionLocalizationFiles_notClassifiedAsAppInfo() {
+        // Sanity check the inverse: the version-level fields must NOT be
+        // in the appInfoFilenames set. If they were, the orchestrator
+        // would (silently, wrongly) try to PATCH description/keywords
+        // onto appInfoLocalizations.
+        for name in [
+            "description.txt", "keywords.txt", "promotional_text.txt",
+            "release_notes.txt", "support_url.txt", "marketing_url.txt",
+        ] {
+            XCTAssertFalse(MetadataReader.appInfoFilenames.contains(name),
+                           "\(name) should be on appStoreVersionLocalizations, not appInfoLocalizations")
+        }
+    }
+
+    func testRouting_hasAppInfoFields_partitionsCorrectly() {
+        // Only appInfo fields set -> hasAppInfoFields true,
+        // hasVersionLocalizationFields false.
+        let appInfoOnly = LocalizationFields(
+            name: "App Name", subtitle: "Subtitle",
+            privacyPolicyURL: "https://example.com/privacy",
+            privacyChoicesURL: "https://example.com/choices"
+        )
+        XCTAssertTrue(MetadataReader.hasAppInfoFields(appInfoOnly))
+        XCTAssertFalse(MetadataReader.hasVersionLocalizationFields(appInfoOnly))
+
+        // Only version-localization fields set -> opposite.
+        let versionOnly = LocalizationFields(
+            description: "d", keywords: "k", promotionalText: "p",
+            whatsNew: "w", supportURL: "s", marketingURL: "m"
+        )
+        XCTAssertFalse(MetadataReader.hasAppInfoFields(versionOnly))
+        XCTAssertTrue(MetadataReader.hasVersionLocalizationFields(versionOnly))
+
+        // Mixed -> both true.
+        let mixed = LocalizationFields(name: "X", description: "Y")
+        XCTAssertTrue(MetadataReader.hasAppInfoFields(mixed))
+        XCTAssertTrue(MetadataReader.hasVersionLocalizationFields(mixed))
+
+        // Empty -> both false.
+        let empty = LocalizationFields()
+        XCTAssertFalse(MetadataReader.hasAppInfoFields(empty))
+        XCTAssertFalse(MetadataReader.hasVersionLocalizationFields(empty))
+    }
+
+    func testRead_privacyChoicesURL_parsed() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(tmp.appendingPathComponent("en-US/privacy_choices_url.txt"),
+                  "https://example.com/choices")
+
+        let result = try MetadataReader.read(dir: tmp)
+        XCTAssertEqual(result["en-US"]?.privacyChoicesURL, "https://example.com/choices")
+        XCTAssertTrue(result["en-US"]?.hasAnyField ?? false)
+    }
 }

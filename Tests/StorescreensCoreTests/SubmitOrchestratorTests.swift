@@ -1819,4 +1819,243 @@ final class SubmitOrchestratorTests: XCTestCase {
             XCTFail("wrong error: \(error)")
         }
     }
+
+    // MARK: - appInfo field routing (name / subtitle / privacy URLs)
+
+    /// Regression test for the bug where `name.txt` and `subtitle.txt`
+    /// were silently dropped (or pushed to `appStoreVersionLocalizations`,
+    /// which has no name/subtitle). They must land on
+    /// `appInfoLocalizations` for the editable AppInfo. This test also
+    /// verifies that `privacy_choices_url.txt` is routed to the same
+    /// resource and that the version-localization PATCH does NOT include
+    /// any of the appInfo fields.
+    func testSubmit_nameSubtitlePrivacyChoices_routedToAppInfoLocalization() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("submit-appinfo-routing-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("My App", to: metaRoot.appendingPathComponent("en-US/name.txt"))
+        try writeFixture("Cook smarter", to: metaRoot.appendingPathComponent("en-US/subtitle.txt"))
+        try writeFixture("https://example.com/privacy", to: metaRoot.appendingPathComponent("en-US/privacy_url.txt"))
+        try writeFixture("https://example.com/choices", to: metaRoot.appendingPathComponent("en-US/privacy_choices_url.txt"))
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "App", displayName: nil, scheme: "App", devices: []
+        )
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersions") { _ in
+            (201, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        // Version localization: empty list, then create.
+        let localizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": localizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "LOC-en-US", "type": "appStoreVersionLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            localizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        // Capture every PATCH body so we can assert the field routing.
+        let versionPatchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            if let body = ASCStub.requestBodies.last {
+                versionPatchBodies.add(body)
+            }
+            return (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+        // appInfo + appInfoLocalization flow.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        let appInfoLocalizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/appInfoLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": appInfoLocalizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appInfoLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "AIL-en-US", "type": "appInfoLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            appInfoLocalizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        let appInfoPatchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfoLocalizations/AIL-en-US") { _ in
+            if let body = ASCStub.requestBodies.last {
+                appInfoPatchBodies.add(body)
+            }
+            return (200, Data(#"{"data":{"id":"AIL-en-US","type":"appInfoLocalizations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+
+        // The version-localization PATCH should carry the description but
+        // NOT name, subtitle, privacyPolicyUrl, or privacyChoicesUrl.
+        XCTAssertEqual(versionPatchBodies.count, 1, "expected exactly one version-loc PATCH")
+        let versionBody = versionPatchBodies[0] as! Data
+        let versionJSON = try JSONSerialization.jsonObject(with: versionBody) as! [String: Any]
+        let versionAttrs = ((versionJSON["data"] as! [String: Any])["attributes"] as! [String: Any])
+        XCTAssertEqual(versionAttrs["description"] as? String, "English description")
+        XCTAssertNil(versionAttrs["name"], "version localization must NOT carry name")
+        XCTAssertNil(versionAttrs["subtitle"], "version localization must NOT carry subtitle")
+        XCTAssertNil(versionAttrs["privacyPolicyUrl"], "version localization must NOT carry privacyPolicyUrl")
+        XCTAssertNil(versionAttrs["privacyChoicesUrl"], "version localization must NOT carry privacyChoicesUrl")
+
+        // The appInfo-localization PATCH must carry name + subtitle +
+        // both privacy URLs, and NOT description / keywords / etc.
+        XCTAssertEqual(appInfoPatchBodies.count, 1, "expected exactly one appInfo-loc PATCH")
+        let appInfoBody = appInfoPatchBodies[0] as! Data
+        let appInfoJSON = try JSONSerialization.jsonObject(with: appInfoBody) as! [String: Any]
+        let appInfoAttrs = ((appInfoJSON["data"] as! [String: Any])["attributes"] as! [String: Any])
+        XCTAssertEqual(appInfoAttrs["name"] as? String, "My App")
+        XCTAssertEqual(appInfoAttrs["subtitle"] as? String, "Cook smarter")
+        XCTAssertEqual(appInfoAttrs["privacyPolicyUrl"] as? String, "https://example.com/privacy")
+        XCTAssertEqual(appInfoAttrs["privacyChoicesUrl"] as? String, "https://example.com/choices")
+        XCTAssertNil(appInfoAttrs["description"], "appInfo localization must NOT carry description")
+        XCTAssertNil(appInfoAttrs["keywords"], "appInfo localization must NOT carry keywords")
+
+        // Report exposes both buckets.
+        XCTAssertEqual(report.metadataUpdates.first?.locale, "en-US")
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated, ["description"])
+        XCTAssertEqual(report.appInfoUpdates.first?.locale, "en-US")
+        XCTAssertEqual(report.appInfoUpdates.first?.fieldsUpdated,
+                       ["name", "subtitle", "privacyPolicyUrl", "privacyChoicesUrl"])
+        // Privacy URL backwards-compat list still populated for old consumers.
+        XCTAssertEqual(report.privacyURLUpdates, ["en-US"])
+        XCTAssertNil(report.appInfoSkipped)
+    }
+
+    /// When ASC has no editable AppInfo (e.g. live version is
+    /// READY_FOR_SALE and no new editable version has been created),
+    /// `submit` should skip the appInfoLocalizations PATCH with a clear
+    /// reason rather than failing the whole submit. The version-level
+    /// fields (description etc.) must still be applied.
+    func testSubmit_noEditableAppInfo_skipsAppInfoFields_logsReason() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("submit-appinfo-skip-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("My App", to: metaRoot.appendingPathComponent("en-US/name.txt"))
+        try writeFixture("Cook smarter", to: metaRoot.appendingPathComponent("en-US/subtitle.txt"))
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "App", displayName: nil, scheme: "App", devices: []
+        )
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersions") { _ in
+            (201, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        let localizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": localizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "LOC-en-US", "type": "appStoreVersionLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            localizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+        // appInfos: only READY_FOR_SALE (not editable) -> orchestrator
+        // should set `appInfoSkipped = .noEditableAppInfo` and skip the
+        // PATCH. With the current `findEditableAppInfo` implementation
+        // that returns the first record as a fallback, return an empty
+        // list to truly express "no editable record".
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        // If something tries to PATCH appInfoLocalizations anyway, fail
+        // loudly so the test catches it.
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/appInfoLocalizations") { _ in
+            XCTFail("must not list appInfoLocalizations when no editable AppInfo exists")
+            return (500, Data())
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfoLocalizations/AIL-en-US") { _ in
+            XCTFail("must not PATCH appInfoLocalizations when no editable AppInfo exists")
+            return (500, Data())
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+
+        var progressLines: [String] = []
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: { progressLines.append($0) }
+        )
+
+        // Submit didn't fail — version-level description still applied.
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated, ["description"])
+        XCTAssertTrue(report.appInfoUpdates.isEmpty)
+        XCTAssertNotNil(report.appInfoSkipped)
+        if case .noEditableAppInfo = report.appInfoSkipped {
+            // expected
+        } else {
+            XCTFail("expected .noEditableAppInfo, got \(String(describing: report.appInfoSkipped))")
+        }
+        XCTAssertTrue(
+            progressLines.contains { $0.contains("Skipped") && $0.contains("no editable appInfo") },
+            "expected a 'Skipped … no editable appInfo' progress line, got: \(progressLines)"
+        )
+    }
 }

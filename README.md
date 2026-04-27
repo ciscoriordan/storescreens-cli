@@ -1122,6 +1122,7 @@ metadata/
     support_url.txt
     marketing_url.txt
     privacy_url.txt
+    privacy_choices_url.txt
     review_notes.txt
     review_contact_first_name.txt
     review_contact_last_name.txt
@@ -1135,7 +1136,22 @@ metadata/
     ...
 ```
 
-`privacy_url.txt` is stored on the App Info record (not the version), which is where App Store Connect keeps privacy URLs. The submit command patches the right endpoint automatically.
+App Store Connect splits per-locale metadata across two resources, and `submit` routes each file to the correct endpoint:
+
+| File | ASC resource |
+|------|--------------|
+| `name.txt` | `appInfoLocalizations.name` |
+| `subtitle.txt` | `appInfoLocalizations.subtitle` |
+| `privacy_url.txt` | `appInfoLocalizations.privacyPolicyUrl` |
+| `privacy_choices_url.txt` | `appInfoLocalizations.privacyChoicesUrl` |
+| `description.txt` | `appStoreVersionLocalizations.description` |
+| `keywords.txt` | `appStoreVersionLocalizations.keywords` |
+| `promotional_text.txt` | `appStoreVersionLocalizations.promotionalText` |
+| `release_notes.txt` | `appStoreVersionLocalizations.whatsNew` |
+| `support_url.txt` | `appStoreVersionLocalizations.supportUrl` |
+| `marketing_url.txt` | `appStoreVersionLocalizations.marketingUrl` |
+
+`appInfoLocalizations` lives on the app-level `appInfo` record, which can only be edited while the app has a version in an editable state (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `METADATA_REJECTED`, etc.). If the only existing version is `READY_FOR_SALE`, App Store Connect won't accept `name`/`subtitle`/privacy URL PATCHes; `submit` detects the missing editable `appInfo`, logs `Skipped name/subtitle update — no editable appInfo (create a new editable version first)`, and proceeds with the version-level fields. To update name/subtitle on an already-released app, bump `submit.create_version` so `submit` creates a new editable version (which auto-creates a fresh editable `appInfo`).
 
 `review_notes.txt` and the `review_contact_*.txt` / `review_demo_account_*.txt` files feed the version-level `appStoreReviewDetails` resource (the "App Review Information" panel in App Store Connect): free-form notes Apple's reviewers see when triaging, plus contact info Apple uses if they need to reach you during review, plus an optional demo-account login. These fields are NOT per-locale on Apple's side, so put them under one locale (any locale, typically your primary). If they appear in multiple locale folders, the alphabetically-first one wins and the rest emit a warning.
 

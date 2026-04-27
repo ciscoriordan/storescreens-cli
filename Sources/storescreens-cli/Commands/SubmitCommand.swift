@@ -143,9 +143,23 @@ struct SubmitCommand: AsyncParsableCommand {
         print("  app:      \(report.appID)")
         print("  version:  \(report.versionString) (\(report.versionID))")
         if !report.metadataUpdates.isEmpty {
-            print("  metadata updates:")
+            print("  metadata updates (appStoreVersionLocalizations):")
             for m in report.metadataUpdates {
                 print("    \(m.locale): \(m.fieldsUpdated.joined(separator: ", "))")
+            }
+        }
+        if !report.appInfoUpdates.isEmpty {
+            print("  metadata updates (appInfoLocalizations):")
+            for m in report.appInfoUpdates {
+                print("    \(m.locale): \(m.fieldsUpdated.joined(separator: ", "))")
+            }
+        }
+        if let skip = report.appInfoSkipped {
+            switch skip {
+            case .noEditableAppInfo:
+                print("  appInfo updates: skipped — no editable appInfo (create a new editable version first)")
+            case .lookupFailed(let message):
+                print("  appInfo updates: skipped — appInfos lookup failed: \(message)")
             }
         }
         if !report.screenshotUploads.isEmpty {
@@ -153,9 +167,6 @@ struct SubmitCommand: AsyncParsableCommand {
             for s in report.screenshotUploads {
                 print("    \(s.locale) / \(s.displayType): \(s.count) file(s)")
             }
-        }
-        if !report.privacyURLUpdates.isEmpty {
-            print("  privacy URL updated for: \(report.privacyURLUpdates.joined(separator: ", "))")
         }
         if let buildNumber = report.attachedBuildNumber {
             print("  build attached: \(buildNumber)")
