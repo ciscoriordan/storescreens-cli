@@ -435,6 +435,93 @@ package struct AppsAPI {
         package let id: String
     }
 
+    /// Review-submission states that block creating a new submission for the
+    /// same app + platform until they're cleared. ASC enforces "one open
+    /// submission per platform"; if any of these are in flight, attaching the
+    /// version to a brand-new submission fails with
+    /// `STATE_ERROR.ENTITY_STATE_INVALID` ("appStoreVersions ... is not in
+    /// valid state. Item is already present in [other-submission]").
+    ///
+    /// - `READY_FOR_REVIEW`: an open draft (no `submitted: true` PATCH yet).
+    ///   Common after a previous `submit` run aborted between item-attach and
+    ///   finalize.
+    /// - `UNRESOLVED_ISSUES`: Apple rejected the prior submission. The
+    ///   associated version stays "stuck inside" the rejected submission until
+    ///   it's cancelled, blocking any resubmit of the same version.
+    package static let cancellableReviewSubmissionStates: Set<String> = [
+        "READY_FOR_REVIEW",
+        "UNRESOLVED_ISSUES",
+    ]
+
+    /// Review-submission states that mean Apple is already actively reviewing
+    /// (or about to review) the submission. We refuse to auto-cancel these
+    /// because pulling them out from under Apple wastes a review slot and
+    /// surprises the developer. Surface a loud error and let them cancel via
+    /// the ASC web UI if they really mean it.
+    package static let activeReviewSubmissionStates: Set<String> = [
+        "WAITING_FOR_REVIEW",
+        "IN_REVIEW",
+    ]
+
+    /// Lists `reviewSubmissions` for an app. ASC scopes them per-app via
+    /// `filter[app]`. The response is unsorted; callers typically filter by
+    /// `attributes.state` (see `cancellableReviewSubmissionStates`).
+    package func listReviewSubmissions(
+        appID: String,
+        platform: String = "IOS"
+    ) async throws -> [ReviewSubmission] {
+        struct Resp: Decodable { let data: [ReviewSubmission] }
+        let resp: Resp = try await client.get(
+            path: "reviewSubmissions",
+            query: [
+                "filter[app]": appID,
+                "filter[platform]": platform,
+                "limit": "200",
+            ],
+            as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// PATCH `canceled: true` on an in-flight `reviewSubmission`. Used to
+    /// clear out a prior submission whose state is blocking a resubmit
+    /// (`UNRESOLVED_ISSUES` after a rejection, or `READY_FOR_REVIEW` left
+    /// behind by an aborted submit). ASC accepts the PATCH and transitions
+    /// the submission to `CANCELING` then `COMPLETE` within a few seconds.
+    ///
+    /// Note: `DELETE /v1/reviewSubmissions/{id}` returns 403 from Apple's
+    /// side regardless of submission state. The PATCH attribute path is the
+    /// only programmatic cancel path that works.
+    @discardableResult
+    package func cancelReviewSubmission(id: String) async throws -> ReviewSubmission {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "reviewSubmissions"
+                let id: String
+                let attributes: Attrs
+            }
+            struct Attrs: Encodable { let canceled: Bool }
+            let data: Data
+        }
+        let body = Body(data: .init(id: id, attributes: .init(canceled: true)))
+        struct Resp: Decodable { let data: ReviewSubmission }
+        let resp: Resp = try await client.patch(
+            path: "reviewSubmissions/\(id)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// GET `/v1/reviewSubmissions/{id}`: single-record fetch used to poll
+    /// the `state` after a `cancel` PATCH (CANCELING then COMPLETE) so the
+    /// follow-up create+attach sees a freed version.
+    package func getReviewSubmission(id: String) async throws -> ReviewSubmission {
+        struct Resp: Decodable { let data: ReviewSubmission }
+        let resp: Resp = try await client.get(
+            path: "reviewSubmissions/\(id)", as: Resp.self
+        )
+        return resp.data
+    }
+
     /// Creates a new `reviewSubmission` for an app on a given platform.
     /// Step 1 of the 3-step submit flow.
     package func createReviewSubmission(
@@ -530,7 +617,11 @@ package struct AppsAPI {
     }
 
     /// Convenience: runs all three steps and returns the finalized submission.
-    /// Matches the old `submitForReview` signature for callers.
+    /// Matches the old `submitForReview` signature for callers. Prefer using
+    /// the individual `createReviewSubmission` / `addVersionToReviewSubmission`
+    /// / `finalizeReviewSubmission` steps when you need fine-grained error
+    /// handling. The orchestrator does the latter so it can detect "version
+    /// already attached to a stale rejected submission" and recover.
     @discardableResult
     package func submitForReview(
         appID: String,
@@ -542,6 +633,129 @@ package struct AppsAPI {
             reviewSubmissionID: submission.id, versionID: versionID
         )
         return try await finalizeReviewSubmission(id: submission.id)
+    }
+
+    // MARK: - App Store Review Detail (review notes + contact info)
+
+    /// `appStoreReviewDetails` resource: per-version field bag for the
+    /// "App Review Information" panel in the ASC web UI. Holds the review
+    /// notes (the free-form text Apple's reviewers see when triaging) plus
+    /// the contact info Apple uses if they need to reach the developer
+    /// during review.
+    package struct AppStoreReviewDetail: Codable, Sendable {
+        package let id: String
+        package let attributes: Attributes?
+        package struct Attributes: Codable, Sendable {
+            package let contactFirstName: String?
+            package let contactLastName: String?
+            package let contactPhone: String?
+            package let contactEmail: String?
+            package let demoAccountName: String?
+            package let demoAccountPassword: String?
+            package let demoAccountRequired: Bool?
+            package let notes: String?
+        }
+    }
+
+    /// GET the existing review detail record attached to a version. Returns
+    /// nil when ASC hasn't materialized one yet (typical for a fresh
+    /// version before any review-detail fields have been touched).
+    package func getReviewDetail(versionID: String) async throws -> AppStoreReviewDetail? {
+        struct Resp: Decodable {
+            struct Data: Decodable { let id: String; let attributes: AppStoreReviewDetail.Attributes? }
+            let data: Data?
+        }
+        do {
+            let resp: Resp = try await client.get(
+                path: "appStoreVersions/\(versionID)/appStoreReviewDetail",
+                as: Resp.self
+            )
+            guard let d = resp.data else { return nil }
+            return AppStoreReviewDetail(id: d.id, attributes: d.attributes)
+        } catch let e as ASCClient.APIError where e.statusCode == 404 {
+            return nil
+        }
+    }
+
+    /// Creates an `appStoreReviewDetails` record attached to the version.
+    /// Used when `getReviewDetail` returned nil.
+    @discardableResult
+    package func createReviewDetail(
+        versionID: String,
+        fields: ReviewDetailFields
+    ) async throws -> AppStoreReviewDetail {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appStoreReviewDetails"
+                let attributes: AttrsPatch
+                let relationships: Rels
+            }
+            struct Rels: Encodable {
+                struct V: Encodable {
+                    struct Data: Encodable { let type = "appStoreVersions"; let id: String }
+                    let data: Data
+                }
+                let appStoreVersion: V
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            attributes: AttrsPatch(fields: fields),
+            relationships: .init(appStoreVersion: .init(data: .init(id: versionID)))
+        ))
+        struct Resp: Decodable { let data: AppStoreReviewDetail }
+        let resp: Resp = try await client.post(
+            path: "appStoreReviewDetails", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// PATCHes an existing review detail with any non-nil fields. Nil fields
+    /// stay untouched.
+    @discardableResult
+    package func updateReviewDetail(
+        id: String,
+        fields: ReviewDetailFields
+    ) async throws -> AppStoreReviewDetail {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appStoreReviewDetails"
+                let id: String
+                let attributes: AttrsPatch
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(id: id, attributes: AttrsPatch(fields: fields)))
+        struct Resp: Decodable { let data: AppStoreReviewDetail }
+        let resp: Resp = try await client.patch(
+            path: "appStoreReviewDetails/\(id)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// Encodable shape used by both create and update bodies. Defined here
+    /// (rather than reusing `ReviewDetailFields` directly) so the JSON keys
+    /// match Apple's camelCase wire names and nil fields are omitted.
+    private struct AttrsPatch: Encodable {
+        var contactFirstName: String?
+        var contactLastName: String?
+        var contactPhone: String?
+        var contactEmail: String?
+        var demoAccountName: String?
+        var demoAccountPassword: String?
+        var demoAccountRequired: Bool?
+        var notes: String?
+
+        init(fields: ReviewDetailFields) {
+            self.contactFirstName = fields.contactFirstName
+            self.contactLastName = fields.contactLastName
+            self.contactPhone = fields.contactPhone
+            self.contactEmail = fields.contactEmail
+            self.demoAccountName = fields.demoAccountName
+            self.demoAccountPassword = fields.demoAccountPassword
+            self.demoAccountRequired = fields.demoAccountRequired
+            self.notes = fields.notes
+        }
     }
 
     // MARK: - Version localization update (original)

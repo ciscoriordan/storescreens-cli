@@ -163,8 +163,15 @@ struct SubmitCommand: AsyncParsableCommand {
         if report.exportComplianceSet {
             print("  export compliance: answered")
         }
+        if report.reviewDetailUpdated {
+            print("  review detail (notes / contact info): updated")
+        }
+        if !report.canceledReviewSubmissionIDs.isEmpty {
+            print("  canceled prior submissions: \(report.canceledReviewSubmissionIDs.joined(separator: ", "))")
+        }
         if let submissionID = report.reviewSubmissionID {
-            print("  submitted for review: \(submissionID)")
+            let stateSuffix = report.reviewSubmissionState.map { " (\($0))" } ?? ""
+            print("  submitted for review: \(submissionID)\(stateSuffix)")
         }
         if !report.errors.isEmpty {
             logger.log("\(report.errors.count) error(s):", level: .error)

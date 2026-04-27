@@ -115,4 +115,61 @@ final class MetadataReaderTests: XCTestCase {
         XCTAssertEqual(result["ja"]?.privacyPolicyURL, "https://example.com/privacy/ja")
         XCTAssertTrue(result["en-US"]?.hasAnyField ?? false)
     }
+
+    func testReadAll_reviewFields_parsedFromFirstLocale() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try write(tmp.appendingPathComponent("en-US/description.txt"), "English")
+        try write(tmp.appendingPathComponent("en-US/review_notes.txt"), "Notes for reviewer")
+        try write(tmp.appendingPathComponent("en-US/review_contact_first_name.txt"), "Cisco")
+        try write(tmp.appendingPathComponent("en-US/review_contact_last_name.txt"), "Riordan")
+        try write(tmp.appendingPathComponent("en-US/review_contact_email.txt"), "cisco@example.com")
+        try write(tmp.appendingPathComponent("en-US/review_contact_phone.txt"), "+15551234567")
+
+        let result = try MetadataReader.readAll(dir: tmp)
+        XCTAssertEqual(result.localizations["en-US"]?.description, "English")
+        XCTAssertNotNil(result.reviewDetail)
+        XCTAssertEqual(result.reviewDetail?.notes, "Notes for reviewer")
+        XCTAssertEqual(result.reviewDetail?.contactFirstName, "Cisco")
+        XCTAssertEqual(result.reviewDetail?.contactLastName, "Riordan")
+        XCTAssertEqual(result.reviewDetail?.contactEmail, "cisco@example.com")
+        XCTAssertEqual(result.reviewDetail?.contactPhone, "+15551234567")
+    }
+
+    func testReadAll_reviewFieldsInMultipleLocales_warnsAndKeepsFirst() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Both locales have review_notes.txt - the alphabetically first
+        // (de-DE) wins; en-US's value is ignored with a warning.
+        try write(tmp.appendingPathComponent("de-DE/description.txt"), "Deutsch")
+        try write(tmp.appendingPathComponent("de-DE/review_notes.txt"), "from de-DE")
+        try write(tmp.appendingPathComponent("en-US/description.txt"), "English")
+        try write(tmp.appendingPathComponent("en-US/review_notes.txt"), "from en-US")
+
+        var warnings: [String] = []
+        let result = try MetadataReader.readAll(dir: tmp) { warnings.append($0) }
+        XCTAssertEqual(result.reviewDetail?.notes, "from de-DE",
+                       "first locale (alphabetically) wins")
+        XCTAssertTrue(warnings.contains { $0.contains("[en-US]") && $0.contains("review_notes.txt") },
+                      "expected a warning about en-US's review_notes.txt being ignored")
+    }
+
+    func testReadAll_reviewFieldsAbsent_returnsNilReviewDetail() throws {
+        let tmp = try makeTmp()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try write(tmp.appendingPathComponent("en-US/description.txt"), "Only the description")
+
+        let result = try MetadataReader.readAll(dir: tmp)
+        XCTAssertEqual(result.localizations["en-US"]?.description, "Only the description")
+        XCTAssertNil(result.reviewDetail)
+    }
+
+    func testReviewDetailFields_hasAnyField() {
+        XCTAssertFalse(ReviewDetailFields().hasAnyField)
+        XCTAssertTrue(ReviewDetailFields(notes: "x").hasAnyField)
+        XCTAssertTrue(ReviewDetailFields(contactEmail: "a@b.c").hasAnyField)
+        XCTAssertTrue(ReviewDetailFields(demoAccountRequired: true).hasAnyField)
+    }
 }

@@ -13,12 +13,25 @@ import Foundation
 ///         support_url.txt
 ///         marketing_url.txt
 ///         privacy_url.txt
+///         review_notes.txt
+///         review_contact_first_name.txt
+///         review_contact_last_name.txt
+///         review_contact_phone.txt
+///         review_contact_email.txt
+///         review_demo_account_name.txt
+///         review_demo_account_password.txt
 ///       ja/
 ///         ...
 ///
 /// Missing files are treated as "don't change" (nil) when we PATCH the
 /// localization; present files replace the current App Store value.
 /// Unknown files in a locale directory are skipped with a warning.
+///
+/// Review-specific files (`review_*.txt`) live under one chosen locale (any
+/// locale - they're not actually per-locale on Apple's side) and feed the
+/// version-level `appStoreReviewDetails` resource. The first locale that
+/// contains any `review_*.txt` file wins; subsequent locales' review files
+/// produce a warning.
 package enum MetadataReader {
 
     /// Supported filename -> field mapping. The value names match our
@@ -35,12 +48,53 @@ package enum MetadataReader {
         "privacy_url.txt":       \.privacyPolicyURL,
     ]
 
+    /// Filename -> ReviewDetailFields key path. These feed the version-level
+    /// `appStoreReviewDetails` resource (notes Apple's reviewers see plus
+    /// developer contact info). They aren't really per-locale on Apple's
+    /// side, so the reader collapses them to a single per-version record:
+    /// the first locale containing any of these files wins.
+    package static let supportedReviewFields: [String: WritableKeyPath<ReviewDetailFields, String?>] = [
+        "review_notes.txt":                  \.notes,
+        "review_contact_first_name.txt":     \.contactFirstName,
+        "review_contact_last_name.txt":      \.contactLastName,
+        "review_contact_phone.txt":          \.contactPhone,
+        "review_contact_email.txt":          \.contactEmail,
+        "review_demo_account_name.txt":      \.demoAccountName,
+        "review_demo_account_password.txt":  \.demoAccountPassword,
+    ]
+
     /// Reads every `<locale>/` subdirectory and returns one LocalizationFields
-    /// per locale. Locales with no readable files are dropped.
+    /// per locale. Locales with no readable files are dropped. Use
+    /// `readAll` instead when you also need version-level review-detail
+    /// fields (`review_notes.txt` etc.).
     package static func read(
         dir: URL,
         onWarning: (String) -> Void = { _ in }
     ) throws -> [String: LocalizationFields] {
+        try readAll(dir: dir, onWarning: onWarning).localizations
+    }
+
+    /// Combined return type from `readAll`: per-locale localization fields
+    /// plus the (optional) version-level review detail fields. The review
+    /// detail is collapsed across locales because Apple's
+    /// `appStoreReviewDetails` resource isn't per-locale.
+    package struct Read: Sendable {
+        package var localizations: [String: LocalizationFields]
+        package var reviewDetail: ReviewDetailFields?
+        package init(localizations: [String: LocalizationFields], reviewDetail: ReviewDetailFields?) {
+            self.localizations = localizations
+            self.reviewDetail = reviewDetail
+        }
+    }
+
+    /// Reads every `<locale>/` subdirectory plus version-level review files.
+    /// `review_*.txt` files may live in any locale; the first locale that
+    /// contains any of them wins, and subsequent locales' review files emit
+    /// a warning.
+    package static func readAll(
+        dir: URL,
+        onWarning: (String) -> Void = { _ in }
+    ) throws -> Read {
         let fm = FileManager.default
         guard fm.fileExists(atPath: dir.path) else {
             throw ReadError.directoryNotFound(path: dir.path)
@@ -52,8 +106,15 @@ package enum MetadataReader {
             options: [.skipsHiddenFiles]
         )
 
+        // Sort locales alphabetically so review-detail "first locale wins"
+        // is deterministic across runs.
+        let sortedChildren = children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+
         var result: [String: LocalizationFields] = [:]
-        for child in children {
+        var reviewDetail: ReviewDetailFields?
+        var reviewSourceLocale: String?
+
+        for child in sortedChildren {
             let values = try? child.resourceValues(forKeys: [.isDirectoryKey])
             guard values?.isDirectory == true else { continue }
 
@@ -65,16 +126,27 @@ package enum MetadataReader {
             for fileName in localeContents {
                 // Skip dotfiles.
                 if fileName.hasPrefix(".") { continue }
-                guard let keyPath = supportedFields[fileName] else {
+                if let keyPath = supportedFields[fileName] {
+                    let fileURL = child.appendingPathComponent(fileName)
+                    let content = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+                    // Trim trailing whitespace + newlines; keep leading intact.
+                    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    fields[keyPath: keyPath] = trimmed
+                    touched = true
+                } else if let reviewKeyPath = supportedReviewFields[fileName] {
+                    if let already = reviewSourceLocale, already != locale {
+                        onWarning("[\(locale)] ignoring \(fileName) - review fields already taken from [\(already)]/. Move all review_*.txt files into one locale to silence this warning.")
+                        continue
+                    }
+                    let fileURL = child.appendingPathComponent(fileName)
+                    let content = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+                    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if reviewDetail == nil { reviewDetail = ReviewDetailFields() }
+                    reviewDetail?[keyPath: reviewKeyPath] = trimmed
+                    reviewSourceLocale = locale
+                } else {
                     onWarning("[\(locale)] unknown metadata file: \(fileName)")
-                    continue
                 }
-                let fileURL = child.appendingPathComponent(fileName)
-                let content = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
-                // Trim trailing whitespace + newlines; keep leading intact.
-                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                fields[keyPath: keyPath] = trimmed
-                touched = true
             }
 
             if touched {
@@ -82,7 +154,7 @@ package enum MetadataReader {
             }
         }
 
-        return result
+        return Read(localizations: result, reviewDetail: reviewDetail)
     }
 
     package enum ReadError: Error, CustomStringConvertible {
@@ -139,5 +211,51 @@ package struct LocalizationFields: Sendable, Equatable {
         [name, subtitle, description, keywords, promotionalText, whatsNew,
          supportURL, marketingURL, privacyPolicyURL]
             .contains(where: { $0 != nil })
+    }
+}
+
+/// Values for one App Store Connect `appStoreReviewDetails` resource. The
+/// resource is per-version, not per-locale - it carries the free-form
+/// review notes Apple's reviewers see plus the contact info and demo
+/// account. Any field left nil means "don't touch" - only non-nil fields
+/// are sent in the PATCH.
+package struct ReviewDetailFields: Sendable, Equatable {
+    package var contactFirstName: String?
+    package var contactLastName: String?
+    package var contactPhone: String?
+    package var contactEmail: String?
+    package var demoAccountName: String?
+    package var demoAccountPassword: String?
+    /// Whether Apple needs a demo login. Defaults to nil (untouched). When a
+    /// demo account name + password are provided we set this to true via the
+    /// orchestrator; explicit yml support is not exposed yet.
+    package var demoAccountRequired: Bool?
+    package var notes: String?
+
+    package init(
+        contactFirstName: String? = nil,
+        contactLastName: String? = nil,
+        contactPhone: String? = nil,
+        contactEmail: String? = nil,
+        demoAccountName: String? = nil,
+        demoAccountPassword: String? = nil,
+        demoAccountRequired: Bool? = nil,
+        notes: String? = nil
+    ) {
+        self.contactFirstName = contactFirstName
+        self.contactLastName = contactLastName
+        self.contactPhone = contactPhone
+        self.contactEmail = contactEmail
+        self.demoAccountName = demoAccountName
+        self.demoAccountPassword = demoAccountPassword
+        self.demoAccountRequired = demoAccountRequired
+        self.notes = notes
+    }
+
+    package var hasAnyField: Bool {
+        contactFirstName != nil || contactLastName != nil
+            || contactPhone != nil || contactEmail != nil
+            || demoAccountName != nil || demoAccountPassword != nil
+            || demoAccountRequired != nil || notes != nil
     }
 }

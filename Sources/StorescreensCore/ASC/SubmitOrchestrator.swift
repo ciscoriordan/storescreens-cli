@@ -15,9 +15,25 @@ package struct SubmitOrchestrator {
     package let client: ASCClient
     package let config: AppStoreConnectConfig
 
-    package init(client: ASCClient, config: AppStoreConnectConfig) {
+    /// How long to wait between `getReviewSubmission` polls when waiting for
+    /// a `cancel` PATCH to settle. Nanoseconds. Default 1s; tests pass 0.
+    package let settlePollInterval: UInt64
+
+    /// Max number of poll attempts before giving up on the cancel settling.
+    /// Default 30 (~30s with default interval); tests pass 0 to skip
+    /// polling entirely.
+    package let settlePollMaxAttempts: Int
+
+    package init(
+        client: ASCClient,
+        config: AppStoreConnectConfig,
+        settlePollInterval: UInt64 = 1_000_000_000,  // 1s
+        settlePollMaxAttempts: Int = 30
+    ) {
         self.client = client
         self.config = config
+        self.settlePollInterval = settlePollInterval
+        self.settlePollMaxAttempts = settlePollMaxAttempts
     }
 
     // MARK: - Report
@@ -32,6 +48,20 @@ package struct SubmitOrchestrator {
         package var attachedBuildNumber: String?      // ASC build number attached to the version
         package var exportComplianceSet: Bool         // true when we patched usesNonExemptEncryption
         package var reviewSubmissionID: String?
+        /// Final state of the new review submission after the submit-for-review
+        /// flow. Typically `WAITING_FOR_REVIEW` on success; `READY_FOR_REVIEW`
+        /// when `submit_for_review: false` and the orchestrator only created
+        /// the draft submission. Nil when submit-for-review was not requested.
+        package var reviewSubmissionState: String?
+        /// IDs of any prior `reviewSubmissions` we canceled before creating
+        /// the new one (UNRESOLVED_ISSUES from a rejection, or stale
+        /// READY_FOR_REVIEW from an aborted run). Empty when there was
+        /// nothing to clean up.
+        package var canceledReviewSubmissionIDs: [String]
+        /// True when the version-level review-detail (notes + contact info)
+        /// was PATCHed this run. False when no review fields were configured
+        /// or all values matched what ASC already had.
+        package var reviewDetailUpdated: Bool
         /// Set when pricing was applied this run (e.g. "free", or "unchanged"
         /// when the schedule already existed). Nil when no pricing config was
         /// supplied or when the step was skipped.
@@ -58,6 +88,10 @@ package struct SubmitOrchestrator {
         case appNotFound(query: String)
         case missingCreateVersion
         case unsupportedScreenshotDims(file: String, w: Int, h: Int)
+        /// A prior `reviewSubmission` is in WAITING_FOR_REVIEW or IN_REVIEW
+        /// and we refuse to auto-cancel it. Operator must cancel it via the
+        /// ASC web UI before re-running submit-for-review.
+        case activeReviewInProgress(submissionID: String, state: String)
 
         package var description: String {
             switch self {
@@ -69,6 +103,8 @@ package struct SubmitOrchestrator {
                 return "app_store_connect.submit.create_version is required"
             case .unsupportedScreenshotDims(let f, let w, let h):
                 return "screenshot \(f) has unsupported dimensions \(w)x\(h); no ASC display type matches"
+            case .activeReviewInProgress(let id, let state):
+                return "an active review submission (\(id), state \(state)) is in progress; cancel it via the App Store Connect web UI before re-running submit-for-review"
             }
         }
     }
@@ -115,6 +151,9 @@ package struct SubmitOrchestrator {
             attachedBuildNumber: nil,
             exportComplianceSet: false,
             reviewSubmissionID: nil,
+            reviewSubmissionState: nil,
+            canceledReviewSubmissionIDs: [],
+            reviewDetailUpdated: false,
             pricingStatus: nil,
             availabilityStatus: nil,
             errors: []
@@ -234,27 +273,192 @@ package struct SubmitOrchestrator {
 
         // 5. Submit for review if requested. Must run after screenshots +
         // metadata so the version is complete when Apple picks it up.
-        // Idempotent on the version-already-submitted path: ASC returns
-        // 409 STATE_ERROR.ENTITY_STATE_INVALID when the version is no
-        // longer editable, which from submit's perspective means "the
-        // thing you asked for has already happened" — surface as a
-        // progress line, not a failure.
         if config.submit?.submitForReview == true {
-            do {
-                // 3-step reviewSubmissions flow: create, add version, finalize.
-                let submission = try await appsAPI.submitForReview(
-                    appID: app.id, versionID: version.id, platform: platform
-                )
-                report.reviewSubmissionID = submission.id
-                progress?("Submitted for review (submission id \(submission.id))")
-            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
-                progress?("version \(createVersion) is already submitted for review")
-            } catch {
-                report.errors.append("submit for review: \(error)")
-            }
+            await runSubmitForReview(
+                appsAPI: appsAPI,
+                appID: app.id,
+                versionID: version.id,
+                versionString: createVersion,
+                platform: platform,
+                report: &report,
+                progress: progress
+            )
         }
 
         return report
+    }
+
+    // MARK: - Submit for review (with pre-flight cleanup)
+
+    /// Drives the 3-step `reviewSubmissions` flow with the cleanup phase
+    /// that's missing from the bare `appsAPI.submitForReview` convenience:
+    ///
+    /// 1. List existing reviewSubmissions for the app.
+    /// 2. If any are in WAITING_FOR_REVIEW or IN_REVIEW: bail loudly.
+    ///    Operator must cancel via the ASC web UI; we won't pull the rug
+    ///    out from under an active Apple review.
+    /// 3. If any are in READY_FOR_REVIEW (stale draft from an aborted
+    ///    submit) or UNRESOLVED_ISSUES (a rejected submission still
+    ///    "owning" the version): PATCH `canceled: true`. Poll until the
+    ///    state settles to COMPLETE so the next POST sees a freed version.
+    /// 4. Create a fresh submission, attach the version (POST item), PATCH
+    ///    `submitted: true` to push it into WAITING_FOR_REVIEW.
+    ///
+    /// Errors at each step land in `report.errors`; the orchestrator never
+    /// throws here so the rest of the report is preserved.
+    private func runSubmitForReview(
+        appsAPI: AppsAPI,
+        appID: String,
+        versionID: String,
+        versionString: String,
+        platform: String,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        // Step 1+2+3: cleanup pre-existing submissions that would block us.
+        do {
+            try await cancelStaleReviewSubmissions(
+                appsAPI: appsAPI,
+                appID: appID,
+                platform: platform,
+                report: &report,
+                progress: progress
+            )
+        } catch let e as Failure {
+            report.errors.append("submit for review: \(e)")
+            return
+        } catch {
+            report.errors.append("submit for review (cleanup): \(error)")
+            return
+        }
+
+        // Step 4: create + attach + finalize.
+        do {
+            let submission = try await appsAPI.createReviewSubmission(appID: appID, platform: platform)
+            report.reviewSubmissionID = submission.id
+            report.reviewSubmissionState = submission.attributes?.state
+            progress?("submit for review: created submission \(submission.id) (state: \(submission.attributes?.state ?? "?"))")
+
+            do {
+                _ = try await appsAPI.addVersionToReviewSubmission(
+                    reviewSubmissionID: submission.id, versionID: versionID
+                )
+            } catch let e as ASCClient.APIError {
+                // The "version is already attached" path: Apple returns 409
+                // ENTITY_STATE_INVALID with "Item is already present in
+                // [other-submission]". Cleanup should have handled this -
+                // if we still hit it, surface the original error so the
+                // operator sees it instead of swallowing.
+                report.errors.append("submit for review: failed to attach version \(versionString) to new submission \(submission.id): \(e)")
+                return
+            }
+            progress?("submit for review: attached version \(versionString) to submission")
+
+            let finalized = try await appsAPI.finalizeReviewSubmission(id: submission.id)
+            report.reviewSubmissionState = finalized.attributes?.state
+            let finalState = finalized.attributes?.state ?? "?"
+            if finalState == "WAITING_FOR_REVIEW" {
+                progress?("submit for review: submitted (state: \(finalState))")
+            } else {
+                // Apple sometimes responds 200 with a transient state. Don't
+                // treat it as a hard failure - just surface so the operator
+                // can poll the ASC web UI.
+                progress?("submit for review: PATCH submitted=true returned state \(finalState) (expected WAITING_FOR_REVIEW)")
+            }
+        } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+            // Hit if the version was somehow already attached + finalized.
+            progress?("version \(versionString) is already submitted for review")
+        } catch {
+            report.errors.append("submit for review: \(error)")
+        }
+    }
+
+    /// Pre-flight cleanup: cancel any reviewSubmissions for this app that
+    /// would block creating a new one. Throws `Failure.activeReviewInProgress`
+    /// when an in-flight review is found that we refuse to auto-cancel.
+    private func cancelStaleReviewSubmissions(
+        appsAPI: AppsAPI,
+        appID: String,
+        platform: String,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async throws {
+        let existing: [AppsAPI.ReviewSubmission]
+        do {
+            existing = try await appsAPI.listReviewSubmissions(appID: appID, platform: platform)
+        } catch {
+            // If we can't list submissions we can't reason about cleanup;
+            // proceed anyway so a brand-new app (no submissions yet) still
+            // works. Surface the read failure as a progress note.
+            progress?("submit for review: could not list existing submissions (\(error)); continuing")
+            return
+        }
+
+        // Bail loudly on active reviews. Refuse to cancel.
+        if let active = existing.first(where: {
+            let s = $0.attributes?.state ?? ""
+            return AppsAPI.activeReviewSubmissionStates.contains(s)
+        }) {
+            throw Failure.activeReviewInProgress(
+                submissionID: active.id,
+                state: active.attributes?.state ?? "?"
+            )
+        }
+
+        let cancellable = existing.filter {
+            let s = $0.attributes?.state ?? ""
+            return AppsAPI.cancellableReviewSubmissionStates.contains(s)
+        }
+        guard !cancellable.isEmpty else { return }
+
+        for sub in cancellable {
+            let originalState = sub.attributes?.state ?? "?"
+            do {
+                _ = try await appsAPI.cancelReviewSubmission(id: sub.id)
+                progress?("submit for review: canceled prior submission \(sub.id) (was \(originalState))")
+                report.canceledReviewSubmissionIDs.append(sub.id)
+                // Poll until the cancel settles. Apple typically transitions
+                // to COMPLETE within a few seconds; poll up to ~30s with
+                // 1-second backoff.
+                try await waitForSubmissionToSettle(appsAPI: appsAPI, id: sub.id)
+            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                // Submission already in a non-cancellable end state. Treat
+                // as success: nothing more to do.
+                progress?("submit for review: prior submission \(sub.id) already finalized")
+                report.canceledReviewSubmissionIDs.append(sub.id)
+            }
+            // Other errors propagate up so submit-for-review aborts; we
+            // don't want to charge ahead and POST a new submission while
+            // a stale one is still attached to the version.
+        }
+    }
+
+    /// Polls `getReviewSubmission` until the state leaves the canceling /
+    /// active set (i.e. settles to COMPLETE or any other terminal state).
+    /// Times out after `settlePollMaxAttempts * settlePollInterval`; doesn't
+    /// throw on timeout - the worst case is the next POST will fail loudly
+    /// with ENTITY_STATE_INVALID, which the orchestrator surfaces as an
+    /// error.
+    private func waitForSubmissionToSettle(
+        appsAPI: AppsAPI, id: String
+    ) async throws {
+        // States that mean the submission still "owns" the version. Once
+        // we leave this set, the next POST item should succeed.
+        let pendingStates: Set<String> = [
+            "READY_FOR_REVIEW", "UNRESOLVED_ISSUES", "CANCELING",
+            "WAITING_FOR_REVIEW", "IN_REVIEW",
+        ]
+        for _ in 0..<settlePollMaxAttempts {
+            do {
+                let cur = try await appsAPI.getReviewSubmission(id: id)
+                let state = cur.attributes?.state ?? ""
+                if !pendingStates.contains(state) { return }
+            } catch let e as ASCClient.APIError where e.statusCode == 404 {
+                // Submission disappeared - cleanup succeeded.
+                return
+            }
+            try? await Task.sleep(nanoseconds: settlePollInterval)
+        }
     }
 
     // MARK: - App resolution
@@ -283,13 +487,30 @@ package struct SubmitOrchestrator {
     ) async throws {
         var readWarnings: [String] = []
         var byLocale: [String: LocalizationFields]
+        let reviewDetail: ReviewDetailFields?
         do {
-            byLocale = try MetadataReader.read(dir: metadataRoot) { readWarnings.append($0) }
+            let read = try MetadataReader.readAll(dir: metadataRoot) { readWarnings.append($0) }
+            byLocale = read.localizations
+            reviewDetail = read.reviewDetail
         } catch {
             report.errors.append("metadata read: \(error)")
             return
         }
         for warning in readWarnings { progress?("  warn: \(warning)") }
+
+        // Review detail (notes + contact info) lives at the version level
+        // (not per locale) on Apple's side, so we PATCH it once. Fire it
+        // before the per-locale loop so contact info is on the version
+        // before any reviewer might see it.
+        if let reviewDetail, reviewDetail.hasAnyField {
+            await applyReviewDetail(
+                appsAPI: appsAPI,
+                versionID: versionID,
+                desired: reviewDetail,
+                report: &report,
+                progress: progress
+            )
+        }
 
         // whatsNew (release notes) is only valid on an update — ASC rejects
         // it on the first version of a brand-new app. Detect that case by
@@ -385,6 +606,75 @@ package struct SubmitOrchestrator {
                 }
             }
         }
+    }
+
+    /// Find-or-create the version's `appStoreReviewDetails` resource and
+    /// PATCH any non-nil review fields whose values differ from ASC's
+    /// current. When ASC has no review-detail record yet (typical for a
+    /// fresh version), POST one in the same call. Errors are non-fatal:
+    /// they go to `report.errors` so the rest of submit still runs.
+    private func applyReviewDetail(
+        appsAPI: AppsAPI,
+        versionID: String,
+        desired: ReviewDetailFields,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        do {
+            let existing = try await appsAPI.getReviewDetail(versionID: versionID)
+            if let existing {
+                let diff = changedReviewDetailFields(desired: desired, current: existing.attributes)
+                if diff.hasAnyField {
+                    _ = try await appsAPI.updateReviewDetail(id: existing.id, fields: diff)
+                    report.reviewDetailUpdated = true
+                    progress?("review detail: updated \(reviewDetailFieldNames(diff).joined(separator: ", "))")
+                } else {
+                    progress?("review detail: unchanged")
+                }
+            } else {
+                _ = try await appsAPI.createReviewDetail(versionID: versionID, fields: desired)
+                report.reviewDetailUpdated = true
+                progress?("review detail: created with \(reviewDetailFieldNames(desired).joined(separator: ", "))")
+            }
+        } catch {
+            report.errors.append("review detail: \(error)")
+        }
+    }
+
+    /// Returns a ReviewDetailFields containing only fields that actually
+    /// differ from ASC's current. Mirrors `changedVersionLocalizationFields`
+    /// for the review-detail resource.
+    private func changedReviewDetailFields(
+        desired: ReviewDetailFields,
+        current: AppsAPI.AppStoreReviewDetail.Attributes?
+    ) -> ReviewDetailFields {
+        func diff(_ new: String?, _ old: String?) -> String? {
+            guard let new else { return nil }
+            return new == (old ?? "") ? nil : new
+        }
+        return ReviewDetailFields(
+            contactFirstName:    diff(desired.contactFirstName,    current?.contactFirstName),
+            contactLastName:     diff(desired.contactLastName,     current?.contactLastName),
+            contactPhone:        diff(desired.contactPhone,        current?.contactPhone),
+            contactEmail:        diff(desired.contactEmail,        current?.contactEmail),
+            demoAccountName:     diff(desired.demoAccountName,     current?.demoAccountName),
+            demoAccountPassword: diff(desired.demoAccountPassword, current?.demoAccountPassword),
+            demoAccountRequired: desired.demoAccountRequired == current?.demoAccountRequired ? nil : desired.demoAccountRequired,
+            notes:               diff(desired.notes,               current?.notes)
+        )
+    }
+
+    private func reviewDetailFieldNames(_ fields: ReviewDetailFields) -> [String] {
+        var names: [String] = []
+        if fields.notes != nil { names.append("notes") }
+        if fields.contactFirstName != nil { names.append("contactFirstName") }
+        if fields.contactLastName != nil { names.append("contactLastName") }
+        if fields.contactPhone != nil { names.append("contactPhone") }
+        if fields.contactEmail != nil { names.append("contactEmail") }
+        if fields.demoAccountName != nil { names.append("demoAccountName") }
+        if fields.demoAccountPassword != nil { names.append("demoAccountPassword") }
+        if fields.demoAccountRequired != nil { names.append("demoAccountRequired") }
+        return names
     }
 
     /// Returns a LocalizationFields carrying only the version-level fields

@@ -82,6 +82,24 @@ struct MetadataInitCommand: AsyncParsableCommand {
         | `marketing_url.txt`  | Marketing URL      |  -         | Optional; https:// |
         | `privacy_url.txt`    | Privacy policy URL |  -         | Patched on the App Info record (app-level, not version-level) |
 
+        ## App Review Information
+
+        These files feed the version's `appStoreReviewDetails` resource (the
+        "App Review Information" panel in App Store Connect). They are
+        version-scoped, NOT per-locale, so put them under one locale only -
+        typically your primary. If they appear in multiple locales the
+        alphabetically first one wins and the rest produce a warning.
+
+        | Filename                              | ASC field            |
+        |---------------------------------------|----------------------|
+        | `review_notes.txt`                    | `notes` (free-form notes for Apple's reviewers) |
+        | `review_contact_first_name.txt`       | `contactFirstName`   |
+        | `review_contact_last_name.txt`        | `contactLastName`    |
+        | `review_contact_phone.txt`            | `contactPhone`       |
+        | `review_contact_email.txt`            | `contactEmail`       |
+        | `review_demo_account_name.txt`        | `demoAccountName`    |
+        | `review_demo_account_password.txt`    | `demoAccountPassword`|
+
         ## Example
 
             metadata/
@@ -90,6 +108,11 @@ struct MetadataInitCommand: AsyncParsableCommand {
                 name.txt
                 description.txt
                 release_notes.txt
+                review_notes.txt
+                review_contact_first_name.txt
+                review_contact_last_name.txt
+                review_contact_email.txt
+                review_contact_phone.txt
               ja/
                 description.txt
                 release_notes.txt
