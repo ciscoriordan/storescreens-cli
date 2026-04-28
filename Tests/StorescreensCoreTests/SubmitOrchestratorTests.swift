@@ -431,6 +431,194 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
     }
 
+    /// `metadata/<locale>/review_notes.txt` triggers a PATCH on
+    /// `appStoreReviewDetails` for the version. When ASC has no
+    /// review-detail record yet, the orchestrator POSTs one.
+    func testSubmit_reviewNotes_createsReviewDetailWhenNotPresent() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-review-notes-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("notes for the reviewer", to: metaRoot.appendingPathComponent("en-US/review_notes.txt"))
+        try writeFixture("Cisco", to: metaRoot.appendingPathComponent("en-US/review_contact_first_name.txt"))
+        try writeFixture("Riordan", to: metaRoot.appendingPathComponent("en-US/review_contact_last_name.txt"))
+        try writeFixture("cisco@example.com", to: metaRoot.appendingPathComponent("en-US/review_contact_email.txt"))
+        try writeFixture("+15551234567", to: metaRoot.appendingPathComponent("en-US/review_contact_phone.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        // No review-detail yet: orchestrator must POST to create.
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (200, Data(#"{"data":null}"#.utf8))
+        }
+        var createBody: Data?
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreReviewDetails") { _ in
+            createHits += 1
+            createBody = ASCStub.requestBodies.last
+            return (201, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(createHits, 1, "expected one POST to /v1/appStoreReviewDetails")
+        XCTAssertNotNil(createBody)
+        let bodyStr = String(data: createBody!, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("notes for the reviewer"), "notes must be in the POST body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("Cisco"), "contactFirstName must be sent: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("Riordan"), "contactLastName must be sent: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("cisco@example.com"), "contactEmail must be sent: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("+15551234567"), "contactPhone must be sent: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"appStoreVersion\""), "must reference the parent appStoreVersion: \(bodyStr)")
+        XCTAssertTrue(report.reviewDetailUpdated, "report must reflect that review detail was updated")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When the version already has a review-detail and the configured
+    /// fields differ, PATCH only the differing ones.
+    func testSubmit_reviewNotes_patchesExistingReviewDetailWithDiff() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-review-patch-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("UPDATED notes", to: metaRoot.appendingPathComponent("en-US/review_notes.txt"))
+        // contactEmail unchanged from server-side state -> should not appear in PATCH body.
+        try writeFixture("cisco@example.com", to: metaRoot.appendingPathComponent("en-US/review_contact_email.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // Existing review-detail: notes are stale, contactEmail matches.
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (200, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{"notes":"old notes","contactEmail":"cisco@example.com"}}}"#.utf8))
+        }
+        var patchBody: Data?
+        var patchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreReviewDetails/RD-1") { _ in
+            patchHits += 1
+            patchBody = ASCStub.requestBodies.last
+            return (200, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{"notes":"UPDATED notes"}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US","description":"English description"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true
+        )
+
+        XCTAssertEqual(patchHits, 1, "expected one PATCH on appStoreReviewDetails")
+        let bodyStr = String(data: patchBody!, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("UPDATED notes"), "diff PATCH must include changed notes: \(bodyStr)")
+        XCTAssertFalse(bodyStr.contains("contactEmail"),
+                       "unchanged contactEmail must be diffed out: \(bodyStr)")
+        XCTAssertTrue(report.reviewDetailUpdated)
+    }
+
+    /// When all configured review fields already match what ASC has, no
+    /// PATCH should fire (idempotent re-run).
+    func testSubmit_reviewNotes_unchangedSkipsPatch() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-review-noop-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("desc", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        try writeFixture("same notes", to: metaRoot.appendingPathComponent("en-US/review_notes.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (200, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{"notes":"same notes"}}}"#.utf8))
+        }
+        var patchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreReviewDetails/RD-1") { _ in
+            patchHits += 1
+            return (200, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US","description":"desc"}}]}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true
+        )
+
+        XCTAssertEqual(patchHits, 0, "matching review-detail must skip the PATCH")
+        XCTAssertFalse(report.reviewDetailUpdated)
+    }
+
     func testSubmit_submitForReview_reviewSubmissionsFlow() async throws {
         let (client, _) = makeClient()
 
@@ -439,6 +627,13 @@ final class SubmitOrchestratorTests: XCTestCase {
         }
         ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
             (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // Pre-flight cleanup: orchestrator lists existing submissions; nothing
+        // here since this is a clean first-time submit.
+        var listHits = 0
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            listHits += 1
+            return (200, Data(#"{"data":[]}"#.utf8))
         }
         // 3-step reviewSubmissions flow: POST create, POST item, PATCH finalize.
         var createHits = 0
@@ -467,7 +662,10 @@ final class SubmitOrchestratorTests: XCTestCase {
                 attachBuild: false  // test stub doesn't model /v1/builds
             )
         )
-        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
         let manifest = CaptureManifest(
             version: 1, generatedAt: Date(), generatedBy: "t",
             appName: "a", displayName: nil, scheme: "s", devices: []
@@ -481,11 +679,491 @@ final class SubmitOrchestratorTests: XCTestCase {
             shouldUploadMetadata: false
         )
 
+        XCTAssertEqual(listHits, 1, "GET /reviewSubmissions once for pre-flight cleanup")
         XCTAssertEqual(createHits, 1, "POST /reviewSubmissions once")
         XCTAssertEqual(itemHits, 1, "POST /reviewSubmissionItems once to attach version")
         XCTAssertEqual(finalizeHits, 1, "PATCH /reviewSubmissions/{id} once to set submitted:true")
         XCTAssertEqual(report.reviewSubmissionID, "RSUB-1")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW",
+                       "final state must be WAITING_FOR_REVIEW after submitted:true PATCH")
+        XCTAssertTrue(report.canceledReviewSubmissionIDs.isEmpty,
+                      "no cleanup needed on a clean app")
         XCTAssertTrue(report.errors.isEmpty)
+    }
+
+    /// When the app has a prior `UNRESOLVED_ISSUES` submission (Apple
+    /// rejected an earlier build, version is still "stuck" inside that
+    /// submission), `submit` must PATCH `canceled: true` on it before
+    /// creating the new submission. Otherwise POST item fails with the
+    /// "Item is already present in" 409.
+    func testSubmit_submitForReview_cancelsUnresolvedIssuesBeforeRecreating() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // Pre-flight list returns a UNRESOLVED_ISSUES submission that owns
+        // the version (this is what blocks a fresh submit after a reject).
+        var listHits = 0
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            listHits += 1
+            return (200, Data(#"{"data":[{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"UNRESOLVED_ISSUES","platform":"IOS"}}]}"#.utf8))
+        }
+        // Cancel PATCH on the old submission: returns 200 with state
+        // CANCELING, then GET polls until state COMPLETE.
+        var cancelPatchBody: Data?
+        var cancelPatchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-OLD") { _ in
+            cancelPatchHits += 1
+            cancelPatchBody = ASCStub.requestBodies.last
+            return (200, Data(#"{"data":{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        // Get poll: orchestrator may call this 0+ times; whenever it does,
+        // return COMPLETE so the poll exits immediately.
+        var getOldHits = 0
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-OLD") { _ in
+            getOldHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        // 3-step flow on the new submission.
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        var itemHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            itemHits += 1
+            return (201, Data(#"{"data":{"id":"RITEM-NEW","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-NEW") { _ in
+            finalizeHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                screenshots: false,
+                metadata: false,
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 5
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(listHits, 1, "GET /reviewSubmissions once for pre-flight")
+        XCTAssertEqual(cancelPatchHits, 1, "PATCH /reviewSubmissions/RSUB-OLD once to cancel")
+        XCTAssertNotNil(cancelPatchBody, "cancel PATCH should have a body")
+        let cancelStr = String(data: cancelPatchBody!, encoding: .utf8) ?? ""
+        XCTAssertTrue(cancelStr.contains("\"canceled\":true"),
+                      "cancel PATCH must send canceled: true, got \(cancelStr)")
+        XCTAssertFalse(cancelStr.contains("\"submitted\""),
+                       "cancel PATCH must not include submitted attribute")
+        XCTAssertGreaterThanOrEqual(getOldHits, 1, "should poll until cancel settles")
+        XCTAssertEqual(createHits, 1, "exactly one new submission created after cleanup")
+        XCTAssertEqual(itemHits, 1, "version attached to new submission")
+        XCTAssertEqual(finalizeHits, 1, "submitted:true PATCH on new submission")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-NEW")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
+        XCTAssertEqual(report.canceledReviewSubmissionIDs, ["RSUB-OLD"])
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// `READY_FOR_REVIEW` (an aborted prior submit's draft submission) is
+    /// also cancellable. Same mechanism as UNRESOLVED_ISSUES.
+    func testSubmit_submitForReview_cancelsStaleReadyForReviewDraft() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-STALE","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        var staleCanceled = false
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-STALE") { _ in
+            staleCanceled = true
+            return (200, Data(#"{"data":{"id":"RSUB-STALE","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-STALE") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-STALE","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            (201, Data(#"{"data":{"id":"RI-NEW","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-NEW") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 1
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertTrue(staleCanceled, "stale READY_FOR_REVIEW must be canceled")
+        XCTAssertEqual(report.canceledReviewSubmissionIDs, ["RSUB-STALE"])
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-NEW")
+    }
+
+    /// `IN_REVIEW` and `WAITING_FOR_REVIEW` are off-limits for auto-cancel:
+    /// Apple is actively reviewing or about to. Surface a clear error and
+    /// do NOT issue a cancel PATCH.
+    func testSubmit_submitForReview_inReviewBailsLoudly() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-LIVE","type":"reviewSubmissions","attributes":{"state":"IN_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        var cancelHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-LIVE") { _ in
+            cancelHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-LIVE","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(cancelHits, 0, "must not auto-cancel an IN_REVIEW submission")
+        XCTAssertEqual(createHits, 0, "must not create a new submission while one is in review")
+        XCTAssertTrue(report.canceledReviewSubmissionIDs.isEmpty)
+        XCTAssertNil(report.reviewSubmissionID)
+        XCTAssertTrue(report.errors.contains { $0.contains("active review") || $0.contains("IN_REVIEW") },
+                      "expected an active-review error, got: \(report.errors)")
+    }
+
+    /// `WAITING_FOR_REVIEW` is also off-limits: Apple has it queued and
+    /// the developer probably doesn't want it pulled out from under them.
+    func testSubmit_submitForReview_waitingForReviewBailsLoudly() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-WAIT","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(createHits, 0, "must not create a new submission while one is queued for review")
+        XCTAssertTrue(report.errors.contains { $0.contains("WAITING_FOR_REVIEW") || $0.contains("active review") },
+                      "expected a waiting-for-review error, got: \(report.errors)")
+    }
+
+    /// Multiple stuck submissions all get canceled in one pass.
+    func testSubmit_submitForReview_cancelsAllStaleSubmissions() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            let body = """
+            {"data":[
+              {"id":"RSUB-A","type":"reviewSubmissions","attributes":{"state":"UNRESOLVED_ISSUES","platform":"IOS"}},
+              {"id":"RSUB-B","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}
+            ]}
+            """
+            return (200, Data(body.utf8))
+        }
+        var cancelAHits = 0, cancelBHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-A") { _ in
+            cancelAHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-A","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-B") { _ in
+            cancelBHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-B","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-A") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-A","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-B") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-B","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            (201, Data(#"{"data":{"id":"RI","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-NEW") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 1
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(cancelAHits, 1)
+        XCTAssertEqual(cancelBHits, 1)
+        XCTAssertEqual(Set(report.canceledReviewSubmissionIDs), Set(["RSUB-A", "RSUB-B"]))
+        XCTAssertTrue(report.errors.isEmpty, "errors: \(report.errors)")
+    }
+
+    /// Edge case: cleanup phase succeeded (or there was nothing to clean
+    /// up) but POST item still fails with the "Item is already present
+    /// in" 409 - because Apple's state propagation lagged. Surface as a
+    /// real error in `report.errors` rather than swallowing it as
+    /// "already submitted". The user must see this so they can re-run.
+    func testSubmit_submitForReview_addItem409SurfacesAsError() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // Pre-flight returns nothing - clean app from the orchestrator's POV.
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        // POST item: simulate Apple's exact rejection text from the original
+        // problem report. With the old "isAlreadySetConflict" path this
+        // would have been swallowed; the new orchestrator surfaces it.
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            let body = """
+            {"errors":[{"id":"x","status":"409","code":"STATE_ERROR.ENTITY_STATE_INVALID","title":"State error","detail":"appStoreVersions with id '12345' is not in valid state. Item is already present in [other-submission]."}]}
+            """
+            return (409, Data(body.utf8))
+        }
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-NEW") { _ in
+            finalizeHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(finalizeHits, 0,
+                       "must NOT call PATCH submitted=true after addItem failed")
+        XCTAssertFalse(report.errors.isEmpty,
+                       "POST item 409 must surface as an error, not be swallowed")
+        XCTAssertTrue(report.errors.contains { $0.contains("attach version") },
+                      "expected an attach-version error, got: \(report.errors)")
+    }
+
+    /// Verify the orchestrator never issues a DELETE on a reviewSubmission.
+    /// Apple returns 403 on DELETE regardless of state; the only working
+    /// programmatic cancel is the canceled:true PATCH.
+    func testSubmit_submitForReview_neverIssuesDelete() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"UNRESOLVED_ISSUES","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-OLD") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-OLD") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-OLD","type":"reviewSubmissions","attributes":{"state":"COMPLETE"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            (201, Data(#"{"data":{"id":"RI","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-NEW") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-NEW","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 1
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        _ = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        let deleteCalls = ASCStub.requests.filter {
+            $0.httpMethod == "DELETE" && $0.url?.path.contains("/reviewSubmissions/") == true
+        }
+        XCTAssertEqual(deleteCalls.count, 0, "must never DELETE a reviewSubmission - the API returns 403")
     }
 
     func testSubmit_submitForReview_defaultsFalse_noPost() async throws {
@@ -1140,5 +1818,244 @@ final class SubmitOrchestratorTests: XCTestCase {
         } catch {
             XCTFail("wrong error: \(error)")
         }
+    }
+
+    // MARK: - appInfo field routing (name / subtitle / privacy URLs)
+
+    /// Regression test for the bug where `name.txt` and `subtitle.txt`
+    /// were silently dropped (or pushed to `appStoreVersionLocalizations`,
+    /// which has no name/subtitle). They must land on
+    /// `appInfoLocalizations` for the editable AppInfo. This test also
+    /// verifies that `privacy_choices_url.txt` is routed to the same
+    /// resource and that the version-localization PATCH does NOT include
+    /// any of the appInfo fields.
+    func testSubmit_nameSubtitlePrivacyChoices_routedToAppInfoLocalization() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("submit-appinfo-routing-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("My App", to: metaRoot.appendingPathComponent("en-US/name.txt"))
+        try writeFixture("Cook smarter", to: metaRoot.appendingPathComponent("en-US/subtitle.txt"))
+        try writeFixture("https://example.com/privacy", to: metaRoot.appendingPathComponent("en-US/privacy_url.txt"))
+        try writeFixture("https://example.com/choices", to: metaRoot.appendingPathComponent("en-US/privacy_choices_url.txt"))
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "App", displayName: nil, scheme: "App", devices: []
+        )
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersions") { _ in
+            (201, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        // Version localization: empty list, then create.
+        let localizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": localizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "LOC-en-US", "type": "appStoreVersionLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            localizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        // Capture every PATCH body so we can assert the field routing.
+        let versionPatchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            if let body = ASCStub.requestBodies.last {
+                versionPatchBodies.add(body)
+            }
+            return (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+        // appInfo + appInfoLocalization flow.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        let appInfoLocalizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/appInfoLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": appInfoLocalizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appInfoLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "AIL-en-US", "type": "appInfoLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            appInfoLocalizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        let appInfoPatchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfoLocalizations/AIL-en-US") { _ in
+            if let body = ASCStub.requestBodies.last {
+                appInfoPatchBodies.add(body)
+            }
+            return (200, Data(#"{"data":{"id":"AIL-en-US","type":"appInfoLocalizations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+
+        // The version-localization PATCH should carry the description but
+        // NOT name, subtitle, privacyPolicyUrl, or privacyChoicesUrl.
+        XCTAssertEqual(versionPatchBodies.count, 1, "expected exactly one version-loc PATCH")
+        let versionBody = versionPatchBodies[0] as! Data
+        let versionJSON = try JSONSerialization.jsonObject(with: versionBody) as! [String: Any]
+        let versionAttrs = ((versionJSON["data"] as! [String: Any])["attributes"] as! [String: Any])
+        XCTAssertEqual(versionAttrs["description"] as? String, "English description")
+        XCTAssertNil(versionAttrs["name"], "version localization must NOT carry name")
+        XCTAssertNil(versionAttrs["subtitle"], "version localization must NOT carry subtitle")
+        XCTAssertNil(versionAttrs["privacyPolicyUrl"], "version localization must NOT carry privacyPolicyUrl")
+        XCTAssertNil(versionAttrs["privacyChoicesUrl"], "version localization must NOT carry privacyChoicesUrl")
+
+        // The appInfo-localization PATCH must carry name + subtitle +
+        // both privacy URLs, and NOT description / keywords / etc.
+        XCTAssertEqual(appInfoPatchBodies.count, 1, "expected exactly one appInfo-loc PATCH")
+        let appInfoBody = appInfoPatchBodies[0] as! Data
+        let appInfoJSON = try JSONSerialization.jsonObject(with: appInfoBody) as! [String: Any]
+        let appInfoAttrs = ((appInfoJSON["data"] as! [String: Any])["attributes"] as! [String: Any])
+        XCTAssertEqual(appInfoAttrs["name"] as? String, "My App")
+        XCTAssertEqual(appInfoAttrs["subtitle"] as? String, "Cook smarter")
+        XCTAssertEqual(appInfoAttrs["privacyPolicyUrl"] as? String, "https://example.com/privacy")
+        XCTAssertEqual(appInfoAttrs["privacyChoicesUrl"] as? String, "https://example.com/choices")
+        XCTAssertNil(appInfoAttrs["description"], "appInfo localization must NOT carry description")
+        XCTAssertNil(appInfoAttrs["keywords"], "appInfo localization must NOT carry keywords")
+
+        // Report exposes both buckets.
+        XCTAssertEqual(report.metadataUpdates.first?.locale, "en-US")
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated, ["description"])
+        XCTAssertEqual(report.appInfoUpdates.first?.locale, "en-US")
+        XCTAssertEqual(report.appInfoUpdates.first?.fieldsUpdated,
+                       ["name", "subtitle", "privacyPolicyUrl", "privacyChoicesUrl"])
+        // Privacy URL backwards-compat list still populated for old consumers.
+        XCTAssertEqual(report.privacyURLUpdates, ["en-US"])
+        XCTAssertNil(report.appInfoSkipped)
+    }
+
+    /// When ASC has no editable AppInfo (e.g. live version is
+    /// READY_FOR_SALE and no new editable version has been created),
+    /// `submit` should skip the appInfoLocalizations PATCH with a clear
+    /// reason rather than failing the whole submit. The version-level
+    /// fields (description etc.) must still be applied.
+    func testSubmit_noEditableAppInfo_skipsAppInfoFields_logsReason() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("submit-appinfo-skip-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("My App", to: metaRoot.appendingPathComponent("en-US/name.txt"))
+        try writeFixture("Cook smarter", to: metaRoot.appendingPathComponent("en-US/subtitle.txt"))
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "App", displayName: nil, scheme: "App", devices: []
+        )
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"name":"A","bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersions") { _ in
+            (201, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        let localizations = NSMutableArray()
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, try! JSONSerialization.data(withJSONObject: ["data": localizations]))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreVersionLocalizations") { _ in
+            let entry: [String: Any] = [
+                "id": "LOC-en-US", "type": "appStoreVersionLocalizations",
+                "attributes": ["locale": "en-US"],
+            ]
+            localizations.add(entry)
+            return (201, try! JSONSerialization.data(withJSONObject: ["data": entry]))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+        // appInfos: only READY_FOR_SALE (not editable) -> orchestrator
+        // should set `appInfoSkipped = .noEditableAppInfo` and skip the
+        // PATCH. With the current `findEditableAppInfo` implementation
+        // that returns the first record as a fallback, return an empty
+        // list to truly express "no editable record".
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        // If something tries to PATCH appInfoLocalizations anyway, fail
+        // loudly so the test catches it.
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/appInfoLocalizations") { _ in
+            XCTFail("must not list appInfoLocalizations when no editable AppInfo exists")
+            return (500, Data())
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfoLocalizations/AIL-en-US") { _ in
+            XCTFail("must not PATCH appInfoLocalizations when no editable AppInfo exists")
+            return (500, Data())
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                metadata: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+
+        var progressLines: [String] = []
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: { progressLines.append($0) }
+        )
+
+        // Submit didn't fail — version-level description still applied.
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(report.metadataUpdates.first?.fieldsUpdated, ["description"])
+        XCTAssertTrue(report.appInfoUpdates.isEmpty)
+        XCTAssertNotNil(report.appInfoSkipped)
+        if case .noEditableAppInfo = report.appInfoSkipped {
+            // expected
+        } else {
+            XCTFail("expected .noEditableAppInfo, got \(String(describing: report.appInfoSkipped))")
+        }
+        XCTAssertTrue(
+            progressLines.contains { $0.contains("Skipped") && $0.contains("no editable appInfo") },
+            "expected a 'Skipped … no editable appInfo' progress line, got: \(progressLines)"
+        )
     }
 }

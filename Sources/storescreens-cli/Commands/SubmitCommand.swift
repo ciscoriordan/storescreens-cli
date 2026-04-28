@@ -143,9 +143,23 @@ struct SubmitCommand: AsyncParsableCommand {
         print("  app:      \(report.appID)")
         print("  version:  \(report.versionString) (\(report.versionID))")
         if !report.metadataUpdates.isEmpty {
-            print("  metadata updates:")
+            print("  metadata updates (appStoreVersionLocalizations):")
             for m in report.metadataUpdates {
                 print("    \(m.locale): \(m.fieldsUpdated.joined(separator: ", "))")
+            }
+        }
+        if !report.appInfoUpdates.isEmpty {
+            print("  metadata updates (appInfoLocalizations):")
+            for m in report.appInfoUpdates {
+                print("    \(m.locale): \(m.fieldsUpdated.joined(separator: ", "))")
+            }
+        }
+        if let skip = report.appInfoSkipped {
+            switch skip {
+            case .noEditableAppInfo:
+                print("  appInfo updates: skipped — no editable appInfo (create a new editable version first)")
+            case .lookupFailed(let message):
+                print("  appInfo updates: skipped — appInfos lookup failed: \(message)")
             }
         }
         if !report.screenshotUploads.isEmpty {
@@ -154,17 +168,21 @@ struct SubmitCommand: AsyncParsableCommand {
                 print("    \(s.locale) / \(s.displayType): \(s.count) file(s)")
             }
         }
-        if !report.privacyURLUpdates.isEmpty {
-            print("  privacy URL updated for: \(report.privacyURLUpdates.joined(separator: ", "))")
-        }
         if let buildNumber = report.attachedBuildNumber {
             print("  build attached: \(buildNumber)")
         }
         if report.exportComplianceSet {
             print("  export compliance: answered")
         }
+        if report.reviewDetailUpdated {
+            print("  review detail (notes / contact info): updated")
+        }
+        if !report.canceledReviewSubmissionIDs.isEmpty {
+            print("  canceled prior submissions: \(report.canceledReviewSubmissionIDs.joined(separator: ", "))")
+        }
         if let submissionID = report.reviewSubmissionID {
-            print("  submitted for review: \(submissionID)")
+            let stateSuffix = report.reviewSubmissionState.map { " (\($0))" } ?? ""
+            print("  submitted for review: \(submissionID)\(stateSuffix)")
         }
         if !report.errors.isEmpty {
             logger.log("\(report.errors.count) error(s):", level: .error)

@@ -1122,13 +1122,38 @@ metadata/
     support_url.txt
     marketing_url.txt
     privacy_url.txt
+    privacy_choices_url.txt
+    review_notes.txt
+    review_contact_first_name.txt
+    review_contact_last_name.txt
+    review_contact_phone.txt
+    review_contact_email.txt
+    review_demo_account_name.txt
+    review_demo_account_password.txt
   es-ES/
     description.txt
     release_notes.txt
     ...
 ```
 
-`privacy_url.txt` is stored on the App Info record (not the version), which is where App Store Connect keeps privacy URLs. The submit command patches the right endpoint automatically.
+App Store Connect splits per-locale metadata across two resources, and `submit` routes each file to the correct endpoint:
+
+| File | ASC resource |
+|------|--------------|
+| `name.txt` | `appInfoLocalizations.name` |
+| `subtitle.txt` | `appInfoLocalizations.subtitle` |
+| `privacy_url.txt` | `appInfoLocalizations.privacyPolicyUrl` |
+| `privacy_choices_url.txt` | `appInfoLocalizations.privacyChoicesUrl` |
+| `description.txt` | `appStoreVersionLocalizations.description` |
+| `keywords.txt` | `appStoreVersionLocalizations.keywords` |
+| `promotional_text.txt` | `appStoreVersionLocalizations.promotionalText` |
+| `release_notes.txt` | `appStoreVersionLocalizations.whatsNew` |
+| `support_url.txt` | `appStoreVersionLocalizations.supportUrl` |
+| `marketing_url.txt` | `appStoreVersionLocalizations.marketingUrl` |
+
+`appInfoLocalizations` lives on the app-level `appInfo` record, which can only be edited while the app has a version in an editable state (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `METADATA_REJECTED`, etc.). If the only existing version is `READY_FOR_SALE`, App Store Connect won't accept `name`/`subtitle`/privacy URL PATCHes; `submit` detects the missing editable `appInfo`, logs `Skipped name/subtitle update — no editable appInfo (create a new editable version first)`, and proceeds with the version-level fields. To update name/subtitle on an already-released app, bump `submit.create_version` so `submit` creates a new editable version (which auto-creates a fresh editable `appInfo`).
+
+`review_notes.txt` and the `review_contact_*.txt` / `review_demo_account_*.txt` files feed the version-level `appStoreReviewDetails` resource (the "App Review Information" panel in App Store Connect): free-form notes Apple's reviewers see when triaging, plus contact info Apple uses if they need to reach you during review, plus an optional demo-account login. These fields are NOT per-locale on Apple's side, so put them under one locale (any locale, typically your primary). If they appear in multiple locale folders, the alphabetically-first one wins and the rest emit a warning.
 
 Any field you don't want to change: leave the file out. Present files replace whatever's currently in App Store Connect. Trailing whitespace and newlines are trimmed.
 
@@ -1171,11 +1196,38 @@ app_store_connect:
     submit_for_review: true   # default false
 ```
 
-Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID is included in the report output.
+Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID and final state (`WAITING_FOR_REVIEW` on success) are included in the report output.
 
-Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create → attach version → finalize with `submitted:true`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
+Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create the submission, POST a `reviewSubmissionItems` to attach the version, PATCH `submitted:true` to push it into `WAITING_FOR_REVIEW`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
+
+#### Auto-cancel of stuck prior submissions
+
+When Apple rejects a build, the previous `reviewSubmission` transitions to state `UNRESOLVED_ISSUES` and the rejected version is "stuck inside" that submission. The next `submit` cycle would otherwise fail at the POST `reviewSubmissionItems` step with a 409 (`STATE_ERROR.ENTITY_STATE_INVALID`, "Item is already present in [other-submission]"). To avoid manual cleanup in the ASC web UI, `submit` does a pre-flight cleanup before creating a new submission:
+
+1. List existing `reviewSubmissions` for the app on the configured platform.
+2. If any are in `UNRESOLVED_ISSUES` (rejected) or `READY_FOR_REVIEW` (an aborted prior submit's draft), PATCH `canceled: true` on each one and poll until the state settles to `COMPLETE`. The IDs of canceled submissions land in `report.canceledReviewSubmissionIDs`.
+3. If any are in `IN_REVIEW` or `WAITING_FOR_REVIEW`, **bail loudly with an error**. Apple is actively reviewing (or about to), and pulling the rug out from under that wastes a review slot. Cancel manually via the ASC web UI if you really mean to resubmit.
+4. Once the cleanup settles, proceed with the normal three-step flow.
+
+Note: programmatic cancel uses PATCH `{"canceled": true}` on the submission. ASC's `DELETE /v1/reviewSubmissions/{id}` returns 403 regardless of state, so `submit` does not attempt DELETE.
 
 Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version.
+
+#### App Review notes and contact info
+
+`metadata/<locale>/review_notes.txt` and the matching `review_contact_*.txt` / `review_demo_account_*.txt` files feed the version's `appStoreReviewDetails` resource. They cover everything in the "App Review Information" panel of the ASC web UI:
+
+| File | ASC field |
+|------|-----------|
+| `review_notes.txt` | `notes` (free-form notes for Apple's reviewers) |
+| `review_contact_first_name.txt` | `contactFirstName` |
+| `review_contact_last_name.txt` | `contactLastName` |
+| `review_contact_phone.txt` | `contactPhone` |
+| `review_contact_email.txt` | `contactEmail` |
+| `review_demo_account_name.txt` | `demoAccountName` |
+| `review_demo_account_password.txt` | `demoAccountPassword` |
+
+Apple stores these per-version (not per-locale), so put the files under one locale only - typically your primary. The reader picks the alphabetically first locale that has any `review_*.txt` file and warns about review files in other locales. The PATCH only sends fields that actually differ from ASC's current values; an unchanged review-detail produces a `review detail: unchanged` line in the progress output and no API call.
 
 ### Pricing and availability
 

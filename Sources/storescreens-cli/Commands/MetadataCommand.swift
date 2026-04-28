@@ -70,17 +70,48 @@ struct MetadataInitCommand: AsyncParsableCommand {
 
         ## Supported filenames
 
-        | Filename             | ASC field          | Max length | Notes |
-        |----------------------|--------------------|------------|-------|
-        | `name.txt`           | App name           | 30         | Only editable while the version is editable |
-        | `subtitle.txt`       | Subtitle           | 30         | |
-        | `description.txt`    | Description        | 4000       | Newlines preserved |
-        | `keywords.txt`       | Keywords           | 100        | Comma-separated list |
-        | `promotional_text.txt` | Promotional text | 170        | Can be edited without a new version |
-        | `release_notes.txt`  | "What's New"       | 4000       | |
-        | `support_url.txt`    | Support URL        |  -         | Must be https:// |
-        | `marketing_url.txt`  | Marketing URL      |  -         | Optional; https:// |
-        | `privacy_url.txt`    | Privacy policy URL |  -         | Patched on the App Info record (app-level, not version-level) |
+        App Store Connect splits per-locale metadata across two resources.
+        `submit` routes each file to the correct endpoint automatically;
+        the "ASC resource" column is informational.
+
+        | Filename             | ASC field          | ASC resource | Max length | Notes |
+        |----------------------|--------------------|--------------|------------|-------|
+        | `name.txt`           | App name           | appInfoLocalizations | 30   | Only editable while an `appInfo` is in an editable state |
+        | `subtitle.txt`       | Subtitle           | appInfoLocalizations | 30   | Only editable while an `appInfo` is in an editable state |
+        | `privacy_url.txt`    | Privacy policy URL | appInfoLocalizations |  -   | Per-locale, on the App Info record (not the version) |
+        | `privacy_choices_url.txt` | Privacy choices URL | appInfoLocalizations | - | CCPA "do not sell my data" landing page |
+        | `description.txt`    | Description        | appStoreVersionLocalizations | 4000 | Newlines preserved |
+        | `keywords.txt`       | Keywords           | appStoreVersionLocalizations | 100  | Comma-separated list |
+        | `promotional_text.txt` | Promotional text | appStoreVersionLocalizations | 170  | Can be edited without a new version |
+        | `release_notes.txt`  | "What's New"       | appStoreVersionLocalizations | 4000 | |
+        | `support_url.txt`    | Support URL        | appStoreVersionLocalizations |  -   | Must be https:// |
+        | `marketing_url.txt`  | Marketing URL      | appStoreVersionLocalizations |  -   | Optional; https:// |
+
+        Updating `name`, `subtitle`, or the privacy URLs requires the app
+        to have an `appInfo` record in an editable state
+        (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, etc.). If the only
+        existing version is `READY_FOR_SALE`, `submit` logs a clear skip
+        line and continues with the version-level fields rather than
+        failing. Bump `submit.create_version` so `submit` creates a new
+        editable version, then re-run.
+
+        ## App Review Information
+
+        These files feed the version's `appStoreReviewDetails` resource (the
+        "App Review Information" panel in App Store Connect). They are
+        version-scoped, NOT per-locale, so put them under one locale only -
+        typically your primary. If they appear in multiple locales the
+        alphabetically first one wins and the rest produce a warning.
+
+        | Filename                              | ASC field            |
+        |---------------------------------------|----------------------|
+        | `review_notes.txt`                    | `notes` (free-form notes for Apple's reviewers) |
+        | `review_contact_first_name.txt`       | `contactFirstName`   |
+        | `review_contact_last_name.txt`        | `contactLastName`    |
+        | `review_contact_phone.txt`            | `contactPhone`       |
+        | `review_contact_email.txt`            | `contactEmail`       |
+        | `review_demo_account_name.txt`        | `demoAccountName`    |
+        | `review_demo_account_password.txt`    | `demoAccountPassword`|
 
         ## Example
 
@@ -90,6 +121,11 @@ struct MetadataInitCommand: AsyncParsableCommand {
                 name.txt
                 description.txt
                 release_notes.txt
+                review_notes.txt
+                review_contact_first_name.txt
+                review_contact_last_name.txt
+                review_contact_email.txt
+                review_contact_phone.txt
               ja/
                 description.txt
                 release_notes.txt
