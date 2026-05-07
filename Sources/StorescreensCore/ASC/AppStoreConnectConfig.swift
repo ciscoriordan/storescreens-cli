@@ -24,6 +24,20 @@ package struct AppStoreConnectConfig: Codable, Sendable {
     /// Territory availability (which countries the app is available in).
     /// Unset leaves current availability untouched.
     package var availability: AvailabilityConfig?
+    /// App Store category assignment (primary, secondary, optional
+    /// subcategories). Unset leaves the existing categories untouched.
+    /// Lives on the editable AppInfo via JSON:API relationships, so
+    /// requires the same editable-state guard as name/subtitle PATCHes.
+    package var categories: CategoriesConfig?
+    /// Age-rating questionnaire answers. Unset leaves the existing
+    /// declaration untouched. ASC computes the final rating (4+, 9+, etc.)
+    /// from these per-question answers automatically.
+    package var ageRating: AgeRatingConfig?
+    /// App Review Information panel: notes, contact info, demo account.
+    /// An alternative to the per-locale `review_*.txt` files; either flow
+    /// is fine. When both are set, this YAML block wins (it's more
+    /// scoped). Unset leaves the existing review-detail untouched.
+    package var reviewInfo: ReviewInfoConfig?
 
     package init(
         appID: String? = nil,
@@ -32,7 +46,10 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         submit: SubmitConfig? = nil,
         uploadBuild: UploadBuildConfig? = nil,
         pricing: PricingConfig? = nil,
-        availability: AvailabilityConfig? = nil
+        availability: AvailabilityConfig? = nil,
+        categories: CategoriesConfig? = nil,
+        ageRating: AgeRatingConfig? = nil,
+        reviewInfo: ReviewInfoConfig? = nil
     ) {
         self.appID = appID
         self.bundleID = bundleID
@@ -41,6 +58,9 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         self.uploadBuild = uploadBuild
         self.pricing = pricing
         self.availability = availability
+        self.categories = categories
+        self.ageRating = ageRating
+        self.reviewInfo = reviewInfo
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -51,6 +71,223 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         case uploadBuild = "upload_build"
         case pricing
         case availability
+        case categories
+        case ageRating = "age_rating"
+        case reviewInfo = "review_info"
+    }
+}
+
+/// App Store category assignment. All fields are optional; only those that
+/// are set get PATCHed onto the editable AppInfo's relationships block.
+/// Category and subcategory IDs are Apple's canonical uppercase strings
+/// (e.g. "EDUCATION", "PHOTO_AND_VIDEO"). The full list is fetched from
+/// `GET /v1/appCategories` and validated during `submit --dry-run`.
+///
+/// `secondary` and the four subcategory slots all accept the literal
+/// string "none" as a request to clear that slot back to unset (this is
+/// distinct from leaving the field omitted, which keeps the existing
+/// value).
+package struct CategoriesConfig: Codable, Sendable {
+    /// Primary category id, e.g. "EDUCATION". Required when the
+    /// categories block is present and the app currently has no primary
+    /// category set; optional otherwise.
+    package var primary: String?
+    /// Secondary category id. Pass "none" to explicitly clear. Optional.
+    package var secondary: String?
+    package var primarySubcategoryOne: String?
+    package var primarySubcategoryTwo: String?
+    package var secondarySubcategoryOne: String?
+    package var secondarySubcategoryTwo: String?
+
+    package init(
+        primary: String? = nil,
+        secondary: String? = nil,
+        primarySubcategoryOne: String? = nil,
+        primarySubcategoryTwo: String? = nil,
+        secondarySubcategoryOne: String? = nil,
+        secondarySubcategoryTwo: String? = nil
+    ) {
+        self.primary = primary
+        self.secondary = secondary
+        self.primarySubcategoryOne = primarySubcategoryOne
+        self.primarySubcategoryTwo = primarySubcategoryTwo
+        self.secondarySubcategoryOne = secondarySubcategoryOne
+        self.secondarySubcategoryTwo = secondarySubcategoryTwo
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case primary
+        case secondary
+        case primarySubcategoryOne = "primary_subcategory_one"
+        case primarySubcategoryTwo = "primary_subcategory_two"
+        case secondarySubcategoryOne = "secondary_subcategory_one"
+        case secondarySubcategoryTwo = "secondary_subcategory_two"
+    }
+}
+
+/// Age-rating questionnaire YAML config. Each `Frequency` field defaults
+/// to `.none` when omitted; specify only what's actually present in the
+/// app's content. ASC computes the final age rating from the answers.
+///
+/// Field names use snake_case in YAML (matching the rest of this config
+/// block); `CodingKeys` translates to camelCase for the API attributes.
+package struct AgeRatingConfig: Codable, Sendable {
+    package typealias Frequency = AgeRatingDeclarationsAPI.Frequency
+    package typealias KidsAgeBand = AgeRatingDeclarationsAPI.KidsAgeBand
+
+    // Frequencies
+    package var cartoonOrFantasyViolence: Frequency?
+    package var realisticViolence: Frequency?
+    package var prolongedGraphicSadisticRealisticViolence: Frequency?
+    package var profanityOrCrudeHumor: Frequency?
+    package var matureOrSuggestiveThemes: Frequency?
+    package var horrorOrFearThemes: Frequency?
+    package var medicalOrTreatmentInformation: Frequency?
+    package var alcoholTobaccoOrDrugUseOrReferences: Frequency?
+    package var simulatedGambling: Frequency?
+    package var sexualContentOrNudity: Frequency?
+    package var graphicSexualContentAndNudity: Frequency?
+    package var contests: Frequency?
+
+    // Booleans
+    package var unrestrictedWebAccess: Bool?
+    package var gambling: Bool?
+
+    // Other
+    package var kidsAgeBand: KidsAgeBand?
+    package var ageRatingOverride: String?
+
+    package init(
+        cartoonOrFantasyViolence: Frequency? = nil,
+        realisticViolence: Frequency? = nil,
+        prolongedGraphicSadisticRealisticViolence: Frequency? = nil,
+        profanityOrCrudeHumor: Frequency? = nil,
+        matureOrSuggestiveThemes: Frequency? = nil,
+        horrorOrFearThemes: Frequency? = nil,
+        medicalOrTreatmentInformation: Frequency? = nil,
+        alcoholTobaccoOrDrugUseOrReferences: Frequency? = nil,
+        simulatedGambling: Frequency? = nil,
+        sexualContentOrNudity: Frequency? = nil,
+        graphicSexualContentAndNudity: Frequency? = nil,
+        contests: Frequency? = nil,
+        unrestrictedWebAccess: Bool? = nil,
+        gambling: Bool? = nil,
+        kidsAgeBand: KidsAgeBand? = nil,
+        ageRatingOverride: String? = nil
+    ) {
+        self.cartoonOrFantasyViolence = cartoonOrFantasyViolence
+        self.realisticViolence = realisticViolence
+        self.prolongedGraphicSadisticRealisticViolence = prolongedGraphicSadisticRealisticViolence
+        self.profanityOrCrudeHumor = profanityOrCrudeHumor
+        self.matureOrSuggestiveThemes = matureOrSuggestiveThemes
+        self.horrorOrFearThemes = horrorOrFearThemes
+        self.medicalOrTreatmentInformation = medicalOrTreatmentInformation
+        self.alcoholTobaccoOrDrugUseOrReferences = alcoholTobaccoOrDrugUseOrReferences
+        self.simulatedGambling = simulatedGambling
+        self.sexualContentOrNudity = sexualContentOrNudity
+        self.graphicSexualContentAndNudity = graphicSexualContentAndNudity
+        self.contests = contests
+        self.unrestrictedWebAccess = unrestrictedWebAccess
+        self.gambling = gambling
+        self.kidsAgeBand = kidsAgeBand
+        self.ageRatingOverride = ageRatingOverride
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case cartoonOrFantasyViolence = "cartoon_or_fantasy_violence"
+        case realisticViolence = "realistic_violence"
+        case prolongedGraphicSadisticRealisticViolence = "prolonged_graphic_sadistic_realistic_violence"
+        case profanityOrCrudeHumor = "profanity_or_crude_humor"
+        case matureOrSuggestiveThemes = "mature_or_suggestive_themes"
+        case horrorOrFearThemes = "horror_or_fear_themes"
+        case medicalOrTreatmentInformation = "medical_or_treatment_information"
+        case alcoholTobaccoOrDrugUseOrReferences = "alcohol_tobacco_or_drug_use_or_references"
+        case simulatedGambling = "simulated_gambling"
+        case sexualContentOrNudity = "sexual_content_or_nudity"
+        case graphicSexualContentAndNudity = "graphic_sexual_content_and_nudity"
+        case contests
+        case unrestrictedWebAccess = "unrestricted_web_access"
+        case gambling
+        case kidsAgeBand = "kids_age_band"
+        case ageRatingOverride = "age_rating_override"
+    }
+}
+
+/// App Review Information panel YAML config. An alternative to the
+/// per-locale `review_*.txt` files; either flow ends up at the same
+/// `appStoreReviewDetails` resource. Useful for one-shot YAML-only
+/// setups where the user doesn't need to maintain a `metadata/<locale>/`
+/// directory.
+package struct ReviewInfoConfig: Codable, Sendable {
+    package var firstName: String?
+    package var lastName: String?
+    package var phoneNumber: String?
+    package var emailAddress: String?
+    /// Whether Apple needs a demo login. When unset and demo account
+    /// fields are present, defaults to true. When demo fields are absent,
+    /// defaults to false.
+    package var demoAccountRequired: Bool?
+    package var demoAccountName: String?
+    package var demoAccountPassword: String?
+    /// Free-form review notes. Multi-line YAML strings work fine here
+    /// (`notes: |`).
+    package var notes: String?
+
+    package init(
+        firstName: String? = nil,
+        lastName: String? = nil,
+        phoneNumber: String? = nil,
+        emailAddress: String? = nil,
+        demoAccountRequired: Bool? = nil,
+        demoAccountName: String? = nil,
+        demoAccountPassword: String? = nil,
+        notes: String? = nil
+    ) {
+        self.firstName = firstName
+        self.lastName = lastName
+        self.phoneNumber = phoneNumber
+        self.emailAddress = emailAddress
+        self.demoAccountRequired = demoAccountRequired
+        self.demoAccountName = demoAccountName
+        self.demoAccountPassword = demoAccountPassword
+        self.notes = notes
+    }
+
+    /// Converts this YAML-side config into the wire-side `ReviewDetailFields`
+    /// shape consumed by `AppsAPI`. Splits/normalizes nothing - one-to-one
+    /// pass-through with field renames.
+    package var asReviewDetailFields: ReviewDetailFields {
+        var fields = ReviewDetailFields(
+            contactFirstName: firstName,
+            contactLastName: lastName,
+            contactPhone: phoneNumber,
+            contactEmail: emailAddress,
+            demoAccountName: demoAccountName,
+            demoAccountPassword: demoAccountPassword,
+            demoAccountRequired: demoAccountRequired,
+            notes: notes
+        )
+        // If the user supplied demo account fields without explicitly
+        // saying demo_account_required, default it to true. If neither the
+        // demo fields nor the flag are set, leave it nil so it stays
+        // untouched on ASC.
+        if fields.demoAccountRequired == nil {
+            if fields.demoAccountName != nil || fields.demoAccountPassword != nil {
+                fields.demoAccountRequired = true
+            }
+        }
+        return fields
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case firstName = "first_name"
+        case lastName = "last_name"
+        case phoneNumber = "phone_number"
+        case emailAddress = "email_address"
+        case demoAccountRequired = "demo_account_required"
+        case demoAccountName = "demo_account_name"
+        case demoAccountPassword = "demo_account_password"
+        case notes
     }
 }
 

@@ -1252,6 +1252,88 @@ Both blocks are optional and idempotent. `pricing` only supports `free: true` to
 
 `release_notes.txt` (`whatsNew`) is also handled intelligently: ASC rejects release notes on the first version of a brand-new app, so `submit` detects that case (no prior released version on the app) and drops `whatsNew` from the metadata PATCH with a `skipping whatsNew` progress line. Leave your `release_notes.txt` in place - it'll be picked up automatically on subsequent submissions.
 
+### Categories, age rating, and review info
+
+Three more YAML blocks finish out what `submit` writes to App Store Connect, all optional:
+
+```yaml
+app_store_connect:
+  bundle_id: com.example.app
+
+  categories:
+    primary: EDUCATION
+    secondary: REFERENCE
+    # primary_subcategory_one: GAMES_ACTION   # only relevant for GAMES
+
+  age_rating:
+    cartoon_or_fantasy_violence: NONE
+    realistic_violence: NONE
+    profanity_or_crude_humor: NONE
+    gambling: false
+    unrestricted_web_access: false
+    kids_age_band: NONE
+
+  review_info:
+    first_name: Jane
+    last_name: Doe
+    phone_number: "+1 555 123 4567"
+    email_address: jane@example.com
+    notes: |
+      Multi-line notes for Apple's reviewers.
+```
+
+`categories` and `age_rating` live on the editable AppInfo - the same record that hosts `name`/`subtitle`/`privacy_url` - so they require an editable AppInfo state (typically `PREPARE_FOR_SUBMISSION`). When the only AppInfo is `READY_FOR_SALE`, `submit` skips both with `skipped: no editable appInfo` (same skip-reason path as name/subtitle). Bump `submit.create_version` to create a new editable version and re-run.
+
+`review_info` lives on the version's `appStoreReviewDetails` resource and is always editable. It's a YAML alternative to the per-locale `review_*.txt` files. When both YAML and files are present, YAML wins on a per-field basis. Demo-account credentials auto-flip `demo_account_required: true` unless you explicitly say otherwise.
+
+`storescreens submit --dry-run` validates each block in place: categories are checked against `GET /v1/appCategories` (a typo like `EDUKATION` fails before the live PATCH), age-rating frequency strings round-trip through a strict Codable enum, and `review_info` checks that any partial demo-account credentials are paired up.
+
+All three diff against ASC before writing, so re-running an unchanged config is a quiet no-op:
+
+```
+categories: unchanged
+age rating: unchanged
+review detail: unchanged
+```
+
+API quirks worth knowing:
+
+- **Categories use `PATCH /v1/appInfos/{id}` with relationships**, not the per-relationship endpoints. Apple's `PATCH /v1/appInfos/{id}/relationships/primaryCategory` returns `403 FORBIDDEN_ERROR` "does not allow UPDATE" - the parent PATCH is the only programmatic path that works. The body shape we use:
+  ```json
+  { "data": { "type": "appInfos", "id": "...",
+              "relationships": {
+                "primaryCategory":   { "data": { "type": "appCategories", "id": "EDUCATION" } },
+                "secondaryCategory": { "data": { "type": "appCategories", "id": "REFERENCE" } }
+              } } }
+  ```
+  All six category slots (primary, secondary, plus two subcategories under each) can be set in one PATCH.
+- **The literal string `"none"` in `secondary:` (or any subcategory slot) means "explicitly clear"** and emits `data: null` on the wire. Useful for downgrading a 2-category app to a single primary.
+- **Age-rating PATCHes reject empty bodies.** ASC errors out if every attribute matches what's already there. The orchestrator pre-diffs and skips the PATCH entirely when nothing differs.
+- **Editable-record requirement.** `appInfos` only accepts PATCHes while in `PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `METADATA_REJECTED`, `INVALID_BINARY`, `WAITING_FOR_REVIEW`, or `IN_REVIEW`. The orchestrator surfaces a missing-editable-AppInfo case as `report.appInfoSkipped = .noEditableAppInfo` and a clear progress line.
+
+### What `submit` writes to ASC
+
+Quick map of what each YAML block sends to which App Store Connect resource:
+
+| YAML block | ASC resource | Endpoint | Notes |
+|------------|--------------|----------|-------|
+| `submit.create_version` | `appStoreVersions` | POST + PATCH | Find-or-create the version, attach the latest VALID build. |
+| `metadata/<locale>/{description,keywords,promotional_text,release_notes,support_url,marketing_url}.txt` | `appStoreVersionLocalizations` | PATCH | Per-locale, per-version. |
+| `metadata/<locale>/{name,subtitle,privacy_url,privacy_choices_url}.txt` | `appInfoLocalizations` | PATCH | Per-locale, app-level (lives on editable AppInfo). |
+| `metadata/<locale>/review_*.txt` _or_ `review_info:` | `appStoreReviewDetails` | POST or PATCH | Per-version, not per-locale. |
+| `pricing.free: true` | `appPriceSchedules` | POST | Idempotent: skips if a schedule already exists. |
+| `availability.territories` | `appAvailabilities` (v2) | POST | Diffs against current; skips if unchanged. |
+| `categories.{primary,secondary,...}` | `appInfos` (relationships) | PATCH | All six slots in one body. |
+| `age_rating.*` | `ageRatingDeclarations` | PATCH | Diffed before write; skips empty diffs. |
+| Rendered PNGs in `render.output_dir` | `appScreenshotSets` + `appScreenshots` | DELETE-then-POST | Idempotent via MD5 checksum; reorders are wipe + reupload. |
+| `submit.attach_build` | `appStoreVersions.build` (relationship) | PATCH | Latest VALID build for the marketing version. |
+| `submit.export_compliance` | `builds.usesNonExemptEncryption` | PATCH | On the attached build. |
+| `submit.submit_for_review: true` | `reviewSubmissions` 3-step | POST + PATCH | Cleans up stale prior submissions first. |
+
+Every step is idempotent: re-running the same `submit` against an unchanged config is mostly a series of GETs and a clean report.
+
+For the full schema (every field, default, gotcha) see `references/submit-reference.md` in the storescreens skill.
+
 ### Troubleshooting
 
 - "credentials not configured": run `storescreens auth login` or check the `ASC_*` env vars.

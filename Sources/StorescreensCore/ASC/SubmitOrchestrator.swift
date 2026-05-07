@@ -83,6 +83,15 @@ package struct SubmitOrchestrator {
         /// Set when availability was applied this run. Nil when no
         /// availability config was supplied.
         package var availabilityStatus: String?
+        /// Set when category assignments were applied this run
+        /// ("updated: primary, secondary", "unchanged", or
+        /// "skipped: no editable appInfo"). Nil when no `categories:`
+        /// block was supplied.
+        package var categoriesStatus: String?
+        /// Set when age-rating answers were applied this run
+        /// ("updated: <fields>", "unchanged", or "skipped: ..."). Nil
+        /// when no `age_rating:` block was supplied.
+        package var ageRatingStatus: String?
         /// Set when the orchestrator detected appInfo-level fields
         /// (name/subtitle/privacy URLs) but couldn't find an editable
         /// AppInfo to PATCH them onto. Common cause: the live version is
@@ -188,6 +197,8 @@ package struct SubmitOrchestrator {
             reviewDetailUpdated: false,
             pricingStatus: nil,
             availabilityStatus: nil,
+            categoriesStatus: nil,
+            ageRatingStatus: nil,
             appInfoSkipped: nil,
             errors: []
         )
@@ -203,12 +214,39 @@ package struct SubmitOrchestrator {
             )
         }
 
+        // 2c. AppInfo-level metadata (categories + age rating). These
+        // both live on the editable AppInfo / its auto-created
+        // ageRatingDeclaration child. Resolve the editable AppInfo
+        // once and reuse it for both calls. Each subsection is gated
+        // on its own config block (nil = skip).
+        if config.categories != nil || config.ageRating != nil {
+            await applyAppInfoMetadata(
+                appsAPI: appsAPI,
+                appID: app.id,
+                report: &report,
+                progress: progress
+            )
+        }
+
         // 3. Metadata.
         if shouldUploadMetadata, let metadataRoot {
             try await uploadMetadata(
                 appsAPI: appsAPI,
                 versionID: version.id,
                 metadataRoot: metadataRoot,
+                report: &report,
+                progress: progress
+            )
+        } else if let yamlReview = config.reviewInfo?.asReviewDetailFields,
+                  yamlReview.hasAnyField {
+            // No metadata dir, but the user supplied `review_info:` in
+            // YAML — still apply it. `appStoreReviewDetails` is
+            // version-scoped, not locale-scoped, so the metadata dir is
+            // irrelevant here.
+            await applyReviewDetail(
+                appsAPI: appsAPI,
+                versionID: version.id,
+                desired: yamlReview,
                 report: &report,
                 progress: progress
             )
@@ -520,11 +558,11 @@ package struct SubmitOrchestrator {
     ) async throws {
         var readWarnings: [String] = []
         var byLocale: [String: LocalizationFields]
-        let reviewDetail: ReviewDetailFields?
+        let fileReviewDetail: ReviewDetailFields?
         do {
             let read = try MetadataReader.readAll(dir: metadataRoot) { readWarnings.append($0) }
             byLocale = read.localizations
-            reviewDetail = read.reviewDetail
+            fileReviewDetail = read.reviewDetail
         } catch {
             report.errors.append("metadata read: \(error)")
             return
@@ -534,7 +572,12 @@ package struct SubmitOrchestrator {
         // Review detail (notes + contact info) lives at the version level
         // (not per locale) on Apple's side, so we PATCH it once. Fire it
         // before the per-locale loop so contact info is on the version
-        // before any reviewer might see it.
+        // before any reviewer might see it. Merge precedence: YAML
+        // `review_info:` wins over per-locale `review_*.txt` files.
+        let reviewDetail = mergeReviewDetail(
+            yaml: config.reviewInfo?.asReviewDetailFields,
+            file: fileReviewDetail
+        )
         if let reviewDetail, reviewDetail.hasAnyField {
             await applyReviewDetail(
                 appsAPI: appsAPI,
@@ -752,6 +795,33 @@ package struct SubmitOrchestrator {
         }
     }
 
+    /// Merges a YAML-side `review_info:` block with the file-side
+    /// `review_*.txt` reads. YAML wins on field-by-field precedence: any
+    /// non-nil YAML field overrides the file-side value. This way callers
+    /// who set notes in YAML but contact info in files (or vice versa)
+    /// get the union of both.
+    private func mergeReviewDetail(
+        yaml: ReviewDetailFields?,
+        file: ReviewDetailFields?
+    ) -> ReviewDetailFields? {
+        switch (yaml, file) {
+        case (nil, nil): return nil
+        case (let y?, nil): return y
+        case (nil, let f?): return f
+        case (let y?, let f?):
+            return ReviewDetailFields(
+                contactFirstName:    y.contactFirstName    ?? f.contactFirstName,
+                contactLastName:     y.contactLastName     ?? f.contactLastName,
+                contactPhone:        y.contactPhone        ?? f.contactPhone,
+                contactEmail:        y.contactEmail        ?? f.contactEmail,
+                demoAccountName:     y.demoAccountName     ?? f.demoAccountName,
+                demoAccountPassword: y.demoAccountPassword ?? f.demoAccountPassword,
+                demoAccountRequired: y.demoAccountRequired ?? f.demoAccountRequired,
+                notes:               y.notes               ?? f.notes
+            )
+        }
+    }
+
     /// Returns a ReviewDetailFields containing only fields that actually
     /// differ from ASC's current. Mirrors `changedVersionLocalizationFields`
     /// for the review-detail resource.
@@ -945,6 +1015,278 @@ package struct SubmitOrchestrator {
         )
         report.availabilityStatus = "updated (\(desiredTerritoryIDs.count) territories, new territories: \(desiredNewTerritories))"
         progress?("availability: set \(desiredTerritoryIDs.count) territories, availableInNewTerritories=\(desiredNewTerritories)")
+    }
+
+    // MARK: - AppInfo metadata (categories, age rating)
+
+    /// Coordinates the AppInfo-level metadata steps that share an editable
+    /// AppInfo lookup: categories and age rating. Each step gates on its
+    /// own config block, but they all need the same `findEditableAppInfo`
+    /// result, so we resolve it once and pass it through.
+    ///
+    /// Errors here are non-fatal — they land on `report.errors` and the
+    /// submit flow continues. A missing-editable-appInfo case is logged
+    /// once with a clear "skip reason" and surfaces in
+    /// `report.categoriesStatus` / `report.ageRatingStatus`.
+    private func applyAppInfoMetadata(
+        appsAPI: AppsAPI,
+        appID: String,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        let editable: AppsAPI.AppInfo?
+        do {
+            editable = try await appsAPI.findEditableAppInfo(appID: appID)
+        } catch {
+            report.errors.append("appInfo lookup (categories/age rating): \(error)")
+            if config.categories != nil {
+                report.categoriesStatus = "skipped: appInfo lookup failed"
+            }
+            if config.ageRating != nil {
+                report.ageRatingStatus = "skipped: appInfo lookup failed"
+            }
+            return
+        }
+        guard let editable else {
+            // Same skip-reason path as the metadata flow uses for
+            // name/subtitle when no editable AppInfo exists.
+            if config.categories != nil {
+                report.categoriesStatus = "skipped: no editable appInfo"
+                progress?("categories: skipped — no editable appInfo")
+            }
+            if config.ageRating != nil {
+                report.ageRatingStatus = "skipped: no editable appInfo"
+                progress?("age rating: skipped — no editable appInfo")
+            }
+            return
+        }
+
+        if let categoriesConfig = config.categories {
+            await applyCategories(
+                appInfo: editable,
+                config: categoriesConfig,
+                report: &report,
+                progress: progress
+            )
+        }
+
+        if let ageRatingConfig = config.ageRating {
+            await applyAgeRating(
+                appInfo: editable,
+                config: ageRatingConfig,
+                report: &report,
+                progress: progress
+            )
+        }
+    }
+
+    /// Applies the `categories:` block to the editable AppInfo. Diffs
+    /// against the current relationship values and only PATCHes when
+    /// something differs. Each YAML field maps to one of the six category
+    /// slots; the literal string "none" is treated as an explicit clear.
+    private func applyCategories(
+        appInfo: AppsAPI.AppInfo,
+        config categoriesConfig: CategoriesConfig,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        let api = AppCategoriesAPI(client: client)
+        do {
+            let current = try await api.currentCategories(appInfoID: appInfo.id)
+            // Build the per-slot intent. Nil-keep is the most conservative
+            // default; only emit an actual update when the desired and
+            // current ids differ.
+            func intent(
+                desired: String?,
+                current: String?
+            ) -> AppCategoriesAPI.CategoryUpdate? {
+                guard let desired else { return nil }
+                let trimmed = desired.trimmingCharacters(in: .whitespaces)
+                let isClear = trimmed.lowercased() == "none" || trimmed.isEmpty
+                if isClear {
+                    return current == nil ? nil : .clear
+                }
+                return current == trimmed ? nil : .set(trimmed)
+            }
+
+            let primary = intent(desired: categoriesConfig.primary, current: current.primary)
+            let secondary = intent(desired: categoriesConfig.secondary, current: current.secondary)
+            let p1 = intent(desired: categoriesConfig.primarySubcategoryOne, current: current.primarySubcategoryOne)
+            let p2 = intent(desired: categoriesConfig.primarySubcategoryTwo, current: current.primarySubcategoryTwo)
+            let s1 = intent(desired: categoriesConfig.secondarySubcategoryOne, current: current.secondarySubcategoryOne)
+            let s2 = intent(desired: categoriesConfig.secondarySubcategoryTwo, current: current.secondarySubcategoryTwo)
+
+            let updates: [(String, AppCategoriesAPI.CategoryUpdate?)] = [
+                ("primary", primary),
+                ("secondary", secondary),
+                ("primarySubcategoryOne", p1),
+                ("primarySubcategoryTwo", p2),
+                ("secondarySubcategoryOne", s1),
+                ("secondarySubcategoryTwo", s2),
+            ]
+            let dirtyNames = updates.compactMap { (name, u) -> String? in
+                u != nil ? name : nil
+            }
+            guard !dirtyNames.isEmpty else {
+                report.categoriesStatus = "unchanged"
+                progress?("categories: unchanged")
+                return
+            }
+            do {
+                _ = try await api.updateCategories(
+                    appInfoID: appInfo.id,
+                    primary: primary,
+                    secondary: secondary,
+                    primarySubcategoryOne: p1,
+                    primarySubcategoryTwo: p2,
+                    secondarySubcategoryOne: s1,
+                    secondarySubcategoryTwo: s2
+                )
+                report.categoriesStatus = "updated: \(dirtyNames.joined(separator: ", "))"
+                progress?("categories: updated \(dirtyNames.joined(separator: ", "))")
+            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                report.categoriesStatus = "unchanged"
+                progress?("categories: unchanged (ASC reported already-set)")
+            }
+        } catch {
+            report.errors.append("categories: \(error)")
+            report.categoriesStatus = "error"
+        }
+    }
+
+    /// Applies the `age_rating:` block to the editable AppInfo's auto-
+    /// created ageRatingDeclaration. Diffs every supplied field against
+    /// the current declaration; only PATCHes when something differs.
+    /// Empty diffs are skipped entirely (ASC rejects PATCHes with no
+    /// changed attributes).
+    private func applyAgeRating(
+        appInfo: AppsAPI.AppInfo,
+        config ageRatingConfig: AgeRatingConfig,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        let api = AgeRatingDeclarationsAPI(client: client)
+        do {
+            guard let declaration = try await api.getForAppInfo(appInfoID: appInfo.id) else {
+                report.errors.append("age rating: declaration not found for appInfo \(appInfo.id) (ASC has not auto-created one yet?)")
+                report.ageRatingStatus = "skipped: no declaration"
+                return
+            }
+            let current = declaration.attributes
+            let (diff, dirtyNames) = ageRatingDiff(desired: ageRatingConfig, current: current)
+            guard !dirtyNames.isEmpty else {
+                report.ageRatingStatus = "unchanged"
+                progress?("age rating: unchanged")
+                return
+            }
+            do {
+                _ = try await api.update(id: declaration.id, fields: diff)
+                report.ageRatingStatus = "updated: \(dirtyNames.joined(separator: ", "))"
+                progress?("age rating: updated \(dirtyNames.joined(separator: ", "))")
+            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                report.ageRatingStatus = "unchanged"
+                progress?("age rating: unchanged (ASC reported already-set)")
+            }
+        } catch {
+            report.errors.append("age rating: \(error)")
+            report.ageRatingStatus = "error"
+        }
+    }
+
+    /// Returns (attributes-to-PATCH, list-of-dirty-field-names) for the
+    /// age-rating diff. The PATCH attributes carry only fields whose
+    /// desired value differs from current; everything else is left nil
+    /// so the wire body omits them.
+    private func ageRatingDiff(
+        desired: AgeRatingConfig,
+        current: AgeRatingDeclarationsAPI.Declaration.Attributes?
+    ) -> (AgeRatingDeclarationsAPI.Declaration.Attributes, [String]) {
+        var diff = AgeRatingDeclarationsAPI.Declaration.Attributes()
+        var dirty: [String] = []
+
+        func freq(
+            _ desired: AgeRatingConfig.Frequency?,
+            _ current: AgeRatingConfig.Frequency?,
+            _ name: String,
+            _ assign: (AgeRatingConfig.Frequency) -> Void
+        ) {
+            guard let desired else { return }
+            let cur = current ?? .none
+            if desired != cur {
+                assign(desired)
+                dirty.append(name)
+            }
+        }
+        func bool(
+            _ desired: Bool?,
+            _ current: Bool?,
+            _ name: String,
+            _ assign: (Bool) -> Void
+        ) {
+            guard let desired else { return }
+            let cur = current ?? false
+            if desired != cur {
+                assign(desired)
+                dirty.append(name)
+            }
+        }
+
+        freq(desired.cartoonOrFantasyViolence, current?.violenceCartoonOrFantasy, "cartoonOrFantasyViolence") {
+            diff.violenceCartoonOrFantasy = $0
+        }
+        freq(desired.realisticViolence, current?.violenceRealistic, "realisticViolence") {
+            diff.violenceRealistic = $0
+        }
+        freq(desired.prolongedGraphicSadisticRealisticViolence, current?.violenceRealisticProlongedGraphicOrSadistic, "prolongedGraphicSadisticRealisticViolence") {
+            diff.violenceRealisticProlongedGraphicOrSadistic = $0
+        }
+        freq(desired.profanityOrCrudeHumor, current?.profanityOrCrudeHumor, "profanityOrCrudeHumor") {
+            diff.profanityOrCrudeHumor = $0
+        }
+        freq(desired.matureOrSuggestiveThemes, current?.matureOrSuggestiveThemes, "matureOrSuggestiveThemes") {
+            diff.matureOrSuggestiveThemes = $0
+        }
+        freq(desired.horrorOrFearThemes, current?.horrorOrFearThemes, "horrorOrFearThemes") {
+            diff.horrorOrFearThemes = $0
+        }
+        freq(desired.medicalOrTreatmentInformation, current?.medicalOrTreatmentInformation, "medicalOrTreatmentInformation") {
+            diff.medicalOrTreatmentInformation = $0
+        }
+        freq(desired.alcoholTobaccoOrDrugUseOrReferences, current?.alcoholTobaccoOrDrugUseOrReferences, "alcoholTobaccoOrDrugUseOrReferences") {
+            diff.alcoholTobaccoOrDrugUseOrReferences = $0
+        }
+        freq(desired.simulatedGambling, current?.gamblingSimulated, "simulatedGambling") {
+            diff.gamblingSimulated = $0
+        }
+        freq(desired.sexualContentOrNudity, current?.sexualContentOrNudity, "sexualContentOrNudity") {
+            diff.sexualContentOrNudity = $0
+        }
+        freq(desired.graphicSexualContentAndNudity, current?.sexualContentGraphicAndNudity, "graphicSexualContentAndNudity") {
+            diff.sexualContentGraphicAndNudity = $0
+        }
+        freq(desired.contests, current?.contests, "contests") {
+            diff.contests = $0
+        }
+        bool(desired.unrestrictedWebAccess, current?.unrestrictedWebAccess, "unrestrictedWebAccess") {
+            diff.unrestrictedWebAccess = $0
+        }
+        bool(desired.gambling, current?.gambling, "gambling") {
+            diff.gambling = $0
+        }
+        if let band = desired.kidsAgeBand {
+            let cur = current?.kidsAgeBand ?? .none
+            if band != cur {
+                diff.kidsAgeBand = band
+                dirty.append("kidsAgeBand")
+            }
+        }
+        if let override = desired.ageRatingOverride {
+            if override != (current?.ageRatingOverride ?? "") {
+                diff.ageRatingOverride = override
+                dirty.append("ageRatingOverride")
+            }
+        }
+        return (diff, dirty)
     }
 
     // MARK: - Screenshots

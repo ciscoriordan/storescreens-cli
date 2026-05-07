@@ -177,6 +177,18 @@ struct SubmitCommand: AsyncParsableCommand {
         if report.reviewDetailUpdated {
             print("  review detail (notes / contact info): updated")
         }
+        if let categoriesStatus = report.categoriesStatus {
+            print("  categories: \(categoriesStatus)")
+        }
+        if let ageRatingStatus = report.ageRatingStatus {
+            print("  age rating: \(ageRatingStatus)")
+        }
+        if let pricingStatus = report.pricingStatus {
+            print("  pricing: \(pricingStatus)")
+        }
+        if let availabilityStatus = report.availabilityStatus {
+            print("  availability: \(availabilityStatus)")
+        }
         if !report.canceledReviewSubmissionIDs.isEmpty {
             print("  canceled prior submissions: \(report.canceledReviewSubmissionIDs.joined(separator: ", "))")
         }
@@ -264,6 +276,56 @@ struct SubmitCommand: AsyncParsableCommand {
             }
         }
 
+        // 4b. Categories: validate that every supplied id matches one of the
+        // primary categories returned by `GET /v1/appCategories`. Helps
+        // catch typos before the live PATCH 422s.
+        if let categoriesConfig = ascConfig.categories {
+            do {
+                let api = AppCategoriesAPI(client: client)
+                let known = try await api.listCategories()
+                let validIDs = Set(known.map(\.id))
+                let preCount = problems.count
+                func validate(_ field: String, _ value: String?) {
+                    guard let value, !value.isEmpty else { return }
+                    let lower = value.lowercased()
+                    if lower == "none" { return }  // explicit clear
+                    if !validIDs.contains(value) {
+                        problems.append("categories.\(field) = \"\(value)\" is not a known ASC category id (try one of: \(validIDs.sorted().prefix(5).joined(separator: ", ")), …)")
+                    }
+                }
+                validate("primary",                    categoriesConfig.primary)
+                validate("secondary",                  categoriesConfig.secondary)
+                validate("primary_subcategory_one",    categoriesConfig.primarySubcategoryOne)
+                validate("primary_subcategory_two",    categoriesConfig.primarySubcategoryTwo)
+                validate("secondary_subcategory_one",  categoriesConfig.secondarySubcategoryOne)
+                validate("secondary_subcategory_two",  categoriesConfig.secondarySubcategoryTwo)
+                if problems.count == preCount,
+                   categoriesConfig.primary != nil || categoriesConfig.secondary != nil {
+                    print("  ✓ categories: validated against \(validIDs.count) ASC primary categories")
+                }
+            } catch {
+                problems.append("categories validate: \(error)")
+            }
+        }
+        if let reviewInfo = ascConfig.reviewInfo {
+            // Light static checks. Apple validates the actual content
+            // server-side; we just flag obviously missing data.
+            let fields = reviewInfo.asReviewDetailFields
+            let demoSet = (fields.demoAccountName?.isEmpty == false) || (fields.demoAccountPassword?.isEmpty == false)
+            if demoSet, fields.demoAccountName?.isEmpty != false || fields.demoAccountPassword?.isEmpty != false {
+                problems.append("review_info: demo account requires both demo_account_name and demo_account_password")
+            } else {
+                print("  ✓ review_info: well-formed")
+            }
+        }
+        if ascConfig.ageRating != nil {
+            // No live validation - the schema is enum-typed and Codable
+            // already rejected unknown frequency strings at YAML parse
+            // time. Surface a positive line so the operator sees the
+            // section was picked up.
+            print("  ✓ age_rating: parsed (\(countSetAgeRatingFields(ascConfig.ageRating!)) field(s) set)")
+        }
+
         // 5. Every rendered PNG maps to a known ASC displayType + file size OK.
         if !skipScreenshots {
             var slotCount = 0
@@ -308,6 +370,30 @@ struct SubmitCommand: AsyncParsableCommand {
             throw ExitCode(1)
         }
     }
+}
+
+/// Counts how many YAML age-rating fields the user actually supplied. Used
+/// purely for the dry-run "section picked up" line so the operator can see
+/// whether their YAML edits were parsed.
+private func countSetAgeRatingFields(_ a: AgeRatingConfig) -> Int {
+    var n = 0
+    if a.cartoonOrFantasyViolence != nil { n += 1 }
+    if a.realisticViolence != nil { n += 1 }
+    if a.prolongedGraphicSadisticRealisticViolence != nil { n += 1 }
+    if a.profanityOrCrudeHumor != nil { n += 1 }
+    if a.matureOrSuggestiveThemes != nil { n += 1 }
+    if a.horrorOrFearThemes != nil { n += 1 }
+    if a.medicalOrTreatmentInformation != nil { n += 1 }
+    if a.alcoholTobaccoOrDrugUseOrReferences != nil { n += 1 }
+    if a.simulatedGambling != nil { n += 1 }
+    if a.sexualContentOrNudity != nil { n += 1 }
+    if a.graphicSexualContentAndNudity != nil { n += 1 }
+    if a.contests != nil { n += 1 }
+    if a.unrestrictedWebAccess != nil { n += 1 }
+    if a.gambling != nil { n += 1 }
+    if a.kidsAgeBand != nil { n += 1 }
+    if a.ageRatingOverride != nil { n += 1 }
+    return n
 }
 
 /// Tiny helper to avoid re-importing ImageIO inline across this file.

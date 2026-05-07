@@ -2058,4 +2058,326 @@ final class SubmitOrchestratorTests: XCTestCase {
             "expected a 'Skipped … no editable appInfo' progress line, got: \(progressLines)"
         )
     }
+
+    // MARK: - Categories
+
+    /// Setting `categories.primary` and `categories.secondary` on an app with
+    /// no current category assignments PATCHes /v1/appInfos/{id} once with
+    /// both relationship slots in a single body.
+    func testSubmit_categories_setBoth_patchesOnce() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        // Current categories: nothing set.
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1") { _ in
+            (200, Data(#"{"data":{"id":"AI-1","type":"appInfos","relationships":{"primaryCategory":{"data":null},"secondaryCategory":{"data":null}}}}"#.utf8))
+        }
+        let patchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfos/AI-1") { _ in
+            patchBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (200, Data(#"{"data":{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            categories: CategoriesConfig(primary: "EDUCATION", secondary: "REFERENCE")
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(patchBodies.count, 1, "expected exactly one PATCH on /v1/appInfos/{id}")
+        let bodyStr = String(data: patchBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"primaryCategory\""), "primaryCategory must be in body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"EDUCATION\""), "EDUCATION id must be in body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"secondaryCategory\""), "secondaryCategory must be in body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"REFERENCE\""), "REFERENCE id must be in body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"appCategories\""), "category type must be appCategories: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"relationships\""), "PATCH must use relationships block, not attributes: \(bodyStr)")
+        XCTAssertNotNil(report.categoriesStatus)
+        XCTAssertTrue(report.categoriesStatus?.contains("primary") == true)
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When current categories already match desired, skip the PATCH and
+    /// report `unchanged` so idempotent re-runs are silent.
+    func testSubmit_categories_unchanged_skipsPatch() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        // Current categories already match desired.
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1") { _ in
+            (200, Data(#"{"data":{"id":"AI-1","type":"appInfos","relationships":{"primaryCategory":{"data":{"id":"EDUCATION","type":"appCategories"}},"secondaryCategory":{"data":{"id":"REFERENCE","type":"appCategories"}}}}}"#.utf8))
+        }
+        var patchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfos/AI-1") { _ in
+            patchHits += 1
+            return (200, Data(#"{"data":{"id":"AI-1","type":"appInfos"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            categories: CategoriesConfig(primary: "EDUCATION", secondary: "REFERENCE")
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(patchHits, 0, "matching categories must not re-PATCH")
+        XCTAssertEqual(report.categoriesStatus, "unchanged")
+    }
+
+    /// `secondary: none` clears the slot via JSON:API `data: null`. Useful
+    /// for downgrading a 2-category app to a single primary.
+    func testSubmit_categories_clearSecondary_emitsNullData() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        // Currently has both primary + secondary; we'll keep primary, clear
+        // secondary.
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1") { _ in
+            (200, Data(#"{"data":{"id":"AI-1","type":"appInfos","relationships":{"primaryCategory":{"data":{"id":"EDUCATION","type":"appCategories"}},"secondaryCategory":{"data":{"id":"REFERENCE","type":"appCategories"}}}}}"#.utf8))
+        }
+        let patchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/appInfos/AI-1") { _ in
+            patchBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (200, Data(#"{"data":{"id":"AI-1","type":"appInfos"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            categories: CategoriesConfig(primary: "EDUCATION", secondary: "none")
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        _ = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(patchBodies.count, 1)
+        let bodyStr = String(data: patchBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertFalse(bodyStr.contains("\"primaryCategory\""), "primaryCategory unchanged → must be omitted: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"secondaryCategory\""), "secondaryCategory must be in body: \(bodyStr)")
+        // The clear emits `data: null` (no quotes around null), not the
+        // string "null".
+        XCTAssertTrue(bodyStr.contains("\"secondaryCategory\":{\"data\":null}"),
+                      "clear must emit data:null: \(bodyStr)")
+    }
+
+    // MARK: - Age rating
+
+    /// Setting one frequency and a boolean: PATCH /v1/ageRatingDeclarations/{id}
+    /// with only the changed attributes.
+    func testSubmit_ageRating_partialUpdate() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/ageRatingDeclaration") { _ in
+            (200, Data(#"{"data":{"id":"AR-1","type":"ageRatingDeclarations","attributes":{"violenceCartoonOrFantasy":"NONE","gambling":false}}}"#.utf8))
+        }
+        let patchBodies = NSMutableArray()
+        ASCStub.add(method: "PATCH", suffix: "/v1/ageRatingDeclarations/AR-1") { _ in
+            patchBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (200, Data(#"{"data":{"id":"AR-1","type":"ageRatingDeclarations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            ageRating: AgeRatingConfig(
+                cartoonOrFantasyViolence: .infrequentOrMild,
+                profanityOrCrudeHumor: .none, // no diff against current default
+                gambling: false                // no diff
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(patchBodies.count, 1, "expected one PATCH for the changed field")
+        let bodyStr = String(data: patchBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"violenceCartoonOrFantasy\""), "changed field must be sent: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"INFREQUENT_OR_MILD\""), "frequency must be the API enum value: \(bodyStr)")
+        // Fields whose desired matches current must not appear in the PATCH.
+        XCTAssertFalse(bodyStr.contains("\"profanityOrCrudeHumor\""), "unchanged field must be omitted: \(bodyStr)")
+        XCTAssertFalse(bodyStr.contains("\"gambling\""), "unchanged boolean must be omitted: \(bodyStr)")
+        XCTAssertNotNil(report.ageRatingStatus)
+        XCTAssertTrue(report.ageRatingStatus?.contains("cartoonOrFantasyViolence") == true,
+                      "status should mention the changed field, got: \(report.ageRatingStatus ?? "nil")")
+    }
+
+    /// All age-rating fields match the current declaration: skip the PATCH
+    /// entirely and report `unchanged`.
+    func testSubmit_ageRating_unchanged_skipsPatch() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appInfos") { _ in
+            (200, Data(#"{"data":[{"id":"AI-1","type":"appInfos","attributes":{"state":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appInfos/AI-1/ageRatingDeclaration") { _ in
+            (200, Data(#"{"data":{"id":"AR-1","type":"ageRatingDeclarations","attributes":{"violenceCartoonOrFantasy":"NONE","gambling":false}}}"#.utf8))
+        }
+        var patchHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/ageRatingDeclarations/AR-1") { _ in
+            patchHits += 1
+            return (200, Data(#"{"data":{"id":"AR-1","type":"ageRatingDeclarations"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            ageRating: AgeRatingConfig(
+                cartoonOrFantasyViolence: .none,
+                gambling: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(patchHits, 0, "no diff → no PATCH")
+        XCTAssertEqual(report.ageRatingStatus, "unchanged")
+    }
+
+    // MARK: - Review info via YAML
+
+    /// `review_info:` YAML block applied with no metadata directory: still
+    /// hits `appStoreReviewDetails` (or creates one), driven entirely by
+    /// the YAML.
+    func testSubmit_reviewInfo_yaml_appliedWithoutMetadataDir() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        // No existing review-detail; we expect a POST to create one.
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (404, Data(#"{"errors":[{"code":"NOT_FOUND","title":"not found","detail":"no review detail"}]}"#.utf8))
+        }
+        let postBodies = NSMutableArray()
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreReviewDetails") { _ in
+            postBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (201, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0", attachBuild: false),
+            reviewInfo: ReviewInfoConfig(
+                firstName: "Jane",
+                lastName: "Doe",
+                phoneNumber: "+1 555 123 4567",
+                emailAddress: "jane@example.com",
+                notes: "Hi reviewer."
+            )
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postBodies.count, 1, "expected one POST creating the review-detail record")
+        let bodyStr = String(data: postBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"contactFirstName\":\"Jane\""))
+        XCTAssertTrue(bodyStr.contains("\"contactLastName\":\"Doe\""))
+        XCTAssertTrue(bodyStr.contains("\"contactEmail\":\"jane@example.com\""))
+        XCTAssertTrue(bodyStr.contains("\"notes\":\"Hi reviewer.\""))
+        XCTAssertTrue(report.reviewDetailUpdated)
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
 }
