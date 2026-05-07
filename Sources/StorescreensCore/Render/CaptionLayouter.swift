@@ -14,8 +14,14 @@ import CoreGraphics
 ///   - String captions wrap normally at the allowed width.
 ///   - Shrinkage applies the same ratio to title + subtitle so hierarchy is
 ///     preserved.
-///   - If min_font_size_pct is hit and text still overflows, we truncate the
-///     title with an ellipsis and log a warning (via the caller).
+///   - At min_font_size_pct, two paths split by what's overflowing:
+///       * Height overflow (wrapped lines too tall for `reservedHeight`):
+///         truncate the title with an ellipsis and warn.
+///       * Width overflow only (a single word wider than `blockWidth`, but
+///         the wrapped lines fit vertically): render anyway with a warning,
+///         allowing the over-wide line to bleed past the column. This avoids
+///         the surprising "long word triggers ellipsis even though there's
+///         room to wrap" behavior that locked-font configs hit.
 package struct CaptionLayouter {
 
     package let resolver: FontResolver
@@ -129,10 +135,18 @@ package struct CaptionLayouter {
         }
 
         private func alignOffset(for align: CaptionAlign, content: CGFloat, total: CGFloat) -> CGFloat {
+            // For content wider than `total` (caption width-overflow at min
+            // font, or a strict array line that doesn't shrink), allow
+            // negative offsets so center-aligned text stays canvas-centered
+            // (assuming symmetric left/right padding) rather than slumping
+            // flush-left. Left/right keep their flush behaviour: an
+            // over-wide left-aligned line still pins to the column's left
+            // edge, and an over-wide right-aligned line still pins to the
+            // column's right edge, bleeding past the opposite edge.
             switch align {
             case .left:   return 0
-            case .center: return max(0, (total - content) / 2)
-            case .right:  return max(0, total - content)
+            case .center: return (total - content) / 2
+            case .right:  return total - content
             }
         }
     }
@@ -216,7 +230,9 @@ package struct CaptionLayouter {
             let totalH = tH + gap + sH
             let maxLineW = max(tW, sW)
 
-            let fits = totalH <= reservedHeight && maxLineW <= blockWidth
+            let heightFits = totalH <= reservedHeight
+            let widthFits = maxLineW <= blockWidth
+            let fits = heightFits && widthFits
 
             if fits {
                 let drawable = Drawable(
@@ -246,8 +262,72 @@ package struct CaptionLayouter {
             let subtitleTargetSize = subtitleResolved.fontSize * ratio
             let titleBelowFloor = titleTargetSize <= titleResolved.minFontSize
             let subtitleBelowFloor = sH == 0 || subtitleTargetSize <= subtitleResolved.minFontSize
+            let atMinFont = titleBelowFloor && (subtitle == nil || subtitleBelowFloor)
 
-            if titleBelowFloor && (subtitle == nil || subtitleBelowFloor) {
+            // At min font we can't shrink any further. Three sub-cases:
+            //   * widthFits && !heightFits → wrap is already happening, but
+            //     the wrapped lines are taller than the band. Return the
+            //     full text with the over-tall measuredHeight; the pipeline
+            //     grows the caption band to accommodate. Earlier behavior
+            //     ellipsized everything past the first line.
+            //   * !widthFits && heightFits → a single word is wider than
+            //     `blockWidth` but the wrapped lines still fit vertically.
+            //     Render anyway and bleed past the column rather than
+            //     ellipsize the whole caption.
+            //   * !widthFits && !heightFits → nothing helps; fall through to
+            //     ellipsis truncation as a last resort.
+            if atMinFont && widthFits && !heightFits {
+                warnings.append(Warning(message:
+                    "caption height \(Int(totalH))px exceeds reserved " +
+                    "\(Int(reservedHeight))px at min font size; growing " +
+                    "the caption band. Raise min_height_pct or shorten " +
+                    "the text to keep the device anchor"))
+                let drawable = Drawable(
+                    titleFramesetter: titleMeasure?.framesetter,
+                    subtitleFramesetter: subtitleMeasure?.framesetter,
+                    titleAlign: tRole.align,
+                    subtitleAlign: sRole.align,
+                    titleSize: titleMeasure?.size ?? .zero,
+                    subtitleSize: subtitleMeasure?.size ?? .zero,
+                    spacing: spacing,
+                    blockWidth: blockWidth,
+                    middleSlotHeight: middleSlotHeight
+                )
+                return Output(
+                    measuredHeight: totalH,
+                    wasShrunk: wasShrunk,
+                    wasTruncated: false,
+                    warnings: warnings,
+                    drawable: drawable
+                )
+            }
+
+            if atMinFont && heightFits && !widthFits {
+                warnings.append(Warning(message:
+                    "caption width \(Int(maxLineW))px exceeds column width " +
+                    "\(Int(blockWidth))px at min font size; rendering with " +
+                    "horizontal overflow"))
+                let drawable = Drawable(
+                    titleFramesetter: titleMeasure?.framesetter,
+                    subtitleFramesetter: subtitleMeasure?.framesetter,
+                    titleAlign: tRole.align,
+                    subtitleAlign: sRole.align,
+                    titleSize: titleMeasure?.size ?? .zero,
+                    subtitleSize: subtitleMeasure?.size ?? .zero,
+                    spacing: spacing,
+                    blockWidth: blockWidth,
+                    middleSlotHeight: middleSlotHeight
+                )
+                return Output(
+                    measuredHeight: totalH,
+                    wasShrunk: wasShrunk,
+                    wasTruncated: false,
+                    warnings: warnings,
+                    drawable: drawable
+                )
+            }
+
+            if atMinFont {
                 warnings.append(Warning(message: "caption did not fit at min font size; truncated with ellipsis"))
                 // Re-layout with a paragraph style that truncates.
                 let tAttrClipped = titleAttr.map { applyTruncation($0) }

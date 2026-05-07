@@ -132,4 +132,70 @@ final class CaptionLayouterTests: XCTestCase {
         )
         XCTAssertEqual(out.measuredHeight, 0)
     }
+
+    /// Locked font (font_size_pct == min_font_size_pct) with text that wraps
+    /// taller than `reservedHeight`: layouter must NOT ellipsize (no wasTruncated)
+    /// and must return the full natural measuredHeight so the pipeline can
+    /// grow the caption band. Earlier behaviour collapsed the whole string to
+    /// a single ellipsized line.
+    func testLayout_lockedFont_heightOverflow_returnsFullHeight() throws {
+        let layouter = makeLayouter()
+        let canvas = CGSize(width: 1320, height: 2868)
+        // 22% of 2868 = 631, same as the user's Klisy repro.
+        let reserved: CGFloat = 631
+        let blockWidth: CGFloat = 1188
+        let out = try layouter.layout(
+            title: .string("Spaced-repetition for Greek conjugations and declensions"),
+            subtitle: nil,
+            titleStyleRaw: CaptionRole(
+                font: .system, weight: .bold,
+                fontSizePct: 5.0, minFontSizePct: 5.0,
+                color: "#000000", align: .center
+            ),
+            subtitleStyleRaw: nil,
+            highlights: [],
+            canvasSize: canvas,
+            reservedHeight: reserved,
+            blockWidth: blockWidth,
+            spacing: 28
+        )
+        XCTAssertFalse(out.wasTruncated, "locked-font height overflow must not ellipsize")
+        XCTAssertGreaterThan(out.measuredHeight, reserved,
+            "natural caption is expected to exceed reservedHeight at locked 5% font")
+        XCTAssertGreaterThan(out.warnings.count, 0,
+            "should warn the user that the band grew beyond reservedHeight")
+    }
+
+    /// Locked font with a strict array line wider than `blockWidth` (each
+    /// item is rendered without internal wrapping per
+    /// `CaptionText.isStrictLines`): render with horizontal overflow rather
+    /// than ellipsizing. Non-strict (string) captions use word/char wrap so
+    /// width overflow rarely surfaces; strict array captions are where this
+    /// path matters.
+    func testLayout_lockedFont_strictWidthOverflow_rendersAnyway() throws {
+        let layouter = makeLayouter()
+        let canvas = CGSize(width: 1320, height: 2868)
+        let reserved: CGFloat = canvas.height
+        let blockWidth: CGFloat = 200  // squeezed so a 28-char strict line overflows
+        let out = try layouter.layout(
+            title: .array(["Antidisestablishmentarianism"]),
+            subtitle: nil,
+            titleStyleRaw: CaptionRole(
+                font: .system, weight: .bold,
+                fontSizePct: 5.0, minFontSizePct: 5.0,
+                color: "#000000", align: .center
+            ),
+            subtitleStyleRaw: nil,
+            highlights: [],
+            canvasSize: canvas,
+            reservedHeight: reserved,
+            blockWidth: blockWidth,
+            spacing: 28
+        )
+        XCTAssertFalse(out.wasTruncated, "strict width overflow at locked font must not ellipsize")
+        XCTAssertGreaterThan(out.drawable.titleSize.width, blockWidth,
+            "rendered title width should exceed blockWidth (over-wide)")
+        XCTAssertGreaterThan(out.warnings.count, 0,
+            "should warn the user that the column overflowed")
+    }
 }

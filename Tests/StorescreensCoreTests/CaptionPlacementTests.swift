@@ -264,6 +264,134 @@ final class CaptionPlacementTests: XCTestCase {
             "user repro: visual gaps above and below caption must match within ±1% of canvas. top=\(topGap)px (\(Double(topGap)/Double(canvasH)*100)%), bottom=\(bottomGap)px (\(Double(bottomGap)/Double(canvasH)*100)%)")
     }
 
+    /// Issue #2 from the user's render-engine bug report: an above_title
+    /// image used to be glued to the canvas top regardless of where the
+    /// caption block sat, so the user had to set
+    /// `images[].nudge.y_pct: -3` manually to balance the visual gap. With
+    /// the caption-anchored slot, moving the caption (via vertical_align
+    /// or caption.nudge) shifts the image with it.
+    func testAboveTitleImage_followsCaptionPosition() async throws {
+        let topImage = try await renderAndFindAboveTitleImageBottom(verticalAlign: .top)
+        let centerImage = try await renderAndFindAboveTitleImageBottom(verticalAlign: .center)
+        let bottomImage = try await renderAndFindAboveTitleImageBottom(verticalAlign: .bottom)
+
+        // The image's bottom row tracks the caption block's top, so moving
+        // the caption down (vertical_align: top -> center -> bottom) should
+        // push the image down.
+        XCTAssertLessThan(topImage, centerImage,
+            "above_title image bottom should move down when caption shifts from top to center: top=\(topImage), center=\(centerImage)")
+        XCTAssertLessThan(centerImage, bottomImage,
+            "above_title image bottom should move further down when caption shifts to bottom: center=\(centerImage), bottom=\(bottomImage)")
+    }
+
+    private func renderAndFindAboveTitleImageBottom(
+        verticalAlign: VerticalAlign
+    ) async throws -> Int {
+        let width = 660
+        let height = 1434
+
+        let runRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("above-title-anchor-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: runRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: runRoot) }
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let filename = "iPhone_6.9_01_Home.png"
+        try writeBlackPNG(width: width, height: height, to: capturedRoot.appendingPathComponent(filename))
+
+        // Solid magenta logo we can find by color.
+        let logoURL = runRoot.appendingPathComponent("logo.png")
+        try writeMagentaPNG(width: 64, height: 64, to: logoURL)
+
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "above-title-anchor",
+            appName: "CP", displayName: "CP", scheme: "CP",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"", simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [CaptureManifest.Screenshot(name: "01_Home", filename: filename, capturedAt: Date())]
+                ),
+            ]
+        )
+
+        let config = RenderConfig(
+            enabled: true,
+            background: BackgroundConfig(color: .solid("#000000")),
+            images: [
+                ImageConfig(
+                    path: .shared(logoURL.path),
+                    position: .aboveTitle, align: .center, maxHeightPct: 6,
+                    placement: .all
+                ),
+            ],
+            caption: CaptionConfig(
+                title: CaptionRole(
+                    font: .system, weight: .bold,
+                    fontSizePct: 5.5, color: "#FFFFFF", align: .center
+                ),
+                minHeightPct: 22, paddingPct: 4,
+                verticalAlign: verticalAlign
+            ),
+            chrome: ChromeConfig(style: .stroke, strokeColor: "#222222",
+                                 strokeWidth: 2, cornerRadius: .auto, shadow: false, paddingPct: 5),
+            slides: ["01_Home": SlideOverride(caption: SlideCaption(title: .string("TITLE")))]
+        )
+
+        let renderRoot = runRoot.appendingPathComponent("framed", isDirectory: true)
+        let pipeline = RenderPipeline(config: config, baseDirectory: runRoot)
+        let out = try await pipeline.render(manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot)
+        XCTAssertEqual(out.failures.count, 0, "render failed: \(out.failures)")
+
+        let outURL = renderRoot.appendingPathComponent(filename)
+        return try findBottomMagentaRow(at: outURL)
+    }
+
+    private func findBottomMagentaRow(at url: URL) throws -> Int {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil),
+              let data = img.dataProvider?.data as Data? else {
+            throw NSError(domain: "CaptionPlacementTests", code: 6)
+        }
+        let bpp = 4
+        var last = -1
+        for y in 0..<img.height {
+            for x in stride(from: 0, to: img.width, by: 4) {
+                let off = y * img.bytesPerRow + x * bpp
+                let r = data[off], g = data[off + 1], b = data[off + 2]
+                // Magenta-ish: high R, low G, high B
+                if r > 200 && g < 80 && b > 200 {
+                    last = y
+                    break
+                }
+            }
+        }
+        guard last >= 0 else {
+            throw NSError(domain: "CaptionPlacementTests", code: 7,
+                          userInfo: [NSLocalizedDescriptionKey: "no magenta pixel found in \(url.path)"])
+        }
+        return last
+    }
+
+    private func writeMagentaPNG(width: Int, height: Int, to url: URL) throws {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw NSError(domain: "CaptionPlacementTests", code: 8) }
+        ctx.setFillColor(red: 1, green: 0, blue: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let cg = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { throw NSError(domain: "CaptionPlacementTests", code: 9) }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw NSError(domain: "CaptionPlacementTests", code: 10)
+        }
+    }
+
     func testNudgeY_shiftsCaptionInDirection() async throws {
         let baselineY = try await renderAndFindCaptionTop(verticalAlign: .center, nudgeYPct: nil)
         // Positive y_pct should move the caption up (toward screen top =

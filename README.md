@@ -920,6 +920,8 @@ render:
 
 `below_title` and `above_subtitle` are aliases for the same physical slot (the gap between the title and subtitle text); pick whichever reads more naturally. `placement` defaults to `first_only` for the `above_title` slot and `all` for every other slot, matching the "logo on slide 1, badges on every slide" convention.
 
+When a caption is present, the `above_title` slot extends from the canvas top down to just above the caption block, so the image is automatically balanced between the canvas edge and the caption text without any manual `nudge.y_pct`. When the caption shifts (via `caption.nudge` or `caption.vertical_align`), the image follows. Configs upgraded from pre-2.8 may want to drop their old `images[].nudge.y_pct` workaround, since the default already puts the logo near the caption.
+
 Two images in the same slot stack horizontally:
 
 ```yaml

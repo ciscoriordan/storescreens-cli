@@ -214,6 +214,10 @@ package struct RenderPipeline {
         // squeeze the text. Chrome inset is taken from the remaining
         // space so device top moves down predictably as the user adds
         // overlays.
+        //
+        // The caption is laid out before the chrome anchor is finalized
+        // so the band can grow when locked-font configs naturally exceed
+        // `min_height_pct`. Earlier versions ellipsized those captions.
         let overlayPlacer = OverlayPlacer(baseDirectory: baseDirectory, fontResolver: fontResolver)
         let images = RenderResolver.resolvedImages(config: config, slideName: slideName)
         let laurels = RenderResolver.resolvedLaurels(config: config, slideName: slideName)
@@ -241,13 +245,15 @@ package struct RenderPipeline {
         }()
         let chromeConfig = RenderResolver.resolvedChrome(config: config, slideName: slideName)
 
-        // Caption text band height. Two paths:
+        // Caption text band floor. Two paths:
         //   1. `chrome.device_height_pct` is set → device size is canonical.
         //      Caption band absorbs whatever space remains after the
         //      overlay bands take their cut, ignoring `min_height_pct`.
         //      This guarantees uniform device size across slides.
-        //   2. Default → `caption.min_height_pct` floors the band.
-        let captionTextH: CGFloat = {
+        //   2. Default → `caption.min_height_pct` floors the band; the
+        //      actual band may grow if the caption's natural height
+        //      exceeds the floor (locked font + long string).
+        let initialCaptionTextH: CGFloat = {
             if let dhp = chromeConfig?.deviceHeightPct {
                 let availableForBands = canvasSize.height * (100 - CGFloat(dhp)) / 100.0
                 let leftover = availableForBands - aboveTitleBandH - middleSlotH - belowSubtitleBandH
@@ -263,7 +269,53 @@ package struct RenderPipeline {
         // When middle-slot items exist without a caption, the slot still
         // gets its own band sized by `middleSlotH`. When the caption is
         // present, the slot lives inside the caption band.
-        let captionBandH = captionTextH + middleSlotH
+        let initialCaptionBandH = initialCaptionTextH + middleSlotH
+
+        // --- Caption layout (pre-draw measurement) ----------------------------
+        //
+        // We measure the caption before finalizing the chrome anchor so the
+        // band can grow if the natural layout exceeds the floor. When
+        // `chrome.device_height_pct` is set the band size is canonical and
+        // we never grow it (the user opted into a fixed device size); the
+        // CaptionLayouter will still emit a warning if its natural height
+        // overflows.
+        let captionPaddingPct = CGFloat(captionResolved?.paddingPct ?? 4)
+        let captionSpacingPct = CGFloat(captionResolved?.spacingPct ?? 1.2)
+        let captionPadding = canvasSize.width * captionPaddingPct / 100.0
+        let captionSpacing = canvasSize.height * captionSpacingPct / 100.0
+        let captionBlockWidth = canvasSize.width - 2 * captionPadding
+
+        var captionLayout: CaptionLayouter.Output? = nil
+        if hasCaption, let cr = captionResolved {
+            let layouter = CaptionLayouter(resolver: fontResolver)
+            let out = try layouter.layout(
+                title: cr.title,
+                subtitle: cr.subtitle,
+                titleStyleRaw: cr.titleStyle,
+                subtitleStyleRaw: cr.subtitleStyle,
+                highlights: cr.highlights,
+                canvasSize: canvasSize,
+                reservedHeight: initialCaptionBandH,
+                blockWidth: captionBlockWidth,
+                spacing: captionSpacing,
+                middleSlotHeight: middleSlotH
+            )
+            for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
+            captionLayout = out
+        }
+
+        // Grow the band only when the user hasn't opted into a fixed device
+        // height. With `device_height_pct` set the device is canonical and
+        // any extra caption content stays clipped within the configured
+        // band; without it, locked-font captions naturally extend the band
+        // and push the device down.
+        let captionBandH: CGFloat = {
+            guard chromeConfig?.deviceHeightPct == nil else {
+                return initialCaptionBandH
+            }
+            guard let out = captionLayout else { return initialCaptionBandH }
+            return max(initialCaptionBandH, out.measuredHeight)
+        }()
 
         let reservedTop = aboveTitleBandH + captionBandH + belowSubtitleBandH
         let chromePaddingPct = CGFloat(chromeConfig?.paddingPct ?? 4)
@@ -298,53 +350,19 @@ package struct RenderPipeline {
         // existing layout / centering names keep their meaning.
         let deviceTopY = chromeRectTopY + chromeInsetDy
 
-        // --- Layer 3: above_title overlays ---
-        if aboveTitleBandH > 0 {
-            let aboveRect = CGRect(
-                x: 0,
-                y: canvasSize.height - aboveTitleBandH,
-                width: canvasSize.width,
-                height: aboveTitleBandH
-            )
-            let warns = overlayPlacer.drawSlot(
-                position: .aboveTitle, images: images, laurels: laurels, tables: tables,
-                appearance: appearance, slotRect: aboveRect,
-                canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
-                into: ctx
-            )
-            for w in warns { warnings.append("[\(slideName)] \(w)") }
-        }
+        // --- Caption block position (still no draws yet) ---------------------
+        //
+        // We compute `captionTopLeft` and the caption's BL bounds here so
+        // the above_title overlay can anchor to the caption block top
+        // instead of the canvas top, so image and caption read as a single
+        // visual unit instead of the image floating up at the canvas edge.
+        let captionBandTopBL = canvasSize.height - aboveTitleBandH
+        let captionBandBottomBL = captionBandTopBL - captionBandH
 
-        // --- Layer 4: caption (with embedded middle-slot gap) ---
-        var middleSlotRectBL: CGRect = .zero
-        if hasCaption, let cr = captionResolved {
-            let paddingPct = CGFloat(cr.paddingPct ?? 4)
-            let spacingPct = CGFloat(cr.spacingPct ?? 1.2)
-            let padding = canvasSize.width * paddingPct / 100.0
-            let spacing = canvasSize.height * spacingPct / 100.0
-            let blockWidth = canvasSize.width - 2 * padding
-
-            let layouter = CaptionLayouter(resolver: fontResolver)
-            let out = try layouter.layout(
-                title: cr.title,
-                subtitle: cr.subtitle,
-                titleStyleRaw: cr.titleStyle,
-                subtitleStyleRaw: cr.subtitleStyle,
-                highlights: cr.highlights,
-                canvasSize: canvasSize,
-                reservedHeight: captionBandH,
-                blockWidth: blockWidth,
-                spacing: spacing,
-                middleSlotHeight: middleSlotH
-            )
-            for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
-
-            // Band = [captionBandBottomBL, captionBandTopBL] in BL coords.
-            // verticalAlign picks top / center (default) / bottom; nudge
-            // shifts after that.
-            let captionBandTopBL = canvasSize.height - aboveTitleBandH
-            let captionBandBottomBL = captionBandTopBL - captionBandH
-
+        var captionTopLeft: CGPoint = .zero
+        var captionBlockTopBL: CGFloat = captionBandTopBL
+        var captionBlockBottomBL: CGFloat = captionBandTopBL
+        if let out = captionLayout, let cr = captionResolved {
             let verticalAlign = cr.verticalAlign ?? .center
             let blockBottomY: CGFloat = {
                 switch verticalAlign {
@@ -378,10 +396,65 @@ package struct RenderPipeline {
             // Nudge: x positive = right, y positive = up (toward screen top).
             let nudgeX = CGFloat(cr.nudge?.xPct ?? 0) * canvasSize.width / 100.0
             let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
-            let topLeft = CGPoint(x: padding + nudgeX, y: blockBottomY + nudgeY)
+            captionTopLeft = CGPoint(x: captionPadding + nudgeX, y: blockBottomY + nudgeY)
+            captionBlockBottomBL = captionTopLeft.y
+            captionBlockTopBL = captionBlockBottomBL + out.measuredHeight
+        }
 
-            out.drawable.draw(into: ctx, topLeft: topLeft)
-            middleSlotRectBL = out.drawable.middleSlotRect(topLeft: topLeft)
+        // --- Layer 3: above_title overlays ---
+        //
+        // Slot semantics: when a caption is present, the slot extends from
+        // the canvas top down to just above the caption block (separated
+        // by `caption.spacing_pct`). The image is centered in this slot,
+        // which gives roughly equal "canvas top -> image" and
+        // "image -> caption" gaps automatically, so the user does not
+        // need an `images[].nudge.y_pct` workaround. When `caption.nudge`
+        // shifts the caption, the slot's bottom edge follows, so the
+        // image moves with the caption as a single visual unit.
+        //
+        // When there's no caption text the slot collapses to the legacy
+        // canvas-top band (sized to image height) so middle-slot-only
+        // configs still behave the same.
+        if aboveTitleBandH > 0 {
+            let slotBottomBL: CGFloat
+            let slotHeight: CGFloat
+            if hasCaption {
+                let candidate = captionBlockTopBL + captionSpacing
+                let candidateHeight = canvasSize.height - candidate
+                if candidateHeight >= aboveTitleBandH {
+                    slotBottomBL = candidate
+                    slotHeight = candidateHeight
+                } else {
+                    // Caption block already too tall to leave breathing
+                    // room above; fall back to legacy canvas-top band so
+                    // the image still fits.
+                    slotBottomBL = canvasSize.height - aboveTitleBandH
+                    slotHeight = aboveTitleBandH
+                }
+            } else {
+                slotBottomBL = canvasSize.height - aboveTitleBandH
+                slotHeight = aboveTitleBandH
+            }
+            let aboveRect = CGRect(
+                x: 0,
+                y: slotBottomBL,
+                width: canvasSize.width,
+                height: slotHeight
+            )
+            let warns = overlayPlacer.drawSlot(
+                position: .aboveTitle, images: images, laurels: laurels, tables: tables,
+                appearance: appearance, slotRect: aboveRect,
+                canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
+                into: ctx
+            )
+            for w in warns { warnings.append("[\(slideName)] \(w)") }
+        }
+
+        // --- Layer 4: caption (with embedded middle-slot gap) ---
+        var middleSlotRectBL: CGRect = .zero
+        if let out = captionLayout {
+            out.drawable.draw(into: ctx, topLeft: captionTopLeft)
+            middleSlotRectBL = out.drawable.middleSlotRect(topLeft: captionTopLeft)
         } else if middleSlotH > 0 {
             // No caption text: the middle slot occupies its own band
             // between the above_title and below_subtitle bands.
