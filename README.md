@@ -867,6 +867,26 @@ font:                               # Google Fonts auto-download
 
 Google Fonts are cached to `~/Library/Caches/storescreens/fonts/`.
 
+#### Per-locale font overrides
+
+A single typeface rarely covers every script you ship. Add `locale_overrides:` to either caption role to swap the font (or any other style field) when a specific locale is being rendered:
+
+```yaml
+caption:
+  title:
+    font:
+      google: Cormorant Garamond     # default for Latin scripts
+    weight: bold
+    locale_overrides:
+      el:
+        font: { google: GFS Didot }  # Greek slides use Didot
+      ja:
+        font: "Hiragino Mincho ProN" # CJK serif for Japanese
+        weight: regular
+```
+
+Each entry is itself a `CaptionRole`; non-nil fields shadow the role defaults for that locale, the rest fall through. Works for both `caption.title` and `caption.subtitle`. Locales absent from the map keep the role unchanged.
+
 ### Captions
 
 - Bare string → single title, wraps at canvas width.

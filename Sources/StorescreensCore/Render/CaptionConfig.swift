@@ -58,6 +58,27 @@ package struct CaptionRole: Codable, Sendable {
     /// when the row auto-grows for multi-line cells); ignored by captions
     /// and laurels, which use their own block-level positioning.
     package var verticalAlign: VerticalAlign?
+    /// Per-locale style overrides keyed by Xcode locale code (`en-US`,
+    /// `el`, `ja`, `zh-Hans`, …). Each entry is a `CaptionRole` whose
+    /// non-nil fields shadow this role's fields when the render's locale
+    /// matches. Locales absent from this map use the role unchanged.
+    ///
+    /// Common case: one font for Latin scripts, a different display face
+    /// for Greek or Japanese:
+    ///
+    ///   caption:
+    ///     title:
+    ///       font: { google: "Cormorant Garamond" }
+    ///       locale_overrides:
+    ///         el:
+    ///           font: { google: "GFS Didot" }
+    ///         ja:
+    ///           font: "Hiragino Mincho ProN"
+    ///
+    /// Field-by-field merge: an override that only sets `font:` keeps
+    /// the role's weight, color, alignment, etc. Recursion stops here:
+    /// `locale_overrides` inside an override entry is ignored.
+    package var localeOverrides: [String: CaptionRole]?
 
     package init(
         font: FontSpec? = nil,
@@ -67,7 +88,8 @@ package struct CaptionRole: Codable, Sendable {
         minFontSizePct: Double? = nil,
         color: String? = nil,
         align: CaptionAlign? = nil,
-        verticalAlign: VerticalAlign? = nil
+        verticalAlign: VerticalAlign? = nil,
+        localeOverrides: [String: CaptionRole]? = nil
     ) {
         self.font = font
         self.weight = weight
@@ -77,6 +99,7 @@ package struct CaptionRole: Codable, Sendable {
         self.color = color
         self.align = align
         self.verticalAlign = verticalAlign
+        self.localeOverrides = localeOverrides
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -84,6 +107,30 @@ package struct CaptionRole: Codable, Sendable {
         case fontSizePct = "font_size_pct"
         case minFontSizePct = "min_font_size_pct"
         case verticalAlign = "vertical_align"
+        case localeOverrides = "locale_overrides"
+    }
+
+    /// Returns a copy of this role with the per-locale override (if any)
+    /// merged in. Override fields shadow this role's; unset override
+    /// fields fall through. The returned role's `localeOverrides` is
+    /// always nil so downstream code can't loop.
+    package func resolved(forLocale locale: String?) -> CaptionRole {
+        guard let locale, let override = localeOverrides?[locale] else {
+            var copy = self
+            copy.localeOverrides = nil
+            return copy
+        }
+        return CaptionRole(
+            font: override.font ?? self.font,
+            weight: override.weight ?? self.weight,
+            italic: override.italic ?? self.italic,
+            fontSizePct: override.fontSizePct ?? self.fontSizePct,
+            minFontSizePct: override.minFontSizePct ?? self.minFontSizePct,
+            color: override.color ?? self.color,
+            align: override.align ?? self.align,
+            verticalAlign: override.verticalAlign ?? self.verticalAlign,
+            localeOverrides: nil
+        )
     }
 }
 

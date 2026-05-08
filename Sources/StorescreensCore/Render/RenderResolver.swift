@@ -178,8 +178,13 @@ package enum RenderResolver {
         let subtitle = slide?.subtitle
 
         // Style merging: slide-level style overrides win field-by-field over defaults.
-        let titleStyle = mergeRole(base: defaults?.title, override: slide?.titleStyle)
-        let subtitleStyle = mergeRole(base: defaults?.subtitle, override: slide?.subtitleStyle)
+        // Then `locale_overrides:` on the merged role re-shadows individual fields
+        // for the current locale, so per-locale font/weight/color picks win
+        // last without breaking the slide-level overrides for other locales.
+        let titleStyleMerged = mergeRole(base: defaults?.title, override: slide?.titleStyle)
+        let subtitleStyleMerged = mergeRole(base: defaults?.subtitle, override: slide?.subtitleStyle)
+        let titleStyle = titleStyleMerged?.resolved(forLocale: locale)
+        let subtitleStyle = subtitleStyleMerged?.resolved(forLocale: locale)
 
         return ResolvedCaption(
             title: title,
@@ -296,7 +301,13 @@ package enum RenderResolver {
             fontSizePct: override?.fontSizePct ?? base?.fontSizePct,
             minFontSizePct: override?.minFontSizePct ?? base?.minFontSizePct,
             color: override?.color ?? base?.color,
-            align: override?.align ?? base?.align
+            align: override?.align ?? base?.align,
+            verticalAlign: override?.verticalAlign ?? base?.verticalAlign,
+            // Override's locale_overrides wins wholesale when set (matches
+            // the "slide override replaces the array" precedent for arrays
+            // and maps elsewhere in the resolver). Element-by-element
+            // merging would surprise users who explicitly removed a locale.
+            localeOverrides: override?.localeOverrides ?? base?.localeOverrides
         )
     }
 }
