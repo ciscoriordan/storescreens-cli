@@ -502,8 +502,8 @@ package struct HTMLPreviewGenerator {
             .view-toggle { position: absolute; left: -9999px; }
             .view-picker {
               position: sticky; top: 0; z-index: 10;
-              max-width: 1400px; margin: 0 auto 1rem;
-              display: inline-flex; gap: 0; padding: 0.25rem;
+              width: fit-content; margin: 0 auto 1rem;
+              display: flex; gap: 0; padding: 0.25rem;
               background: rgba(20, 20, 20, 0.9); border: 1px solid #2a2a2a;
               border-radius: 8px; backdrop-filter: blur(8px);
             }
