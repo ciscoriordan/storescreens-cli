@@ -504,6 +504,162 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
     }
 
+    /// When creating a brand-new `appStoreReviewDetails` record without any
+    /// demo-account fields configured, the orchestrator must explicitly send
+    /// `demoAccountRequired: false`. Apple's ASC API otherwise defaults the
+    /// field to `true` on creation, which leaves "Sign-In Required" checked
+    /// in the App Review Information panel for apps that don't need a login.
+    func testSubmit_reviewDetail_createsWithDemoAccountRequiredFalseWhenNoCreds() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-review-no-demo-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("English description", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        // Only a single review-side file. No demo account name/password,
+        // no review_demo_account_required (which doesn't exist as a file).
+        try writeFixture("contact me at the email below", to: metaRoot.appendingPathComponent("en-US/review_notes.txt"))
+        try writeFixture("cisco@example.com", to: metaRoot.appendingPathComponent("en-US/review_contact_email.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (200, Data(#"{"data":null}"#.utf8))
+        }
+        var createBody: Data?
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreReviewDetails") { _ in
+            createHits += 1
+            createBody = ASCStub.requestBodies.last
+            return (201, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        XCTAssertEqual(createHits, 1, "expected one POST to /v1/appStoreReviewDetails")
+        XCTAssertNotNil(createBody)
+        let bodyStr = String(data: createBody!, encoding: .utf8) ?? ""
+        // Parse the JSON body and inspect attributes.demoAccountRequired so
+        // we don't depend on key ordering or whitespace.
+        let json = try JSONSerialization.jsonObject(with: createBody!) as? [String: Any]
+        let data = json?["data"] as? [String: Any]
+        let attrs = data?["attributes"] as? [String: Any]
+        XCTAssertEqual(
+            attrs?["demoAccountRequired"] as? Bool, false,
+            "create body must explicitly send demoAccountRequired: false when no demo creds are configured (raw body: \(bodyStr))"
+        )
+        // Sanity: demo creds must NOT have appeared in the body since none
+        // were configured.
+        XCTAssertNil(attrs?["demoAccountName"],
+                     "must not send demoAccountName when none configured: \(bodyStr)")
+        XCTAssertNil(attrs?["demoAccountPassword"],
+                     "must not send demoAccountPassword when none configured: \(bodyStr)")
+        XCTAssertTrue(report.reviewDetailUpdated)
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When demo creds ARE configured (via YAML's review_info), the
+    /// `asReviewDetailFields` helper sets `demoAccountRequired: true`. The
+    /// orchestrator's no-creds override must NOT clobber that value back
+    /// to `false` on the create-side path.
+    func testSubmit_reviewDetail_createPreservesDemoAccountRequiredTrueFromYAML() async throws {
+        let (client, _) = makeClient()
+
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-review-with-demo-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("desc", to: metaRoot.appendingPathComponent("en-US/description.txt"))
+        // File-side demo creds — `asReviewDetailFields` would normally
+        // promote demoAccountRequired to true via the YAML helper, but the
+        // file-side reader only writes the name/password fields. The
+        // orchestrator must still leave the create body alone here (since
+        // demo fields are non-nil, the no-creds override doesn't kick in).
+        try writeFixture("demo@example.com", to: metaRoot.appendingPathComponent("en-US/review_demo_account_name.txt"))
+        try writeFixture("hunter2", to: metaRoot.appendingPathComponent("en-US/review_demo_account_password.txt"))
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS","appStoreState":"PREPARE_FOR_SUBMISSION"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreReviewDetail") { _ in
+            (200, Data(#"{"data":null}"#.utf8))
+        }
+        var createBody: Data?
+        ASCStub.add(method: "POST", suffix: "/v1/appStoreReviewDetails") { _ in
+            createBody = ASCStub.requestBodies.last
+            return (201, Data(#"{"data":{"id":"RD-1","type":"appStoreReviewDetails","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{"locale":"en-US"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersionLocalizations/LOC-en-US") { _ in
+            (200, Data(#"{"data":{"id":"LOC-en-US","type":"appStoreVersionLocalizations","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", metadata: true, attachBuild: false)
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        _ = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: tmp,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: true,
+            progress: nil
+        )
+
+        let bodyStr = String(data: createBody!, encoding: .utf8) ?? ""
+        let json = try JSONSerialization.jsonObject(with: createBody!) as? [String: Any]
+        let attrs = (json?["data"] as? [String: Any])?["attributes"] as? [String: Any]
+        // The demo creds were supplied, so the no-creds override must not
+        // force demoAccountRequired to false. Both demo fields must appear
+        // in the body.
+        XCTAssertEqual(attrs?["demoAccountName"] as? String, "demo@example.com",
+                       "demoAccountName must be sent: \(bodyStr)")
+        XCTAssertEqual(attrs?["demoAccountPassword"] as? String, "hunter2",
+                       "demoAccountPassword must be sent: \(bodyStr)")
+        XCTAssertNotEqual(attrs?["demoAccountRequired"] as? Bool, false,
+                          "demoAccountRequired must NOT be forced to false when demo creds are present: \(bodyStr)")
+    }
+
     /// When the version already has a review-detail and the configured
     /// fields differ, PATCH only the differing ones.
     func testSubmit_reviewNotes_patchesExistingReviewDetailWithDiff() async throws {

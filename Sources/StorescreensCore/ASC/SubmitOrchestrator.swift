@@ -786,9 +786,24 @@ package struct SubmitOrchestrator {
                     progress?("review detail: unchanged")
                 }
             } else {
-                _ = try await appsAPI.createReviewDetail(versionID: versionID, fields: desired)
+                // Apple's ASC API defaults `demoAccountRequired` to true when
+                // the field is omitted on creation. That's wrong for any app
+                // that doesn't actually need a login: it leaves "Sign-In
+                // Required" checked in the App Review Information panel.
+                // When the caller hasn't configured any demo creds (no
+                // demo_account_required in YAML and no
+                // review_demo_account_*.txt files), force the create body
+                // to send `demoAccountRequired: false` so the new record
+                // matches user expectations.
+                var toCreate = desired
+                if toCreate.demoAccountRequired == nil
+                    && toCreate.demoAccountName == nil
+                    && toCreate.demoAccountPassword == nil {
+                    toCreate.demoAccountRequired = false
+                }
+                _ = try await appsAPI.createReviewDetail(versionID: versionID, fields: toCreate)
                 report.reviewDetailUpdated = true
-                progress?("review detail: created with \(reviewDetailFieldNames(desired).joined(separator: ", "))")
+                progress?("review detail: created with \(reviewDetailFieldNames(toCreate).joined(separator: ", "))")
             }
         } catch {
             report.errors.append("review detail: \(error)")
