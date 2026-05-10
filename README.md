@@ -397,6 +397,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
 | `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
 | `storescreens upload-build` | Archive, export, and upload the `.ipa` to App Store Connect / TestFlight |
+| `storescreens status` | Show current ASC state: versions and any in-flight review submission |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
@@ -1360,6 +1361,32 @@ For the full schema (every field, default, gotcha) see `references/submit-refere
 - "no App Store Connect app matched": the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
 - "no ASC display type for WxH": the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
 - "8MB limit exceeded": Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
+
+### Checking on a submission with `storescreens status`
+
+After running `storescreens submit --submit-for-review`, you don't need to log in to App Store Connect to see what's happening. `storescreens status` queries ASC and prints a one-screen summary of the current state of the app:
+
+```bash
+storescreens status
+```
+
+```
+App Store Connect status
+  app:        MyApp (1234567890)
+  bundle id:  com.example.myapp
+  platform:   IOS
+
+  Versions:
+    1.0.1     WAITING_FOR_REVIEW    2026-05-09 14:05
+    1.0       READY_FOR_SALE        2026-05-06 18:51
+
+  Open review submissions:
+    WAITING_FOR_REVIEW    abc-...    submitted 2026-05-09 14:11
+
+  Submission is queued; Apple has not started reviewing yet.
+```
+
+`--json` switches to machine-readable output for scripts and CI. `--platform` accepts `IOS` (default), `MAC_OS`, `TV_OS`, `VISION_OS`. Read-only: makes no changes to the app.
 
 ## Archiving + uploading the app binary
 
