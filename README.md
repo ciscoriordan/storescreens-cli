@@ -843,6 +843,28 @@ render:
       opacity: 0.15
 ```
 
+### Background scrim
+
+Layer a flat tint or vertical gradient on top of the background to deepen contrast under the caption, mute a busy photo, or punch up a flat color. Drawn after the background and pattern, before the device chrome.
+
+```yaml
+render:
+  background:
+    image: ./marketing/hero.jpg
+  scrim:
+    color: "#000000"
+    opacity: 0.35           # 0.0 = invisible, 1.0 = opaque
+
+  # Or a top-to-bottom gradient (color stays the same; opacity ramps):
+  scrim:
+    color: "#000000"
+    gradient:
+      top_opacity: 0.0
+      bottom_opacity: 0.6
+```
+
+`color` defaults to `#000000`. If `gradient` is set, `opacity` is ignored; the gradient ramps between `top_opacity` and `bottom_opacity`.
+
 ### Chrome styles
 
 - `none`: no chrome; screenshot drawn at the padded rect.
@@ -1023,6 +1045,43 @@ render:
 ```
 
 Use `columns:` instead of `rows:` for column-major content. Rows of unequal length are padded with empty cells, so the grid is always rectangular. Cell content can include `\n` for in-cell line breaks; the row containing the multi-line cell auto-grows. Cell font size auto-derives to fit `max_height_pct` divided across the total number of text lines (a row with 2-line cells takes twice the height of a 1-line row), uniformly applied unless you override `cell_style.font_size_pct`. Per-column horizontal alignment via `column_aligns: [left, right]`; per-column vertical alignment via `column_valigns: [top, top]` (handy when a row auto-grows for a multi-line cell and you want neighboring single-line cells to anchor to the top instead of vertical-centering in the row). Border defaults to all sides + inner grid lines at width_pct: 0.15; override with `border.sides: [outer]`, `[inner]`, or per-side names like `[top, bottom]`.
+
+### Per-slide overrides
+
+Every render field shown above (`background`, `scrim`, `caption`, `chrome`, `images`, `laurels`, `tables`, `logo`) can be overridden per slide under the `slides:` block. Plus two slide-only fields:
+
+#### Per-slide appearance
+
+By default, capture runs each slide in every appearance listed at `appearances: [light, dark]` (a cross-product across all slides). To pin specific slides to one appearance instead, set `appearance:` on the slide and skip the cross-product:
+
+```yaml
+render:
+  slides:
+    "Home":
+      appearance: dark       # this slide is always rendered dark
+      caption: "Built for late nights."
+    "Search":
+      appearance: light      # this slide is always rendered light
+      caption: "Find anything, fast."
+```
+
+Capture groups slides by their effective appearance so each runs at most once per (device, locale) combo. Chrome fields that use the `{ light:, dark: }` variant shape automatically pick the matching side. Slides without an `appearance:` override still flow through the legacy top-level `appearances:` cross-product, so the two modes coexist.
+
+#### Per-slide localized captions
+
+`caption_locales:` lets a single slide carry per-locale title text without duplicating the whole `slides:` block per locale. Keyed by Xcode locale code (`en-US`, `el`, `ja`, `zh-Hans`, …):
+
+```yaml
+render:
+  slides:
+    "Spellcheck":
+      caption: "Auto-corrections"             # default for unlisted locales
+      caption_locales:
+        el: "Αυτόματες διορθώσεις"
+        ja: "オートコレクト"
+```
+
+When the current render's locale matches a key, that entry replaces the slide's `caption:` for that pass. Locales absent from the map fall back to the slide's default caption. This is distinct from the `locale_overrides:` on caption roles documented above: `locale_overrides` swaps font/weight/color for the whole role across all slides; `caption_locales` swaps the actual title text on a single slide.
 
 ## Device bezels
 
@@ -1251,6 +1310,29 @@ Prefer to leave `submit_for_review: false` in the yml as the default safe state 
 | `review_demo_account_password.txt` | `demoAccountPassword` |
 
 Apple stores these per-version (not per-locale), so put the files under one locale only - typically your primary. The reader picks the alphabetically first locale that has any `review_*.txt` file and warns about review files in other locales. The PATCH only sends fields that actually differ from ASC's current values; an unchanged review-detail produces a `review detail: unchanged` line in the progress output and no API call.
+
+#### Export compliance
+
+Apple requires every build to answer the export-compliance question (`usesNonExemptEncryption` on the build) before it can be submitted for review or distributed to external TestFlight testers. `submit` can PATCH this for you on the build it just attached:
+
+```yaml
+app_store_connect:
+  submit:
+    create_version: "1.2.0"
+    submit_for_review: true
+    export_compliance: none       # default: see values below
+```
+
+Four values:
+
+| Value | Wire | Meaning |
+|---|---|---|
+| `none` (default) | `usesNonExemptEncryption: false` | App uses only standard iOS cryptography (HTTPS, keychain, signing). Correct for the vast majority of apps. |
+| `exempt_algorithms` | `usesNonExemptEncryption: false` | App ships its own cryptography but every use qualifies for an Apple exemption (authentication, DRM, copy protection). |
+| `non_exempt` | `usesNonExemptEncryption: true` | App uses non-exempt encryption. You're responsible for filing the BIS export paperwork separately. |
+| `skip` | (not PATCHed) | Leave the question untouched. The build shows "Missing Compliance" in ASC until you answer manually. |
+
+When `none` or `exempt_algorithms` is used, you can also bake the answer into the binary at build time by setting `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO` in your Xcode target's Info.plist — `storescreens upload-build` does this by default for new archives so the question is pre-answered before the build even uploads.
 
 ### Pricing and availability
 
