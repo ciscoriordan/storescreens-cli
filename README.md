@@ -398,6 +398,19 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
 | `storescreens upload-build` | Archive, export, and upload the `.ipa` to App Store Connect / TestFlight |
 | `storescreens status` | Show current ASC state: versions and any in-flight review submission |
+| `storescreens testflight ...` | TestFlight: beta groups, testers, builds, beta-app/build-localizations, beta-review, license-agreement, tester-metrics |
+| `storescreens iap ...` | In-App Purchases (V2): products, localizations, pricing, submissions, content-hosting, images, promoted purchases |
+| `storescreens subscriptions ...` | Auto-renewing subscriptions: groups, products, prices, offer codes, promotional offers, availability, submissions |
+| `storescreens reviews ...` | Customer reviews: list with filters, get, respond (create/update/delete) |
+| `storescreens reports ...` | Sales (TSV), finance (CSV), analytics report requests/instances/segments, perf-power metrics, diagnostic signatures |
+| `storescreens users ...` | Team users, invitations, user-visible-apps |
+| `storescreens devportal ...` | Developer Portal: certificates, profiles, devices, bundle IDs + capabilities |
+| `storescreens previews / app-clips / cpp / events / experiments / encryption-decl / routing-coverage` | App Previews, App Clips, Custom Product Pages, in-app App Events, A/B Version Experiments, App Encryption Declarations, Routing App Coverage |
+| `storescreens game-center ...` | Game Center: achievements, leaderboards (+ sets + members), matchmaking, app versions, groups |
+| `storescreens xcode-cloud ...` | Xcode Cloud (CI/CD): products, workflows, build runs (start/cancel/retry), actions, artifacts, issues, test results, SCM repositories |
+| `storescreens alt-dist ...` | Alternative Distribution (EU DMA): keys, packages, package versions/deltas/variants, domains, marketplace search + webhooks |
+| `storescreens apple-pay ...` | Apple Pay: pass type IDs + certificates (from CSR), merchant domains |
+| `storescreens sandbox / resource-limits / diagnostic-sessions` | Sandbox testers, team resource quotas, Xcode Instruments diagnostic sessions |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
