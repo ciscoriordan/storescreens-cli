@@ -3111,6 +3111,1130 @@ storescreens routing-coverage upload \
   --file ./coverage.geojson
 ```
 
+## Game Center
+
+`storescreens game-center` wraps the App Store Connect Game Center API as
+nested subcommands so AI agents and humans can manage achievements,
+leaderboards, leaderboard sets, releases, and matchmaking without
+hand-rolling HTTP requests. The same operations are exposed as MCP tools
+under the `gc_*` namespace.
+
+Credentials are resolved through the same path as the rest of the App Store
+Connect features (`storescreens auth login` or `ASC_KEY_ID` /
+`ASC_ISSUER_ID` / `ASC_KEY_PATH` env vars). Every leaf subcommand accepts
+`--json` for machine-readable output. List endpoints accept `--limit` and
+`--cursor`, and return a `next-cursor` value when more pages are available.
+
+### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `gameCenterDetails` | Per-app Game Center detail record | `details` |
+| `gameCenterAppVersions` | Per-version staging records under a detail | `app-versions` |
+| `gameCenterGroups` | Cross-app groups for shared achievements / leaderboards | `groups` |
+| `gameCenterGroupLocalizations` | Per-locale group display names | `group-localizations` |
+| `gameCenterAchievements` | Achievements (CRUD + archive) | `achievements` |
+| `gameCenterAchievementLocalizations` | Per-locale achievement copy | `achievement-localizations` |
+| `gameCenterAchievementImages` | Achievement icons (3-phase upload) | `achievement-images` |
+| `gameCenterAchievementReleases` | Per-app-version staging for achievements | `achievement-releases` |
+| `gameCenterLeaderboards` | Leaderboards (CRUD + archive) | `leaderboards` |
+| `gameCenterLeaderboardLocalizations` | Per-locale leaderboard copy | `leaderboard-localizations` |
+| `gameCenterLeaderboardImages` | Leaderboard icons (3-phase upload) | `leaderboard-images` |
+| `gameCenterLeaderboardReleases` | Per-app-version staging for leaderboards | `leaderboard-releases` |
+| `gameCenterLeaderboardSets` | Leaderboard sets (groupings, CRUD + archive) | `leaderboard-sets` |
+| `gameCenterLeaderboardSetLocalizations` | Per-locale leaderboard set copy | `leaderboard-set-localizations` |
+| `gameCenterLeaderboardSetImages` | Set images (3-phase upload) | `leaderboard-set-images` |
+| `gameCenterLeaderboardSetMembers` | Leaderboards inside a set + reorder | `leaderboard-set-members` |
+| `gameCenterLeaderboardSetMemberLocalizations` | Per-locale member name overrides | `leaderboard-set-member-localizations` |
+| `gameCenterLeaderboardSetReleases` | Per-app-version staging for sets | `leaderboard-set-releases` |
+| `gameCenterMatchmakingQueues` | Matchmaking queues + queue match tests | `matchmaking queues` |
+| `gameCenterMatchmakingRuleSets` | Rule sets attached to queues + rule set match tests | `matchmaking rule-sets` |
+| `gameCenterMatchmakingRules` | Individual matchmaking rules | `matchmaking rules` |
+| `gameCenterMatchmakingTeamConfigurations` | Team split configuration on a rule set | `matchmaking team-configurations` |
+
+### App Versions
+
+`gameCenterAppVersions` are the staging container Apple uses to gate
+achievement / leaderboard / leaderboard-set releases per App Store version.
+Create one per app version you plan to ship Game Center changes with.
+
+```
+storescreens game-center app-versions list --detail-id <gc-detail-id>
+storescreens game-center app-versions create --detail-id <gc-detail-id> --app-store-version-id <asv-id>
+storescreens game-center app-versions update <id> --live true
+storescreens game-center app-versions delete <id>
+```
+
+### Groups
+
+Cross-app groups share a pool of achievements and leaderboards between
+multiple apps owned by the same team. Each group has a stable `groupId`
+that the Game Center clients reference.
+
+```
+storescreens game-center groups list
+storescreens game-center groups create --reference-name "Acme Studios" --group-id group.acme.studios
+storescreens game-center groups add-details --group-id <gid> <detail-id> [<detail-id> ...]
+storescreens game-center group-localizations create --group-id <gid> --locale en-US --name "Acme Studios"
+```
+
+### Achievements
+
+Achievements can be hosted directly on an app's gameCenterDetail or on a
+cross-app gameCenterGroup. Pass exactly one of `--detail-id` or
+`--group-id` to `achievements create`.
+
+```
+storescreens game-center achievements list --app-id 1234567890 [--limit 200] [--cursor C] [--json]
+storescreens game-center achievements get <id>
+storescreens game-center achievements create \
+  --detail-id <gc-detail-id> \
+  --reference-name "First Blood" \
+  --vendor-identifier first_blood \
+  --points 25 \
+  --show-before-earned true \
+  --repeatable false
+storescreens game-center achievements update <id> --points 50
+storescreens game-center achievements archive <id> [--no-archived]
+storescreens game-center achievements delete <id>
+```
+
+#### Achievement localizations
+
+```
+storescreens game-center achievement-localizations list --achievement-id <id>
+storescreens game-center achievement-localizations create \
+  --achievement-id <id> \
+  --locale en-US \
+  --name "First Blood" \
+  --before-earned-description "Make your first kill." \
+  --after-earned-description "You drew first blood."
+storescreens game-center achievement-localizations update <id> --name "First Strike"
+storescreens game-center achievement-localizations delete <id>
+```
+
+#### Achievement images
+
+The achievement icon is per-locale, so upload one per
+`gameCenterAchievementLocalization`. The upload runs the 3-phase
+reservation + chunk PUT + checksum confirm flow Apple uses across all
+asset uploads.
+
+```
+storescreens game-center achievement-images list --localization-id <loc-id>
+storescreens game-center achievement-images upload --localization-id <loc-id> --file ./first-blood.png
+storescreens game-center achievement-images update <id> --file-name new-name.png
+storescreens game-center achievement-images delete <id>
+```
+
+#### Achievement releases
+
+Staging records gate which achievements appear in a specific
+`gameCenterAppVersion`. Set `live: true` on a release to push the
+achievement out with that app version.
+
+```
+storescreens game-center achievement-releases list --app-version-id <gcav-id>
+storescreens game-center achievement-releases create \
+  --app-version-id <gcav-id> \
+  --achievement-id <id> \
+  --live true
+storescreens game-center achievement-releases update <id> --live false
+storescreens game-center achievement-releases delete <id>
+```
+
+### Leaderboards
+
+Same hosting model as achievements: attach to a gameCenterDetail or to a
+cross-app gameCenterGroup. Leaderboards carry sort + submission +
+recurrence configuration; localizations carry per-locale formatter
+overrides.
+
+```
+storescreens game-center leaderboards list --app-id 1234567890
+storescreens game-center leaderboards create \
+  --detail-id <gc-detail-id> \
+  --reference-name "Career High Score" \
+  --vendor-identifier high_score \
+  --submission-type BEST_SCORE \
+  --score-sort-type DESCENDING
+storescreens game-center leaderboards update <id> --submission-type MOST_RECENT_SCORE
+storescreens game-center leaderboards archive <id> [--no-archived]
+storescreens game-center leaderboards delete <id>
+```
+
+#### Leaderboard localizations and images
+
+```
+storescreens game-center leaderboard-localizations create \
+  --leaderboard-id <lb-id> \
+  --locale en-US \
+  --name "Career High Score" \
+  --formatter-suffix points \
+  --formatter-suffix-singular point
+storescreens game-center leaderboard-images upload --localization-id <loc-id> --file ./icon.png
+```
+
+#### Leaderboard releases
+
+```
+storescreens game-center leaderboard-releases create \
+  --app-version-id <gcav-id> \
+  --leaderboard-id <lb-id> \
+  --live true
+```
+
+### Leaderboard Sets
+
+Leaderboard sets group multiple leaderboards into one folder Game Center
+surfaces on-device.
+
+```
+storescreens game-center leaderboard-sets list --app-id 1234567890
+storescreens game-center leaderboard-sets create \
+  --detail-id <gc-detail-id> \
+  --reference-name "Weekly Standings" \
+  --vendor-identifier weekly_sets
+storescreens game-center leaderboard-sets archive <id>
+```
+
+#### Set localizations and images
+
+```
+storescreens game-center leaderboard-set-localizations create \
+  --set-id <set-id> \
+  --locale en-US \
+  --name "Weekly Standings"
+storescreens game-center leaderboard-set-images upload --localization-id <loc-id> --file ./set-icon.png
+```
+
+#### Set members
+
+Members wire a leaderboard into a set. The order of members controls the
+in-Game-Center display order; the `reorder` op rewrites the order in bulk.
+
+```
+storescreens game-center leaderboard-set-members list --set-id <set-id>
+storescreens game-center leaderboard-set-members create \
+  --set-id <set-id> \
+  --leaderboard-id <lb-id>
+storescreens game-center leaderboard-set-members reorder \
+  --set-id <set-id> \
+  <lb-id-1> <lb-id-2> <lb-id-3>
+storescreens game-center leaderboard-set-members delete <member-id>
+```
+
+Each member can carry per-locale name overrides, useful when the
+leaderboard's own name should display differently inside the set:
+
+```
+storescreens game-center leaderboard-set-member-localizations create \
+  --member-id <member-id> \
+  --locale en-US \
+  --name "Daily High Score"
+```
+
+#### Set releases
+
+```
+storescreens game-center leaderboard-set-releases create \
+  --app-version-id <gcav-id> \
+  --leaderboard-set-id <set-id> \
+  --live true
+```
+
+### Matchmaking
+
+Game Center matchmaking has four sub-resources hung off an app: queues,
+rule sets, rules, and team configurations. Queues reference a rule set;
+rule sets reference rules + team configurations. Apple also exposes
+`test-match` endpoints so you can validate a rule set or queue against a
+candidate request batch before promoting changes.
+
+```
+storescreens game-center matchmaking queues list --app-id 1234567890
+storescreens game-center matchmaking queues create \
+  --app-id 1234567890 \
+  --reference-name "Ranked Solo" \
+  --rule-set-id <rs-id>
+storescreens game-center matchmaking queues update <id> --experiment-rule-set-id <new-rs-id> --experiment-rule-set-traffic-share 25
+storescreens game-center matchmaking queues delete <id>
+storescreens game-center matchmaking queues test-match --queue-id <id> --from-file ./requests.json
+```
+
+Rule sets attach to queues:
+
+```
+storescreens game-center matchmaking rule-sets list --queue-id <q-id>
+storescreens game-center matchmaking rule-sets create \
+  --queue-id <q-id> \
+  --reference-name "Ranked v2" \
+  --min-players 2 \
+  --max-players 4 \
+  --teams 2
+storescreens game-center matchmaking rule-sets test-match --rule-set-id <rs-id> --from-file ./requests.json
+```
+
+Individual rules live under a rule set. Pass the rule expression inline
+with `--expression` or load a JSON DSL file with `--expression-from-file`:
+
+```
+storescreens game-center matchmaking rules list --rule-set-id <rs-id>
+storescreens game-center matchmaking rules create \
+  --rule-set-id <rs-id> \
+  --reference-name "Skill Tier" \
+  --type RULE \
+  --expression-from-file ./skill_tier.json \
+  --weight 1.0
+storescreens game-center matchmaking rules update <id> --weight 0.5
+```
+
+Team configurations gate how a rule set splits players across teams in a
+match:
+
+```
+storescreens game-center matchmaking team-configurations list --rule-set-id <rs-id>
+storescreens game-center matchmaking team-configurations create \
+  --rule-set-id <rs-id> \
+  --reference-name "Attack" \
+  --min-players 2 \
+  --max-players 4
+```
+
+### Common workflows
+
+#### Create a new achievement with localizations and an image
+
+```bash
+# 1. Locate (or look up) the gameCenterDetail attached to the app.
+storescreens game-center details get-for-app --app-id 1234567890 --json
+
+# 2. Create the achievement scoped to that detail.
+storescreens game-center achievements create \
+  --detail-id <gc-detail-id> \
+  --reference-name "First Blood" \
+  --vendor-identifier first_blood \
+  --points 25
+
+# 3. Add at least one locale entry.
+storescreens game-center achievement-localizations create \
+  --achievement-id <ach-id> \
+  --locale en-US \
+  --name "First Blood" \
+  --before-earned-description "Make your first kill." \
+  --after-earned-description "You drew first blood."
+
+# 4. Upload the achievement icon for that locale.
+storescreens game-center achievement-images upload \
+  --localization-id <loc-id> \
+  --file ./first-blood@2x.png
+```
+
+#### Stage a leaderboard release
+
+```bash
+# 1. Discover (or create) a gameCenterAppVersion for the target App Store version.
+storescreens game-center app-versions list --detail-id <gc-detail-id> --json
+
+# 2. Create a release record bringing the leaderboard live in that version.
+storescreens game-center leaderboard-releases create \
+  --app-version-id <gcav-id> \
+  --leaderboard-id <lb-id> \
+  --live true
+```
+
+#### Reorder leaderboards within a leaderboard set
+
+```bash
+storescreens game-center leaderboard-set-members reorder \
+  --set-id <set-id> \
+  <leaderboard-id-1> <leaderboard-id-2> <leaderboard-id-3>
+```
+
+The members keep their ids, only the `order` attribute on each is updated
+by Apple.
+
+#### Configure a matchmaking queue with a rule set
+
+```bash
+# 1. Create the rule set under the queue.
+storescreens game-center matchmaking rule-sets create \
+  --queue-id <q-id> \
+  --reference-name "Ranked v2" \
+  --min-players 2 --max-players 4 --teams 2
+
+# 2. Attach rules to the rule set.
+storescreens game-center matchmaking rules create \
+  --rule-set-id <rs-id> \
+  --reference-name "Skill" --type RULE \
+  --expression-from-file ./skill.json \
+  --weight 1.0
+
+# 3. Set the queue's active rule set so live traffic uses it.
+storescreens game-center matchmaking queues update <q-id> --rule-set-id <rs-id>
+
+# 4. Validate the new config against a recorded request batch before rollout.
+storescreens game-center matchmaking queues test-match \
+  --queue-id <q-id> --from-file ./candidate_requests.json
+```
+
+### MCP tool catalog
+
+Every CLI subcommand has a matching MCP tool with the same shape. Tools are
+namespaced under `gc_*` and return pretty-printed JSON in `content[0].text`.
+Errors set `isError: true` with the message in the text payload.
+
+- `gc_details_get_for_app`, `gc_details_get`, `gc_details_update`
+- `gc_app_versions_list`, `gc_app_versions_get`, `gc_app_versions_create`, `gc_app_versions_update`, `gc_app_versions_delete`
+- `gc_groups_list`, `gc_groups_get`, `gc_groups_create`, `gc_groups_update`, `gc_groups_delete`, `gc_groups_add_details`
+- `gc_group_localizations_list`, `gc_group_localizations_get`, `gc_group_localizations_create`, `gc_group_localizations_update`, `gc_group_localizations_delete`
+- `gc_achievements_list`, `gc_achievements_get`, `gc_achievements_create`, `gc_achievements_update`, `gc_achievements_archive`, `gc_achievements_delete`
+- `gc_achievement_localizations_list`, `gc_achievement_localizations_get`, `gc_achievement_localizations_create`, `gc_achievement_localizations_update`, `gc_achievement_localizations_delete`
+- `gc_achievement_images_list`, `gc_achievement_images_get`, `gc_achievement_images_upload`, `gc_achievement_images_update`, `gc_achievement_images_delete`
+- `gc_achievement_releases_list`, `gc_achievement_releases_get`, `gc_achievement_releases_create`, `gc_achievement_releases_update`, `gc_achievement_releases_delete`
+- `gc_leaderboards_list`, `gc_leaderboards_get`, `gc_leaderboards_create`, `gc_leaderboards_update`, `gc_leaderboards_archive`, `gc_leaderboards_delete`
+- `gc_leaderboard_localizations_list`, `gc_leaderboard_localizations_get`, `gc_leaderboard_localizations_create`, `gc_leaderboard_localizations_update`, `gc_leaderboard_localizations_delete`
+- `gc_leaderboard_images_list`, `gc_leaderboard_images_get`, `gc_leaderboard_images_upload`, `gc_leaderboard_images_update`, `gc_leaderboard_images_delete`
+- `gc_leaderboard_releases_list`, `gc_leaderboard_releases_get`, `gc_leaderboard_releases_create`, `gc_leaderboard_releases_update`, `gc_leaderboard_releases_delete`
+- `gc_leaderboard_sets_list`, `gc_leaderboard_sets_get`, `gc_leaderboard_sets_create`, `gc_leaderboard_sets_update`, `gc_leaderboard_sets_archive`, `gc_leaderboard_sets_delete`
+- `gc_leaderboard_set_localizations_list`, `gc_leaderboard_set_localizations_get`, `gc_leaderboard_set_localizations_create`, `gc_leaderboard_set_localizations_update`, `gc_leaderboard_set_localizations_delete`
+- `gc_leaderboard_set_images_list`, `gc_leaderboard_set_images_get`, `gc_leaderboard_set_images_upload`, `gc_leaderboard_set_images_update`, `gc_leaderboard_set_images_delete`
+- `gc_leaderboard_set_members_list`, `gc_leaderboard_set_members_get`, `gc_leaderboard_set_members_create`, `gc_leaderboard_set_members_delete`, `gc_leaderboard_set_members_reorder`
+- `gc_leaderboard_set_member_localizations_list`, `gc_leaderboard_set_member_localizations_get`, `gc_leaderboard_set_member_localizations_create`, `gc_leaderboard_set_member_localizations_update`, `gc_leaderboard_set_member_localizations_delete`
+- `gc_leaderboard_set_releases_list`, `gc_leaderboard_set_releases_get`, `gc_leaderboard_set_releases_create`, `gc_leaderboard_set_releases_update`, `gc_leaderboard_set_releases_delete`
+- `gc_matchmaking_queues_list`, `gc_matchmaking_queues_get`, `gc_matchmaking_queues_create`, `gc_matchmaking_queues_update`, `gc_matchmaking_queues_delete`, `gc_matchmaking_queues_test_match`
+- `gc_matchmaking_rule_sets_list`, `gc_matchmaking_rule_sets_get`, `gc_matchmaking_rule_sets_create`, `gc_matchmaking_rule_sets_update`, `gc_matchmaking_rule_sets_delete`, `gc_matchmaking_rule_sets_test_match`
+- `gc_matchmaking_rules_list`, `gc_matchmaking_rules_get`, `gc_matchmaking_rules_create`, `gc_matchmaking_rules_update`, `gc_matchmaking_rules_delete`
+- `gc_matchmaking_team_configurations_list`, `gc_matchmaking_team_configurations_get`, `gc_matchmaking_team_configurations_create`, `gc_matchmaking_team_configurations_update`, `gc_matchmaking_team_configurations_delete`
+
+### Pagination
+
+List endpoints return a `next-cursor` value when more pages are available.
+Pass it back via `--cursor` to fetch the next page. JSON output also
+includes a `nextCursor` field at the top level for machine consumers.
+
+```bash
+storescreens game-center achievements list --app-id 1234567890 --limit 50 --json | jq .nextCursor
+storescreens game-center achievements list --app-id 1234567890 --limit 50 --cursor "<value-from-jq>"
+```
+
+### Error handling
+
+Apple's API returns JSON:API error envelopes with `code`, `title`, and
+`detail`. The CLI prints these grouped under the HTTP status code; the
+MCP tools surface them as `isError: true` text content. 404 responses on
+`get` calls return `null` (not an error). 409 conflicts flow through
+`ASCClient.APIError.isAlreadySetConflict` so callers can treat
+"already-applied" outcomes as no-op successes.
+
+
+## Xcode Cloud
+
+`storescreens xcode-cloud ...` wraps the App Store Connect Xcode Cloud
+(CI/CD) endpoints so you can drive workflows, kick off builds, fetch
+artifacts, and inspect issues / test results from the command line.
+
+Every leaf subcommand accepts `--json` for machine-readable output. The
+same operations are exposed as MCP tools under the `xcc_*` namespace,
+so AI agents can drive Xcode Cloud through the storescreens MCP server
+without constructing raw HTTP requests.
+
+Requires App Store Connect API credentials. Run `storescreens auth
+login` once or set `ASC_KEY_ID`, `ASC_ISSUER_ID`, and `ASC_KEY_PATH`
+before any of the commands below.
+
+### Products
+
+Xcode Cloud products are the per-app (or per-framework) anchor for
+workflows. Apple creates them automatically when an Xcode project
+enables Xcode Cloud, so the API is read-only plus a detach.
+
+```bash
+storescreens xcode-cloud products list
+storescreens xcode-cloud products list --app-id 1234567890
+storescreens xcode-cloud products get <product-id>
+```
+
+### Workflows
+
+Full CRUD over workflow definitions. A workflow describes what Xcode
+Cloud should build, on which Xcode + macOS version, in response to
+which Git reference change (or schedule, or PR).
+
+```bash
+storescreens xcode-cloud workflows list --product-id <product-id>
+storescreens xcode-cloud workflows get <workflow-id>
+storescreens xcode-cloud workflows update <workflow-id> --is-enabled true
+storescreens xcode-cloud workflows delete <workflow-id>
+```
+
+Creating a workflow needs a product, a repository, an Xcode version,
+and a macOS version. Look those up first:
+
+```bash
+storescreens xcode-cloud xcode-versions list
+storescreens xcode-cloud mac-os-versions list
+storescreens xcode-cloud xcode-versions list-mac-os-versions \
+  --xcode-version-id <xcv-id>
+storescreens xcode-cloud scm-repositories list --ci-product-id <product-id>
+```
+
+Then create the workflow. Start conditions and actions are passed as
+raw JSON values matching Apple's documented JSON:API shapes (see the
+Apple docs at
+https://developer.apple.com/documentation/appstoreconnectapi/xcode_cloud_workflows_and_builds):
+
+```bash
+storescreens xcode-cloud workflows create \
+  --product-id <product-id> \
+  --repository-id <repo-id> \
+  --xcode-version-id <xcv-id> \
+  --mac-os-version-id <macv-id> \
+  --name "Nightly main" \
+  --description "Build + test main every night" \
+  --is-enabled true \
+  --scheduled-start-condition '{"source": {"days": ["MONDAY","WEDNESDAY","FRIDAY"], "hour": 3}}' \
+  --actions '[{"name":"Test","actionType":"TEST","destination":"ANY_IPHONE_SIMULATOR"}]'
+```
+
+### Build runs
+
+A build run is one execution of a workflow. List, fetch, start, cancel,
+or retry.
+
+Start a new build run from a branch or tag (`--git-reference-id` is an
+alias for `--source-branch-or-tag-id`):
+
+```bash
+storescreens xcode-cloud scm-git-references list --repository-id <repo-id>
+storescreens xcode-cloud build-runs start \
+  --workflow-id <workflow-id> \
+  --git-reference-id <ref-id>
+```
+
+Start a new build run from a pull request:
+
+```bash
+storescreens xcode-cloud scm-pull-requests list --repository-id <repo-id>
+storescreens xcode-cloud build-runs start \
+  --workflow-id <workflow-id> \
+  --pull-request-id <pr-id>
+```
+
+Cancel an in-progress build run:
+
+```bash
+storescreens xcode-cloud build-runs cancel <build-run-id>
+```
+
+Retry a finished build run (creates a new run from the same source
+commit + workflow):
+
+```bash
+storescreens xcode-cloud build-runs retry <build-run-id>
+```
+
+List recent runs, filter by status, or scope to one workflow:
+
+```bash
+storescreens xcode-cloud build-runs list --workflow-id <workflow-id>
+storescreens xcode-cloud build-runs list-for-workflow --workflow-id <workflow-id>
+storescreens xcode-cloud build-runs list-for-product --product-id <product-id>
+storescreens xcode-cloud build-runs list --source-commit-sha abc1234
+storescreens xcode-cloud build-runs get <build-run-id>
+```
+
+### Build actions
+
+A build action is one step inside a run (Build, Test, Archive, Analyze).
+Each action has its own status, issues, artifacts, and test results.
+
+```bash
+storescreens xcode-cloud build-actions list --build-run-id <run-id>
+storescreens xcode-cloud build-actions get <action-id>
+```
+
+### Artifacts
+
+Artifacts produced by a build action: `.xcarchive` zips,
+`.xcresult` bundles, log bundles. Each artifact carries a short-lived
+signed `downloadUrl`.
+
+List artifacts for an action, get an artifact's metadata, or download
+the artifact body to disk:
+
+```bash
+storescreens xcode-cloud artifacts list --build-action-id <action-id>
+storescreens xcode-cloud artifacts get <artifact-id>
+storescreens xcode-cloud artifacts download <artifact-id>
+storescreens xcode-cloud artifacts download <artifact-id> --output MyApp.xcarchive.zip
+```
+
+Download every artifact under an action in one call:
+
+```bash
+storescreens xcode-cloud artifacts download <action-id> --action-id
+```
+
+### Issues
+
+Compiler errors, analyzer warnings, and test failures surfaced by a
+build action.
+
+```bash
+storescreens xcode-cloud issues list --build-action-id <action-id>
+storescreens xcode-cloud issues get <issue-id>
+```
+
+### Test results
+
+Per-test result metadata: class name, test name, pass/fail status, plus
+per-destination (device + locale) breakdowns with assertion messages on
+failures.
+
+```bash
+storescreens xcode-cloud test-results list-for-build-action \
+  --build-action-id <action-id>
+storescreens xcode-cloud test-results list-for-product \
+  --product-id <product-id>
+storescreens xcode-cloud test-results get <test-result-id>
+```
+
+### macOS versions / Xcode versions
+
+Read-only catalogs of build environments Xcode Cloud supports. Pair the
+two to know which Xcode + macOS combinations are valid before creating
+a workflow.
+
+```bash
+storescreens xcode-cloud mac-os-versions list
+storescreens xcode-cloud xcode-versions list
+storescreens xcode-cloud xcode-versions list-mac-os-versions \
+  --xcode-version-id <xcv-id>
+```
+
+### SCM repositories
+
+Git repositories that have been linked to Xcode Cloud. Filter by
+product or provider.
+
+```bash
+storescreens xcode-cloud scm-repositories list
+storescreens xcode-cloud scm-repositories list --ci-product-id <product-id>
+storescreens xcode-cloud scm-repositories list --scm-provider-id <provider-id>
+storescreens xcode-cloud scm-repositories get <repo-id>
+```
+
+### SCM Git references
+
+Branches and tags that can trigger workflows. Pass `--kind BRANCH` or
+`--kind TAG` to filter.
+
+```bash
+storescreens xcode-cloud scm-git-references list --repository-id <repo-id>
+storescreens xcode-cloud scm-git-references list --repository-id <repo-id> --kind BRANCH
+storescreens xcode-cloud scm-git-references list --repository-id <repo-id> --kind TAG
+storescreens xcode-cloud scm-git-references get <ref-id>
+```
+
+### SCM pull requests
+
+Pull requests known to Apple's SCM integration. Used as the source for
+PR-triggered workflows.
+
+```bash
+storescreens xcode-cloud scm-pull-requests list --repository-id <repo-id>
+storescreens xcode-cloud scm-pull-requests get <pr-id>
+```
+
+### SCM providers
+
+GitHub, Bitbucket, GitLab integrations linked to Xcode Cloud.
+
+```bash
+storescreens xcode-cloud scm-providers list
+storescreens xcode-cloud scm-providers get <provider-id>
+```
+
+### Additional repositories
+
+Each product can have extra repositories attached beyond its primary
+one (e.g. a frameworks repo plus an app repo).
+
+```bash
+storescreens xcode-cloud product-additional-repositories list \
+  --product-id <product-id>
+storescreens xcode-cloud product-additional-repositories get <link-id>
+```
+
+### Common workflows
+
+Start a new build run from main:
+
+```bash
+# Find the workflow and its repository's git ref for "main":
+WF=$(storescreens xcode-cloud workflows list --product-id <product-id> --json \
+  | jq -r '.data[] | select(.attributes.name == "Nightly main") | .id')
+REPO=$(storescreens xcode-cloud scm-repositories list --ci-product-id <product-id> --json \
+  | jq -r '.data[0].id')
+REF=$(storescreens xcode-cloud scm-git-references list --repository-id $REPO --kind BRANCH --json \
+  | jq -r '.data[] | select(.attributes.name == "main") | .id')
+storescreens xcode-cloud build-runs start --workflow-id $WF --git-reference-id $REF
+```
+
+Cancel an in-progress build:
+
+```bash
+# Find the running run (executionProgress != COMPLETE).
+storescreens xcode-cloud build-runs list-for-workflow --workflow-id <workflow-id> --json \
+  | jq -r '.data[] | select(.attributes.executionProgress != "COMPLETE") | .id' \
+  | xargs -I{} storescreens xcode-cloud build-runs cancel {}
+```
+
+Download the archive artifact from the most recent successful run:
+
+```bash
+RUN=$(storescreens xcode-cloud build-runs list-for-workflow --workflow-id <workflow-id> --json \
+  | jq -r '[.data[] | select(.attributes.completionStatus == "SUCCEEDED")][0].id')
+ACTION=$(storescreens xcode-cloud build-actions list --build-run-id $RUN --json \
+  | jq -r '.data[] | select(.attributes.actionType == "ARCHIVE") | .id')
+storescreens xcode-cloud artifacts download $ACTION --action-id
+```
+
+List failing tests on the latest run for a workflow:
+
+```bash
+RUN=$(storescreens xcode-cloud build-runs list-for-workflow --workflow-id <workflow-id> --json \
+  | jq -r '.data[0].id')
+ACTION=$(storescreens xcode-cloud build-actions list --build-run-id $RUN --json \
+  | jq -r '.data[] | select(.attributes.actionType == "TEST") | .id')
+storescreens xcode-cloud test-results list-for-build-action --build-action-id $ACTION --json \
+  | jq -r '.data[] | select(.attributes.status == "FAILURE") | "\(.attributes.className).\(.attributes.name)"'
+```
+
+
+## Alternative Distribution (EU DMA)
+
+Wraps the App Store Connect Alternative Distribution endpoints for developers
+shipping iOS apps outside the App Store via approved EU marketplaces or
+developer-direct distribution. This surface implements the EU Digital Markets
+Act mandate Apple exposes through ASC.
+
+This is a niche surface. It is **only** relevant if you have registered for
+Apple's EU Alternative Distribution program. Standard App Store distribution
+does not use these endpoints, and outside the EU these workflows do not apply.
+
+All commands resolve credentials via `storescreens auth login` or the
+`ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH` environment variables. Every
+leaf subcommand accepts `--json` for machine-readable output. The same
+operations are exposed as MCP tools under the `altdist_*` namespace.
+
+### Quick workflow
+
+A typical end-to-end alternative distribution flow looks like this:
+
+```bash
+# 1. Register your verified distribution domain (one-time).
+storescreens alt-dist domains create \
+    --domain downloads.example.com \
+    --referrer https://example.com
+
+# 2. Register your public signing key (one-time, or whenever you rotate keys).
+storescreens alt-dist keys create --from-file pubkey.pem
+
+# 3. Create the per-app package container (one-time per app).
+storescreens alt-dist packages create --app-id 1234567890
+
+# 4. For each new release: create a version pointing at your hosted binary.
+storescreens alt-dist package-versions create \
+    --package-id <pkg-id> \
+    --url https://downloads.example.com/myapp-1.2.0.ipa \
+    --version 1.2.0
+
+# 5. Poll until Apple has finished notarizing (CREATED -> COMPLETED).
+storescreens alt-dist package-versions validate <version-id>
+
+# 6. Activate the version to make it live.
+storescreens alt-dist package-versions activate <version-id>
+
+# 7. (Optional) Subscribe to install/uninstall webhook events.
+storescreens alt-dist marketplace webhooks create \
+    --url https://example.com/webhooks/asc \
+    --secret <hmac-shared-secret>
+```
+
+### alternativeDistributionKeys
+
+Manage the developer-side public signing keys Apple uses to verify
+distribution packages. Apple stores only the public half; keep the private
+key local.
+
+```bash
+storescreens alt-dist keys list
+storescreens alt-dist keys get <id>
+storescreens alt-dist keys create --from-file pubkey.pem
+storescreens alt-dist keys update <id> --from-file rotated-pubkey.pem
+storescreens alt-dist keys delete <id>
+```
+
+MCP tools: `altdist_keys_list`, `altdist_keys_get`, `altdist_keys_create`,
+`altdist_keys_update`, `altdist_keys_delete`.
+
+### alternativeDistributionPackages
+
+Per-app package container. There is typically one package per app; the
+container hangs the version slices off the app.
+
+```bash
+storescreens alt-dist packages list --app-id 1234567890
+storescreens alt-dist packages get <id>
+storescreens alt-dist packages create --app-id 1234567890
+storescreens alt-dist packages delete <id>
+```
+
+MCP tools: `altdist_packages_list`, `altdist_packages_get`,
+`altdist_packages_create`, `altdist_packages_delete`.
+
+### alternativeDistributionPackageVersions
+
+Each binary version of a package, with the Apple-managed state machine:
+`CREATED` -> `COMPLETED` -> `ENABLED` / `DISABLED`, with `REPLACED` for
+versions that have been superseded.
+
+```bash
+storescreens alt-dist package-versions list --package-id <pkg-id>
+storescreens alt-dist package-versions list --package-id <pkg-id> --state ENABLED
+storescreens alt-dist package-versions get <id>
+storescreens alt-dist package-versions create \
+    --package-id <pkg-id> \
+    --url https://downloads.example.com/myapp-1.2.0.ipa \
+    --version 1.2.0
+storescreens alt-dist package-versions update <id> --state DISABLED
+storescreens alt-dist package-versions delete <id>
+
+# State-transition shortcuts:
+storescreens alt-dist package-versions activate <id>   # state -> ENABLED
+storescreens alt-dist package-versions disable <id>    # state -> DISABLED
+storescreens alt-dist package-versions validate <id>   # poll current state
+```
+
+MCP tools: `altdist_package_versions_list`, `altdist_package_versions_get`,
+`altdist_package_versions_create`, `altdist_package_versions_update`,
+`altdist_package_versions_delete`, `altdist_package_versions_activate`,
+`altdist_package_versions_disable`, `altdist_package_versions_validate`.
+
+### alternativeDistributionPackageDeltas
+
+Read-only binary diffs between two package versions. Apple computes these
+automatically so end users don't redownload the full binary on every update.
+
+```bash
+storescreens alt-dist package-deltas list --version-id <version-id>
+storescreens alt-dist package-deltas get <id>
+```
+
+MCP tools: `altdist_package_deltas_list`, `altdist_package_deltas_get`.
+
+### alternativeDistributionPackageVariants
+
+Read-only per-architecture/variant slices of a single package version (e.g.
+arm64, simulator). Apple derives these from the uploaded binary.
+
+```bash
+storescreens alt-dist package-variants list --version-id <version-id>
+storescreens alt-dist package-variants get <id>
+```
+
+MCP tools: `altdist_package_variants_list`, `altdist_package_variants_get`.
+
+### alternativeDistributionDomains
+
+The developer's verified distribution domain(s). Apple verifies ownership
+before accepting download URLs that point at this domain.
+
+```bash
+storescreens alt-dist domains list
+storescreens alt-dist domains get <id>
+storescreens alt-dist domains create \
+    --domain downloads.example.com \
+    --referrer https://example.com
+storescreens alt-dist domains update <id> --referrer https://www.example.com
+storescreens alt-dist domains delete <id>
+```
+
+MCP tools: `altdist_domains_list`, `altdist_domains_get`,
+`altdist_domains_create`, `altdist_domains_update`, `altdist_domains_delete`.
+
+### marketplaceSearchDetails
+
+Per-app marketplace catalog metadata: subtitle, support / privacy / marketing
+URLs, seller name, and optional age-band bounds. Appears when the app shows
+up in a marketplace's search results.
+
+```bash
+storescreens alt-dist marketplace search get --app-id 1234567890
+storescreens alt-dist marketplace search update <id> \
+    --subtitle "The fastest notes app on iOS" \
+    --privacy-policy-url https://example.com/privacy \
+    --customer-support-url https://example.com/support \
+    --marketing-url https://example.com \
+    --seller-name "Example Corp"
+```
+
+MCP tools: `altdist_marketplace_search_get`,
+`altdist_marketplace_search_update`.
+
+### marketplaceWebhooks
+
+Subscribe to distribution event callbacks. Apple POSTs install / uninstall /
+package version state changes to the URL you register. The shared `secret`
+is used as an HMAC key Apple signs each payload with so the receiver can
+verify authenticity.
+
+```bash
+storescreens alt-dist marketplace webhooks list
+storescreens alt-dist marketplace webhooks get <id>
+storescreens alt-dist marketplace webhooks create \
+    --url https://example.com/webhooks/asc \
+    --secret <hmac-shared-secret>
+storescreens alt-dist marketplace webhooks update <id> --url https://new-host/hook
+storescreens alt-dist marketplace webhooks delete <id>
+```
+
+MCP tools: `altdist_marketplace_webhooks_list`,
+`altdist_marketplace_webhooks_get`, `altdist_marketplace_webhooks_create`,
+`altdist_marketplace_webhooks_update`, `altdist_marketplace_webhooks_delete`.
+
+### Notes
+
+- Pagination: every `list` endpoint accepts `--limit` and `--cursor`. The
+  response prints `next-cursor: <value>` when there are more pages; feed
+  that back in on the next call.
+- 404 handling: every `get` endpoint returns `null` (or warns and exits 0
+  in text mode) on a missing resource rather than throwing.
+- 409 handling: the shared `APIError.isAlreadySetConflict` check applies so
+  re-running an `activate` on an already-enabled version surfaces as a
+  recognisable conflict rather than an opaque HTTP 409.
+- Docs:
+  <https://developer.apple.com/documentation/appstoreconnectapi> (Alternative
+  Distribution section).
+
+
+## Apple Pay, sandbox testers, and other small ASC resources
+
+Wraps a grab-bag of small App Store Connect resources that don't fit
+elsewhere: Apple Pay (pass type identifiers, certificates, merchant
+domains), sandbox testers, resource limits, app hashes, and Xcode
+Instruments diagnostic sessions. Each is exposed as a `storescreens`
+sub-command and as MCP tools that AI agents can call directly.
+
+All commands require ASC credentials: run `storescreens auth login` or
+set `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH` in your environment.
+
+### Apple Pay
+
+`storescreens apple-pay` wraps three Apple Pay resources: `passTypeIds`
+(the dotted identifiers like `pass.com.example.myapp` that Wallet uses
+to namespace passes), `passTypeIdCertificates` (the signed certificates
+you use to sign `.pkpass` bundles), and `merchantDomains` (the Apple
+Pay on the Web domains the team has claimed).
+
+#### Pass type identifiers
+
+```bash
+# List pass type IDs on the team
+storescreens apple-pay pass-type-ids list
+
+# Register a new one
+storescreens apple-pay pass-type-ids create \
+    --identifier pass.com.example.myapp \
+    --name "MyApp Boarding Passes"
+
+# Rename the display label (the dotted identifier is immutable)
+storescreens apple-pay pass-type-ids update <pass-type-id> --name "New label"
+
+# Delete (Apple blocks deletion if any certificates still reference the id)
+storescreens apple-pay pass-type-ids delete <pass-type-id>
+```
+
+#### Pass type ID certificates
+
+Apple signs your CSR using the pass type id's seed material and returns
+a `.cer` you can use to sign `.pkpass` payloads. Generate the CSR with
+openssl, base64-encode it, and submit:
+
+```bash
+# 1. Generate a CSR (one time per pass type id)
+openssl req -new -newkey rsa:2048 -nodes \
+    -keyout passkey.pem \
+    -out pass.csr \
+    -subj "/CN=Pass Type ID Certificate/O=Example Co/C=US"
+
+# 2. Base64-encode the CSR
+base64 -i pass.csr -o pass.csr.b64
+
+# 3. Submit to Apple
+storescreens apple-pay certificates create \
+    --pass-type-id <pass-type-id-database-id> \
+    --csr-file pass.csr.b64
+
+# 4. List certs against this pass type id
+storescreens apple-pay certificates list <pass-type-id-database-id>
+
+# 5. Extract the certificate content from a get call
+storescreens apple-pay certificates get <cert-id> --json | \
+    jq -r .attributes.certificateContent | base64 -d > pass.cer
+
+# 6. Revoke an expired or compromised cert
+storescreens apple-pay certificates delete <cert-id>
+```
+
+#### Merchant domains (Apple Pay on the Web)
+
+Apple won't trust your domain for Apple Pay on the Web until you've
+both claimed it via the API and served the well-known association file
+at `/.well-known/apple-developer-merchantid-domain-association`:
+
+```bash
+# 1. Claim the domain
+storescreens apple-pay merchant-domains create --domain shop.example.com
+
+# 2. Host the association file on the domain (Apple gives this to you
+#    in the developer portal under "Identifiers > Merchant IDs")
+
+# 3. Trigger Apple to verify
+storescreens apple-pay merchant-domains validate <domain-id>
+
+# 4. Check verification state
+storescreens apple-pay merchant-domains list
+# Look for domainState: VERIFIED or VERIFY_FAILED
+```
+
+### Sandbox testers
+
+`storescreens sandbox` covers Apple's synthetic test accounts for IAP
+sandbox flows. Apple does NOT let you create or delete sandbox testers
+via the API, that's done in the App Store Connect web UI under
+"Users and Access > Sandbox > Testers". This wrapper exposes only the
+read + per-tester action endpoints.
+
+Apple also intentionally hides tester emails and passwords from the
+API response, only first name, last name, territory, locale, and the
+subscription renewal rate are surfaced.
+
+#### Listing and inspecting testers
+
+```bash
+storescreens sandbox testers list
+storescreens sandbox testers list --territory USA
+storescreens sandbox testers list --renewal-rate FIVE_MINUTES
+storescreens sandbox testers get <tester-id>
+```
+
+#### Clearing a tester's purchase history
+
+Useful when you want to re-run an IAP flow that gates on prior purchase
+state:
+
+```bash
+storescreens sandbox testers clear-history <tester-id>
+```
+
+Apple processes the clear asynchronously; the side effect lands within
+a few seconds.
+
+#### Speeding up subscription renewals
+
+Sandbox testers can simulate renewals at accelerated rates so you can
+walk a renewal flow in minutes instead of months:
+
+```bash
+# Trigger renewals every 5 minutes (production timing is REAL_TIME)
+storescreens sandbox testers modify-renewal-rate <tester-id> \
+    --rate FIVE_MINUTES
+```
+
+Valid rates: `REAL_TIME`, `ONE_TIME`, `ONE_HOUR`, `THIRTY_MINUTES`,
+`FIFTEEN_MINUTES`, `FIVE_MINUTES`.
+
+#### Sandbox tester apps
+
+Inspect which sandbox testers have access to a specific app:
+
+```bash
+storescreens sandbox apps list <app-id>
+storescreens sandbox apps get <junction-id>
+```
+
+### Resource limits
+
+Read-only quota records for the team: max apps, max in-app purchases
+per app, max users per team, etc. Useful as a precursor to "can I
+create another app on this team?" workflows.
+
+```bash
+# Check your team's quotas
+storescreens resource-limits list
+
+# Inspect a single quota record
+storescreens resource-limits get <limit-id>
+```
+
+Common `limitType` values: `MAX_APPS_PER_TEAM`,
+`MAX_IN_APP_PURCHASES_PER_APP`, `MAX_USERS_PER_TEAM`.
+
+### App hashes
+
+Cryptographic hash records Apple emits during identifier or signing
+migrations. Teams typically have a single record per app.
+
+```bash
+storescreens resource-limits app-hashes list <app-id>
+storescreens resource-limits app-hashes get <hash-id>
+```
+
+### Diagnostic sessions
+
+`storescreens diagnostic-sessions` wraps Apple's
+`profileDiagnosticSessions` resource: per-build app sessions Xcode
+Instruments uses for power and performance diagnostics. Each session
+is scoped to one build + device-family pair; spin up multiple sessions
+to compare across iPhone, iPad, etc.
+
+Related metrics (read-only): the per-app + per-build `perfPowerMetrics`
+and `diagnosticSignatures` resources live under
+`storescreens reports perf-power-metrics` and
+`storescreens reports diagnostic-signatures` (covered separately
+because they share infrastructure with the sales / finance / analytics
+reporting endpoints).
+
+#### Lifecycle
+
+```bash
+# Start a session against a build
+storescreens diagnostic-sessions create \
+    --build-id <build-id> \
+    --device-family IPHONE \
+    --name "Launch perf 1.2.0"
+
+# List sessions for an app (optionally filter by state)
+storescreens diagnostic-sessions list <app-id>
+storescreens diagnostic-sessions list <app-id> --state IN_PROGRESS
+
+# Inspect one
+storescreens diagnostic-sessions get <session-id>
+
+# Stop collecting samples
+storescreens diagnostic-sessions complete <session-id>
+
+# Delete a session record (sampled metrics stay on the build)
+storescreens diagnostic-sessions delete <session-id>
+```
+
+Sessions left in `IN_PROGRESS` indefinitely still time out on Apple's
+side after a few hours, but completing them explicitly frees the slot
+sooner.
+
 ## App Store Connect Screenshot Sizes
 
 StoreScreens labels devices by physical screen dimension (6.9", 6.3", etc.). Here's how those map to what App Store Connect requires:

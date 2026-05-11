@@ -114,6 +114,10 @@ struct StorescreensMCP {
         + ReportsMCPTools.tools
         + UsersAndDevPortalMCPTools.tools
         + MarketingMCPTools.tools
+        + GameCenterMCPTools.tools
+        + XcodeCloudMCPTools.tools
+        + AltDistributionMCPTools.tools
+        + ApplePayAndMiscMCPTools.tools
 
     static let baseTools: [Tool] = [
         Tool(
@@ -365,6 +369,18 @@ struct StorescreensMCP {
             }
             if MarketingMCPTools.tools.contains(where: { $0.name == params.name }) {
                 return try await MarketingMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("gc_") {
+                return try await GameCenterMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("xcc_") {
+                return try await XcodeCloudMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("altdist_") {
+                return try await AltDistributionMCPTools.handle(params)
+            }
+            if ApplePayAndMiscMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await ApplePayAndMiscMCPTools.handle(params)
             }
 
             // Built-in capture / render / preview tools.

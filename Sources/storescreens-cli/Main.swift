@@ -29,6 +29,11 @@ struct StoreScreensCLI: AsyncParsableCommand {
             PreviewsCommand.self, AppClipsCommand.self, CustomProductPagesCommand.self,
             EventsCommand.self, ExperimentsCommand.self, EncryptionDeclCommand.self,
             RoutingCoverageCommand.self,
+            // ASC API Wave 2 (added 2026-05): Game Center, Xcode Cloud, EU alt-distribution,
+            // Apple Pay + sandbox testers + resource limits + diagnostic sessions
+            GameCenterCommand.self, XcodeCloudCommand.self, AltDistributionCommand.self,
+            ApplePayCommand.self, SandboxCommand.self, ResourceLimitsCommand.self,
+            DiagnosticSessionsCommand.self,
         ]
     )
 
