@@ -101,7 +101,21 @@ struct StorescreensMCP {
 
     // MARK: - Tool Definitions
 
-    static let tools: [Tool] = [
+    /// All tools exposed by the MCP server: the built-in capture/render/preview
+    /// tools defined in this file plus every family of ASC API tools defined
+    /// alongside this file in `Tools/`. Each family's tools are appended in a
+    /// stable order; the dispatch code further down routes incoming calls to
+    /// the matching family handler.
+    static let tools: [Tool] = baseTools
+        + TestFlightMCPTools.tools
+        + InAppPurchasesMCPTools.tools
+        + SubscriptionsMCPTools.tools
+        + CustomerReviewsMCPTools.tools
+        + ReportsMCPTools.tools
+        + UsersAndDevPortalMCPTools.tools
+        + MarketingMCPTools.tools
+
+    static let baseTools: [Tool] = [
         Tool(
             name: "capture",
             description: """
@@ -332,6 +346,28 @@ struct StorescreensMCP {
 
     static func handle(_ params: CallTool.Parameters, server: Server) async -> CallTool.Result {
         do {
+            // ASC API families. Each family handler dispatches its own
+            // tool names internally; routing here is by either a prefix
+            // check or a Result? convention (nil = unrecognised).
+            if let r = try await CustomerReviewsMCPTools.handle(params) { return r }
+            if let r = try await UsersAndDevPortalMCPTools.handle(params) { return r }
+            if params.name.hasPrefix("testflight_") {
+                return try await TestFlightMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("iap_") {
+                return try await InAppPurchasesMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("subs_") {
+                return try await SubscriptionsMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("reports_") {
+                return try await ReportsMCPTools.handle(params)
+            }
+            if MarketingMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await MarketingMCPTools.handle(params)
+            }
+
+            // Built-in capture / render / preview tools.
             switch params.name {
             case "capture":             return try await handleCapture(params)
             case "get_capture_status":  return await handleGetCaptureStatus(params)

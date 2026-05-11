@@ -1510,6 +1510,1607 @@ When a bump is required, it rewrites the `project.pbxproj` in place (every confi
 
 Full schema (every field + defaults, ExportOptions.plist generation, altool flow, version resolver rules, troubleshooting): run `storescreens upload-build --help` and `storescreens upload-build init --help`.
 
+## App Store Connect API coverage
+
+storescreens wraps Apple's App Store Connect API as both CLI subcommands and MCP tools, so an AI agent driving storescreens never needs to construct raw HTTPS requests. Credentials resolve once via `~/.storescreens/asc-credentials.yml` (or the `ASC_*` env vars) and are reused across every family below.
+
+Every operation is reachable from two surfaces:
+
+- **CLI**: nested subcommand trees like `storescreens testflight beta-groups list`, `storescreens iap purchases create`, `storescreens reports sales --frequency DAILY`. Every leaf supports `--json` for machine-readable output.
+- **MCP**: snake_case tool names like `testflight_beta_groups_list`, `iap_in_app_purchases_create`, `reports_sales_get`. The full catalog (267 new tools across 7 families) is auto-exposed via `tools/list`.
+
+Read-only operations (lookups, listings, GETs) are safe to call freely; write operations (POST/PATCH/DELETE) act on live App Store Connect data, so review the dry-run flow of `submit` for the surface you're editing.
+
+## TestFlight
+
+`storescreens testflight` wraps the App Store Connect TestFlight & pre-release distribution API as nested subcommands. The same operations are exposed as MCP tools under the `testflight_*` namespace so AI agents driving storescreens never need to construct raw ASC HTTP requests for beta workflows.
+
+Credentials are resolved through the same path as the rest of the App Store Connect features (`storescreens auth login` or `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH` env vars). Every leaf subcommand accepts `--json` for machine-readable output. List endpoints accept `--limit` and `--cursor`, and return a `next-cursor` value when more pages are available.
+
+### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `betaGroups` | Lists of internal or external testers | `beta-groups` |
+| `betaTesters` | Individual TestFlight testers | `beta-testers` |
+| `betaTesterInvitations` | Re-send the TF invite email | `beta-tester-invitations` |
+| `prereleaseVersions` | Read-only build trains | `prerelease-versions` |
+| `builds` | List, get, expire builds | `builds` |
+| `buildBetaDetails` | Per-build auto-notify, internal/external state | `build-beta-detail` |
+| `buildBetaNotifications` | Push "new build" emails | `build-beta-notifications` |
+| `betaAppLocalizations` | Per-locale TestFlight App Information card | `beta-app-localizations` |
+| `betaBuildLocalizations` | Per-locale "What to Test" notes per build | `beta-build-localizations` |
+| `betaAppReviewDetails` | TF beta-review contact info, demo account | `beta-app-review-detail` |
+| `betaAppReviewSubmissions` | Submit a build for Beta App Review | `beta-app-review-submissions` |
+| `betaLicenseAgreements` | The TF EULA testers accept | `beta-license-agreement` |
+| `betaTesterMetrics` | Read-only install/launch counts | `beta-tester-metrics` |
+| `buildBundles` | Read-only primary `.app` + extensions/clips | `build-bundles` |
+| `buildIcons` | Read-only per-build icon images | `build-icons` |
+
+### CLI command catalog
+
+```
+storescreens testflight beta-groups list --app-id 1234567890 [--limit 200] [--cursor C] [--json]
+storescreens testflight beta-groups get <id> [--json]
+storescreens testflight beta-groups create --app-id 1234567890 --name "Beta Squad" [--feedback-enabled true] [--public-link-enabled true]
+storescreens testflight beta-groups update <id> [--name N] [--feedback-enabled B] [--public-link-enabled B]
+storescreens testflight beta-groups delete <id>
+storescreens testflight beta-groups add-builds --group-id G B1 B2 ...
+storescreens testflight beta-groups remove-builds --group-id G B1 B2 ...
+storescreens testflight beta-groups add-testers --group-id G T1 T2 ...
+storescreens testflight beta-groups remove-testers --group-id G T1 T2 ...
+storescreens testflight beta-groups create-and-invite --app-id A --name N T1 T2 ...
+
+storescreens testflight beta-testers list --app-id 1234567890 [--json]
+storescreens testflight beta-testers get <id> [--json]
+storescreens testflight beta-testers create --app-id A --email foo@bar.com [--first-name F] [--last-name L] [--beta-group-ids G1 G2]
+storescreens testflight beta-testers delete <id>
+storescreens testflight beta-testers remove-from-app --tester-id T --app-id A
+storescreens testflight beta-testers assign-to-groups --tester-id T G1 G2 ...
+storescreens testflight beta-testers remove-from-groups --tester-id T G1 G2 ...
+
+storescreens testflight beta-tester-invitations create --tester-id T --app-id A
+
+storescreens testflight prerelease-versions list --app-id A [--platform IOS] [--json]
+storescreens testflight prerelease-versions get <id> [--json]
+
+storescreens testflight builds list [--app-id A] [--expired B] [--processing-state VALID] [--prerelease-version-id V] [--json]
+storescreens testflight builds get <id> [--json]
+storescreens testflight builds set-expired <id> [--expired | --no-expired]
+
+storescreens testflight build-beta-detail get --build-id B [--json]
+storescreens testflight build-beta-detail update <id> [--auto-notify | --no-auto-notify]
+storescreens testflight build-beta-notifications create --build-id B
+
+storescreens testflight beta-app-localizations list --app-id A [--json]
+storescreens testflight beta-app-localizations get <id>
+storescreens testflight beta-app-localizations create --app-id A --locale en-US [--description D] [--feedback-email E]
+storescreens testflight beta-app-localizations update <id> [--description D] [--feedback-email E]
+storescreens testflight beta-app-localizations delete <id>
+
+storescreens testflight beta-build-localizations list --build-id B [--json]
+storescreens testflight beta-build-localizations get <id>
+storescreens testflight beta-build-localizations create --build-id B --locale en-US [--whats-new "Fixed bug X"]
+storescreens testflight beta-build-localizations update <id> [--whats-new N]
+storescreens testflight beta-build-localizations delete <id>
+
+storescreens testflight beta-app-review-detail get --app-id A [--json]
+storescreens testflight beta-app-review-detail update <id> [--contact-first-name F] [--contact-last-name L] [--contact-email E] [--notes N]
+
+storescreens testflight beta-app-review-submissions list --app-id A [--json]
+storescreens testflight beta-app-review-submissions get <id>
+storescreens testflight beta-app-review-submissions create --build-id B
+
+storescreens testflight beta-license-agreement get --app-id A [--json]
+storescreens testflight beta-license-agreement update <id> --from-file ./eula.txt
+
+storescreens testflight beta-tester-metrics list --app-id A [--json]
+
+storescreens testflight build-bundles list --build-id B [--json]
+storescreens testflight build-bundles get <id>
+
+storescreens testflight build-icons list --build-id B [--json]
+```
+
+### MCP tool catalog
+
+Every CLI subcommand has a matching MCP tool with the same shape:
+
+- `testflight_beta_groups_list`, `testflight_beta_groups_get`, `testflight_beta_groups_create`, `testflight_beta_groups_update`, `testflight_beta_groups_delete`, `testflight_beta_groups_add_builds`, `testflight_beta_groups_remove_builds`, `testflight_beta_groups_add_testers`, `testflight_beta_groups_remove_testers`, `testflight_beta_groups_create_and_invite`
+- `testflight_beta_testers_list`, `testflight_beta_testers_get`, `testflight_beta_testers_create`, `testflight_beta_testers_delete`, `testflight_beta_testers_remove_from_app`, `testflight_beta_testers_assign_to_groups`, `testflight_beta_testers_remove_from_groups`
+- `testflight_beta_tester_invitations_create`
+- `testflight_prerelease_versions_list`, `testflight_prerelease_versions_get`
+- `testflight_builds_list`, `testflight_builds_get`, `testflight_builds_set_expired`
+- `testflight_build_beta_detail_get`, `testflight_build_beta_detail_update`
+- `testflight_build_beta_notifications_create`
+- `testflight_beta_app_localizations_list`, `testflight_beta_app_localizations_get`, `testflight_beta_app_localizations_create`, `testflight_beta_app_localizations_update`, `testflight_beta_app_localizations_delete`
+- `testflight_beta_build_localizations_list`, `testflight_beta_build_localizations_get`, `testflight_beta_build_localizations_create`, `testflight_beta_build_localizations_update`, `testflight_beta_build_localizations_delete`
+- `testflight_beta_app_review_detail_get`, `testflight_beta_app_review_detail_update`
+- `testflight_beta_app_review_submissions_list`, `testflight_beta_app_review_submissions_get`, `testflight_beta_app_review_submissions_create`
+- `testflight_beta_license_agreement_get`, `testflight_beta_license_agreement_update`
+- `testflight_beta_tester_metrics_list`
+- `testflight_build_bundles_list`, `testflight_build_bundles_get`
+- `testflight_build_icons_list`
+
+MCP tools return pretty-printed JSON text content. Errors surface as `isError: true` with the App Store Connect status code and any error details from Apple's envelope.
+
+### Common workflows
+
+#### Push a new build to external testers
+
+```bash
+# 1. Find the new build by its app and processing state.
+storescreens testflight builds list --app-id 1234567890 --processing-state VALID --json
+
+# 2. Submit it for Beta App Review (required before external distribution).
+storescreens testflight beta-app-review-submissions create --build-id ABCDEF123
+
+# 3. After Apple approves (poll the submission state), attach the build to the
+#    external beta group and send notifications.
+storescreens testflight beta-groups add-builds --group-id GROUP_ID ABCDEF123
+storescreens testflight build-beta-notifications create --build-id ABCDEF123
+```
+
+#### Add a new beta tester to a group
+
+```bash
+# Create the tester record on the app and assign them to a group in one call.
+storescreens testflight beta-testers create \
+  --app-id 1234567890 \
+  --email tester@example.com \
+  --first-name Alex \
+  --last-name Tester \
+  --beta-group-ids GROUP_ID_1 GROUP_ID_2
+```
+
+If the tester already exists and needs to be moved into a group:
+
+```bash
+storescreens testflight beta-testers assign-to-groups --tester-id T123 GROUP_ID_1
+```
+
+#### Resend a TestFlight invitation
+
+```bash
+storescreens testflight beta-tester-invitations create --tester-id T123 --app-id 1234567890
+```
+
+#### Curate which build TestFlight surfaces
+
+```bash
+# Disable auto-notify on a build that's still being smoke-tested internally.
+storescreens testflight build-beta-detail get --build-id ABCDEF123 --json
+# Use the returned id (NOT the build id) with update.
+storescreens testflight build-beta-detail update DETAIL_ID --no-auto-notify
+
+# Once the build is bad, retire it so testers stop seeing it.
+storescreens testflight builds set-expired ABCDEF123 --expired
+```
+
+#### Localize the TestFlight install card
+
+```bash
+# Per-locale TestFlight App Information (description, feedback email).
+storescreens testflight beta-app-localizations create \
+  --app-id 1234567890 \
+  --locale ja \
+  --description "新機能をお試しください" \
+  --feedback-email beta@example.com
+
+# Per-locale What to Test notes attached to a specific build.
+storescreens testflight beta-build-localizations create \
+  --build-id ABCDEF123 \
+  --locale ja \
+  --whats-new "プッシュ通知のバグ修正"
+```
+
+### Pagination
+
+List endpoints return a `next-cursor` value when more pages are available. Pass it back via `--cursor` to fetch the next page. JSON output also includes a `nextCursor` field at the top level for machine consumers.
+
+```bash
+storescreens testflight beta-testers list --app-id 1234567890 --limit 50 --json | jq .nextCursor
+storescreens testflight beta-testers list --app-id 1234567890 --limit 50 --cursor "<value-from-jq>"
+```
+
+### Error handling
+
+Apple's API returns JSON:API error envelopes with `code`, `title`, and `detail`. The CLI prints these grouped under the HTTP status code; the MCP tools surface them as `isError: true` text content. 404 responses on `get` calls return `null` (not an error). 409 conflicts (e.g. attempting to add a build that's already in a group) flow through `ASCClient.APIError.isAlreadySetConflict` so callers can treat them as no-op successes.
+
+
+## In-App Purchases
+
+storescreens wraps the App Store Connect In-App Purchases V2 API so AI agents and humans can configure, price, and submit IAPs without crafting raw HTTP requests. This pass covers the V2 surface only (Apple deprecated V1 in 2023). Auto-renewing subscriptions live under a separate `subscriptionGroups` family and are not part of this wrapper, the `iap` commands handle CONSUMABLE, NON_CONSUMABLE, and NON_RENEWING_SUBSCRIPTION product types.
+
+### Resources covered
+
+| Resource | Operations |
+| --- | --- |
+| `inAppPurchases` (V2) | list, get, create, update, delete |
+| `inAppPurchaseLocalizations` | list, get, create, update, delete |
+| `inAppPurchasePricePoints` | list, get (read-only catalog) |
+| `inAppPurchasePriceSchedules` | get, set |
+| `inAppPurchaseSubmissions` | list, get, create |
+| `inAppPurchaseContentHostings` | get, update |
+| `inAppPurchaseImages` | list, get, upload, update, delete |
+| `inAppPurchaseAppStoreReviewScreenshots` | get, upload, update, delete |
+| `inAppPurchasePromotionalImages` | list, upload, delete |
+| `promotedPurchases` | list, update |
+| `promotedPurchaseImages` | list, upload, update, delete |
+
+### MCP tool catalog
+
+Tools are namespaced under `iap_*` and return pretty-printed JSON in `content[0].text`. Errors set `isError: true` with the message in the text payload. Credentials are resolved from `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH` env vars or `~/.storescreens/asc-credentials.yml`, so tool arguments never carry key material.
+
+Purchases:
+- `iap_in_app_purchases_list`
+- `iap_in_app_purchases_get`
+- `iap_in_app_purchases_create`
+- `iap_in_app_purchases_update`
+- `iap_in_app_purchases_delete`
+
+Localizations:
+- `iap_localizations_list`
+- `iap_localizations_get`
+- `iap_localizations_create`
+- `iap_localizations_update`
+- `iap_localizations_delete`
+
+Price points (read-only):
+- `iap_price_points_list`
+- `iap_price_points_get`
+
+Pricing:
+- `iap_price_schedule_get`
+- `iap_price_schedule_set`
+
+Submissions:
+- `iap_submission_list`
+- `iap_submission_get`
+- `iap_submission_create`
+
+Content hosting:
+- `iap_content_hosting_get`
+- `iap_content_hosting_update`
+
+Images (IAP detail page):
+- `iap_images_list`
+- `iap_images_get`
+- `iap_images_upload`
+- `iap_images_update`
+- `iap_images_delete`
+
+Review screenshot:
+- `iap_review_screenshot_get`
+- `iap_review_screenshot_upload`
+- `iap_review_screenshot_update`
+- `iap_review_screenshot_delete`
+
+Promotional images (App Store featured slots):
+- `iap_promotional_images_list`
+- `iap_promotional_images_upload`
+- `iap_promotional_images_delete`
+
+Promoted purchases (storefront promotion config):
+- `iap_promoted_purchases_list`
+- `iap_promoted_purchases_update`
+
+Promoted purchase images:
+- `iap_promoted_purchase_images_list`
+- `iap_promoted_purchase_images_upload`
+- `iap_promoted_purchase_images_update`
+- `iap_promoted_purchase_images_delete`
+
+### CLI examples
+
+The `storescreens iap` parent command groups every IAP operation. Every subcommand takes `--json` to emit the raw JSON response instead of the human-readable summary.
+
+List IAPs on an app:
+
+```
+storescreens iap purchases list --app-id 1234567890
+```
+
+Create a non-consumable IAP:
+
+```
+storescreens iap purchases create \
+  --app-id 1234567890 \
+  --name "Pro Unlock" \
+  --product-id com.acme.app.pro_unlock \
+  --in-app-purchase-type NON_CONSUMABLE \
+  --review-note "Unlocks the pro editing tools shown on the home screen."
+```
+
+Add a localization:
+
+```
+storescreens iap localizations create \
+  --iap-id 9876543210 \
+  --locale en-US \
+  --name "Pro Unlock" \
+  --description "One-time purchase that removes ads and unlocks every editing tool."
+```
+
+Look up the USA $9.99 price-point id, then set pricing for the IAP:
+
+```
+storescreens iap price-points list --iap-id 9876543210 --territory-id USA
+storescreens iap pricing set \
+  --iap-id 9876543210 \
+  --base-territory-id USA \
+  --price USA:eyJzIjoiVVNBIiwidCI6IjA5OTkifQ==
+```
+
+Upload the review screenshot Apple needs:
+
+```
+storescreens iap review-screenshot upload \
+  --iap-id 9876543210 \
+  --file ./screenshots/iap-review.png
+```
+
+Submit the IAP for App Review:
+
+```
+storescreens iap submission create --iap-id 9876543210
+```
+
+Toggle a storefront-promoted IAP:
+
+```
+storescreens iap promoted-purchases list --app-id 1234567890
+storescreens iap promoted-purchases update \
+  --promoted-purchase-id 5550001 \
+  --enabled \
+  --visible-for-distribution
+```
+
+### Common workflows
+
+Create a non-consumable IAP end-to-end:
+
+1. `storescreens iap purchases create --in-app-purchase-type NON_CONSUMABLE ...`
+2. `storescreens iap localizations create ...` for every locale you support
+3. `storescreens iap price-points list --territory-id USA` to discover the price-point id
+4. `storescreens iap pricing set ...` to apply the price
+5. `storescreens iap review-screenshot upload ...` for Apple's reviewers
+6. `storescreens iap submission create --iap-id <id>`
+
+Set pricing for an existing IAP across multiple territories:
+
+```
+storescreens iap pricing set \
+  --iap-id 9876543210 \
+  --base-territory-id USA \
+  --price USA:pp_usa_999 \
+  --price CAN:pp_can_999 \
+  --price GBR:pp_gbr_999
+```
+
+Look up an IAP by product id (useful when you have the bundle id but not the ASC numeric id):
+
+```
+storescreens iap purchases list --app-id 1234567890 --json \
+  | jq '.items[] | select(.attributes.productId == "com.acme.app.pro_unlock")'
+```
+
+Pull the live state of all IAP submissions for an app:
+
+```
+storescreens iap purchases list --app-id 1234567890 --json \
+  | jq -r '.items[].id' \
+  | while read iap; do
+      storescreens iap submission list --iap-id "$iap" --json
+    done
+```
+
+
+## Subscriptions
+
+storescreens-cli wraps Apple's App Store Connect Auto-Renewable Subscriptions
+API so agents and humans can manage subscription products, pricing, offers,
+and review submissions without hand-rolling HTTP. The same calls are exposed
+three ways:
+
+- Swift API: `SubscriptionsAPI` in `StorescreensCore` (use from another Swift
+  package or from custom orchestrators)
+- MCP tools: `subs_*` tool family for AI agents
+- CLI: `storescreens subscriptions ...` for humans and scripts
+
+All three share the same credentials path (run `storescreens auth login` or
+set `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH`).
+
+### Resources covered
+
+| Apple resource | CRUD | Notes |
+|---|---|---|
+| `subscriptionGroups` | full | Container that subscriptions live in. |
+| `subscriptionGroupLocalizations` | full | Per-locale group name + optional custom app name. |
+| `subscriptions` | full | The actual auto-renewing products (productId, period, group level, review note). |
+| `subscriptionLocalizations` | full | Per-locale name + description. |
+| `subscriptionPrices` | list, create, delete | Immutable per record; a "change" is create-new + delete-old. |
+| `subscriptionPricePoints` | list | Read-only catalog of valid Apple tiers per territory. |
+| `subscriptionOfferCodes` | full | Win-back / promotional offer programs. |
+| `subscriptionOfferCodeOneTimeUseCodes` | list, create | Apple-generated unique single-use codes. |
+| `subscriptionOfferCodeCustomCodes` | list, create, delete | Developer-chosen strings (e.g. `BLACKFRIDAY2025`). |
+| `subscriptionOfferCodePrices` | list, create | Per-territory pricing on an offer code. |
+| `subscriptionPromotionalOffers` | full | Intro offers shown to new subscribers via StoreKit. |
+| `subscriptionPromotionalOfferPrices` | list, create | Per-territory pricing on a promotional offer. |
+| `subscriptionAvailabilities` | get, update | Territory list (POST replaces the list wholesale). |
+| `subscriptionSubmissions` | list, get, create | Push metadata edits to App Review. |
+| `subscriptionAppStoreReviewScreenshots` | full | Review-only screenshots Apple requires for approval. |
+| `subscriptionImages` | list, create, delete | Promotional artwork. |
+
+Paginated lists accept `limit` (default 200) and `cursor`; every response
+carries `next_cursor` (or `nextCursor` for Swift callers) for the next page.
+
+### MCP tools
+
+Every tool name is `subs_<resource>_<op>` (snake_case). Group of tools:
+
+Groups
+- `subs_groups_list`
+- `subs_groups_get`
+- `subs_groups_create`
+- `subs_groups_update`
+- `subs_groups_delete`
+
+Group localizations
+- `subs_group_localizations_list`
+- `subs_group_localizations_create`
+- `subs_group_localizations_update`
+- `subs_group_localizations_delete`
+
+Subscriptions
+- `subs_subscriptions_list`
+- `subs_subscriptions_get`
+- `subs_subscriptions_create`
+- `subs_subscriptions_update`
+- `subs_subscriptions_delete`
+
+Subscription localizations
+- `subs_localizations_list`
+- `subs_localizations_create`
+- `subs_localizations_update`
+- `subs_localizations_delete`
+
+Prices
+- `subs_prices_list`
+- `subs_prices_create`
+- `subs_prices_delete`
+
+Price points
+- `subs_price_points_list`
+
+Offer codes
+- `subs_offer_codes_list`
+- `subs_offer_codes_get`
+- `subs_offer_codes_create`
+- `subs_offer_codes_update`
+- `subs_offer_codes_delete`
+- `subs_offer_codes_one_time_list`
+- `subs_offer_codes_one_time_create`
+- `subs_offer_codes_custom_list`
+- `subs_offer_codes_custom_create`
+- `subs_offer_codes_custom_delete`
+- `subs_offer_code_prices_list`
+- `subs_offer_code_prices_create`
+
+Promotional offers
+- `subs_promotional_offers_list`
+- `subs_promotional_offers_get`
+- `subs_promotional_offers_create`
+- `subs_promotional_offers_update`
+- `subs_promotional_offers_delete`
+- `subs_promotional_offer_prices_list`
+- `subs_promotional_offer_prices_create`
+
+Availability
+- `subs_availability_get`
+- `subs_availability_update`
+
+Submissions
+- `subs_submissions_list`
+- `subs_submissions_get`
+- `subs_submissions_create`
+
+Review screenshots
+- `subs_review_screenshots_list`
+- `subs_review_screenshots_get`
+- `subs_review_screenshots_create`
+- `subs_review_screenshots_confirm`
+- `subs_review_screenshots_delete`
+
+Images
+- `subs_images_list`
+- `subs_images_create`
+- `subs_images_delete`
+
+### CLI commands
+
+The parent command is `storescreens subscriptions`. Every leaf accepts
+`--json` for pretty-printed JSON. Examples:
+
+```bash
+# Groups
+storescreens subscriptions groups list --app-id 1234567890
+storescreens subscriptions groups get 1234567
+storescreens subscriptions groups create --app-id 1234567890 --reference-name "Pro Tier"
+storescreens subscriptions groups update 1234567 --reference-name "Pro Tier (renamed)"
+storescreens subscriptions groups delete 1234567
+
+# Group localizations
+storescreens subscriptions group-localizations list --group-id 1234567
+storescreens subscriptions group-localizations create \
+  --group-id 1234567 --locale en-US --name "Pro Tier" --custom-app-name "Acme Pro"
+storescreens subscriptions group-localizations update LOCID --name "Pro Plan"
+storescreens subscriptions group-localizations delete LOCID
+
+# Subscriptions (the actual products)
+storescreens subscriptions products list --group-id 1234567
+storescreens subscriptions products get SUBID
+storescreens subscriptions products create \
+  --group-id 1234567 \
+  --product-id "com.acme.pro.monthly" \
+  --name "Pro Monthly" \
+  --subscription-period ONE_MONTH \
+  --group-level 1 \
+  --review-note "Subscription unlocks Pro features."
+storescreens subscriptions products update SUBID --name "Pro Monthly (renamed)"
+storescreens subscriptions products delete SUBID
+
+# Per-locale name + description on a subscription
+storescreens subscriptions localizations list --subscription-id SUBID
+storescreens subscriptions localizations create \
+  --subscription-id SUBID --locale en-US \
+  --name "Pro Monthly" --description "Unlocks Pro features."
+storescreens subscriptions localizations update LOCID --description "Updated copy."
+storescreens subscriptions localizations delete LOCID
+
+# Prices (immutable: create new + delete old to change)
+storescreens subscriptions price-points list --subscription-id SUBID --territory USA
+storescreens subscriptions prices list --subscription-id SUBID
+storescreens subscriptions prices set \
+  --subscription-id SUBID --price-point-id PRICEPOINTID --territory USA
+storescreens subscriptions prices delete PRICEID
+
+# Offer codes (win-back / promotional)
+storescreens subscriptions offer-codes list --subscription-id SUBID
+storescreens subscriptions offer-codes create \
+  --subscription-id SUBID --reference-name "WinBack-2026" \
+  --offer-type FREE_TRIAL --duration ONE_MONTH \
+  --customer-eligibilities EXPIRED --total-number-of-codes 1000
+storescreens subscriptions offer-codes update OFFERID --is-active true
+storescreens subscriptions offer-codes delete OFFERID
+
+# One-time use codes (Apple-generated batch)
+storescreens subscriptions offer-codes one-time list --offer-code-id OFFERID
+storescreens subscriptions offer-codes one-time generate \
+  --offer-code-id OFFERID --count 500 \
+  --expiration-date 2026-12-31T23:59:59Z
+
+# Custom-string codes
+storescreens subscriptions offer-codes custom list --offer-code-id OFFERID
+storescreens subscriptions offer-codes custom create \
+  --offer-code-id OFFERID --custom-code BLACKFRIDAY2025 --count 5000
+storescreens subscriptions offer-codes custom delete CUSTOMCODEID
+
+# Offer code prices (per territory)
+storescreens subscriptions offer-codes prices list --offer-code-id OFFERID
+storescreens subscriptions offer-codes prices set \
+  --offer-code-id OFFERID --price-point-id PRICEPOINTID --territory USA
+
+# Promotional offers (StoreKit intro pricing)
+storescreens subscriptions promotional-offers list --subscription-id SUBID
+storescreens subscriptions promotional-offers create \
+  --subscription-id SUBID --name "Intro Free Trial" \
+  --offer-code "com.acme.pro.monthly.intro" \
+  --offer-type FREE_TRIAL --duration ONE_MONTH
+storescreens subscriptions promotional-offers update PROMOID --name "Free Month"
+storescreens subscriptions promotional-offers delete PROMOID
+
+# Promotional offer prices
+storescreens subscriptions promotional-offers prices list --promotional-offer-id PROMOID
+storescreens subscriptions promotional-offers prices set \
+  --promotional-offer-id PROMOID \
+  --price-point-id PRICEPOINTID --territory USA
+
+# Territory availability (POST replaces the entire list)
+storescreens subscriptions availability get --subscription-id SUBID
+storescreens subscriptions availability update \
+  --subscription-id SUBID \
+  --territories USA CAN GBR DEU JPN \
+  --available-in-new-territories
+
+# Submissions
+storescreens subscriptions submission list --subscription-id SUBID
+storescreens subscriptions submission get SUBMISSIONID
+storescreens subscriptions submission submit --subscription-id SUBID
+
+# Review screenshots (3-step: reserve, PUT, confirm)
+storescreens subscriptions review-screenshots list --subscription-id SUBID
+storescreens subscriptions review-screenshots create \
+  --subscription-id SUBID --file-name paywall.png --file-size 412034
+# (then PUT the bytes to the uploadOperations URLs returned, and compute MD5)
+storescreens subscriptions review-screenshots confirm SHOTID --checksum 9f2c1...
+
+# Promotional images
+storescreens subscriptions images list --subscription-id SUBID
+storescreens subscriptions images create \
+  --subscription-id SUBID --file-name hero.png --file-size 1543210
+storescreens subscriptions images delete IMAGEID
+```
+
+### Common workflows
+
+#### Create a subscription with multi-locale localizations
+
+```bash
+# 1. Make the group.
+storescreens subscriptions groups create --app-id 1234567890 \
+  --reference-name "Pro Tier" --json
+# -> { "id": "GROUPID", ... }
+
+# 2. Make the actual subscription product inside the group.
+storescreens subscriptions products create \
+  --group-id GROUPID \
+  --product-id "com.acme.pro.monthly" --name "Pro Monthly" \
+  --subscription-period ONE_MONTH --group-level 1 \
+  --review-note "Unlocks Pro features." --json
+# -> { "id": "SUBID", ... }
+
+# 3. Add per-locale name + description.
+storescreens subscriptions localizations create \
+  --subscription-id SUBID --locale en-US \
+  --name "Pro Monthly" --description "Unlocks all Pro features."
+
+storescreens subscriptions localizations create \
+  --subscription-id SUBID --locale ja \
+  --name "Pro 月額" --description "Proの全機能をアンロック。"
+
+storescreens subscriptions localizations create \
+  --subscription-id SUBID --locale es-ES \
+  --name "Pro mensual" --description "Desbloquea todas las funciones Pro."
+```
+
+#### Set pricing across territories
+
+```bash
+# Look up the valid price-point IDs for the territory you care about.
+storescreens subscriptions price-points list \
+  --subscription-id SUBID --territory USA
+# -> table of customer-price -> price-point id
+
+# Pick the tier you want and set it.
+storescreens subscriptions prices set \
+  --subscription-id SUBID \
+  --price-point-id PRICEPOINTID --territory USA
+```
+
+To change a price later, the wire format is create-new + delete-old:
+
+```bash
+storescreens subscriptions prices set \
+  --subscription-id SUBID --price-point-id NEWPRICEPOINT --territory USA
+storescreens subscriptions prices delete OLDPRICEID
+```
+
+#### Generate offer codes (win-back)
+
+```bash
+# 1. Create the offer-code program.
+storescreens subscriptions offer-codes create \
+  --subscription-id SUBID --reference-name "WinBack-2026" \
+  --offer-type FREE_TRIAL --duration ONE_MONTH \
+  --customer-eligibilities EXPIRED --total-number-of-codes 5000 --json
+# -> { "id": "OFFERID", ... }
+
+# 2. Attach per-territory pricing.
+storescreens subscriptions offer-codes prices set \
+  --offer-code-id OFFERID --price-point-id PRICEPOINTID --territory USA
+
+# 3. Generate the actual redemption codes (Apple processes async).
+storescreens subscriptions offer-codes one-time generate \
+  --offer-code-id OFFERID --count 5000 \
+  --expiration-date 2026-12-31T23:59:59Z
+
+# 4. Poll list until isActive=true, then export.
+storescreens subscriptions offer-codes one-time list --offer-code-id OFFERID --json
+```
+
+#### Submit subscription changes for review
+
+```bash
+# After editing localizations, prices, review screenshots, etc:
+storescreens subscriptions submission submit --subscription-id SUBID --json
+# -> { "id": "SUBMISSIONID", "attributes": { "state": "WAITING_FOR_REVIEW" } }
+
+# Poll until Apple decides.
+storescreens subscriptions submission list --subscription-id SUBID --limit 5
+```
+
+### Error handling
+
+- 404 lookups return `null` (Swift) or `null` JSON in CLI / MCP responses.
+- 409 conflicts where the value is already what you asked for surface through
+  `ASCClient.APIError.isAlreadySetConflict` so submit-style orchestrators
+  treat a re-run as success.
+- Pagination cursors are returned in every list response. Pass the value back
+  in `--cursor` (CLI) or `cursor` (MCP) to fetch the next page.
+
+
+## Customer reviews
+
+`storescreens reviews` wraps the App Store Connect Customer Reviews + Developer Responses APIs so you (or an AI agent driving the CLI / MCP) can list reviews, inspect a single review, and post, edit, or delete the developer's reply without writing raw ASC HTTP requests.
+
+Reviews are read-only: developers cannot create, edit, or delete a customer review through the API. The only write operations live on the developer response.
+
+### Authentication
+
+Same as every other ASC command in this CLI: env vars `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH`, or `storescreens auth login` to write `~/.storescreens/asc-credentials.yml`. The app id is read from `app_store_connect.app_id` in `storescreens.yml` and can be overridden per command with `--app-id`.
+
+### MCP tools
+
+| Tool                       | Purpose                                                                                  |
+|----------------------------|------------------------------------------------------------------------------------------|
+| `reviews_list`             | List reviews for an app with filters: territory, rating, edited, has_response. Paginated. |
+| `reviews_get`              | Fetch one review by id, including the developer response if one exists.                  |
+| `reviews_list_unanswered`  | Compound helper: paginate every review without a developer response, optionally filtered. |
+| `reviews_response_create`  | Publish the developer response to a review.                                              |
+| `reviews_response_update`  | Edit an existing developer response.                                                     |
+| `reviews_response_delete`  | Delete the developer response (the customer review itself is unaffected).                |
+
+All tools return pretty-printed JSON in a single text content block. On error the `isError` flag is `true` and the content describes the failure.
+
+### CLI commands
+
+```text
+storescreens reviews list      --app-id 1234567890 [--territory USA] [--rating 1] [--unanswered] [--answered] [--edited] [--sort createdDateDesc] [--limit N] [--cursor TOKEN] [--all] [--json]
+storescreens reviews get       --id REVIEW_ID [--json]
+storescreens reviews respond   --id REVIEW_ID --body "Thanks for the feedback!" [--json]
+storescreens reviews response update --id RESPONSE_ID --body "Updated reply" [--json]
+storescreens reviews response delete --id RESPONSE_ID [--force] [--json]
+```
+
+`--app-id` defaults to `app_store_connect.app_id` from `storescreens.yml`. `--json` on every subcommand swaps the human-readable output for a stable JSON shape compatible with the MCP wire format.
+
+The human-readable list view shows, per review: star rating (`[***--]` style), title, reviewer nickname, territory, posted date, review id, and an 80-character snippet of the body.
+
+### Common workflows
+
+#### List the most recent 1-star reviews still waiting for a reply
+
+```bash
+storescreens reviews list --rating 1 --unanswered
+```
+
+#### Triage every unanswered review in USA, newest first
+
+```bash
+storescreens reviews list --territory USA --unanswered --all
+```
+
+#### Respond to a specific review
+
+```bash
+storescreens reviews respond \
+  --id 0123456789abcdef \
+  --body "Thanks for reporting this. The next build fixes the iPad layout issue."
+```
+
+`reviews respond` is a find-or-update shortcut: it routes to a POST when the review has no response, or to a PATCH when it already does. Apple moderates responses asynchronously, so the immediate `state` is typically `PENDING_PUBLISH`; the response goes live on the App Store within minutes.
+
+#### Sweep responses for a release
+
+A common pattern after shipping a fix that addresses recurring 1-star complaints is to find every related review and post a templated reply. Pipe the JSON output into your own tooling:
+
+```bash
+storescreens reviews list --rating 1 --unanswered --all --json \
+  | jq -r '.reviews[] | select(.body | test("crash|crashes|crashing"; "i")) | .id' \
+  | while read id; do
+      storescreens reviews respond --id "$id" --body "Build 1.4.2 fixes this crash. Thank you for flagging it."
+    done
+```
+
+#### Update an existing response (typo fix)
+
+```bash
+storescreens reviews response update \
+  --id 9876543210fedcba \
+  --body "Build 1.4.2 fixes this crash. Thank you for flagging it!"
+```
+
+#### Delete a stale response
+
+```bash
+storescreens reviews response delete --id 9876543210fedcba
+```
+
+The CLI asks for confirmation before deleting; pass `--force` to skip the prompt in scripts.
+
+### Notes
+
+- The `customerReviewResponseV1` resource is deprecated by Apple in favor of `customerReviewResponses`. This wrapper targets the v1 (current) resource only.
+- Per-territory rating summaries are not wrapped here. Apple's public schema for `customerReviewSummarizations` is undocumented; if you need a quick territory breakdown, group `reviews list --all --json` output by `territory` in post-processing.
+- The `--unanswered` filter uses Apple's `filter[publishedResponse.state]` plus a local pass to drop reviews whose response relationship is present. The reverse (`--answered`) is a single native filter call.
+
+
+## Reports (sales, finance, analytics)
+
+storescreens wraps Apple's reporting endpoints so neither humans nor AI
+agents have to think about gzipped TSV bodies, signed segment URLs, or the
+four-level App Analytics resource graph. The wire format work (gunzip,
+delimited parsing, JWT bearer header) is hidden behind one Swift API plus
+one MCP namespace plus one CLI sub-tree.
+
+Three families are covered:
+
+- **Sales and Trends** — daily / weekly / monthly / yearly reports of
+  units sold, installs, subscriber events, redemption events, and the
+  related sub-types. Apple ships these as gzipped TSV; storescreens
+  decompresses and returns typed rows.
+- **Finance** — monthly per-region revenue rollups (`FINANCIAL`,
+  `FINANCE_DETAIL`). Gzipped CSV under the hood; same parsed-row surface.
+- **App Analytics** — the newer report-request flow. Create an
+  `analyticsReportRequest`, list the `analyticsReports` it exposes, pick
+  an instance for the date you care about, list its segments, and
+  download each segment (also gzipped CSV).
+
+Plus a small wrapper over the `perfPowerMetrics` and `diagnosticSignatures`
+resources for build-level performance + crash telemetry.
+
+All endpoints require App Store Connect API credentials. Run
+`storescreens auth login` once (or set `ASC_KEY_ID` / `ASC_ISSUER_ID` /
+`ASC_KEY_PATH` env vars) before using any reports command.
+
+### MCP tool catalog
+
+Sales:
+
+- `reports_sales_get` — `frequency`, `report_date`, `report_type`,
+  `report_sub_type`, `vendor_number`, optional `version`, `summary_only`.
+
+Finance:
+
+- `reports_finance_get` — `region`, `report_date`, `vendor_number`,
+  `report_type`, `summary_only`.
+
+App Analytics:
+
+- `reports_analytics_request_create` — `app_id`, `access_type`
+  (`ONE_TIME_SNAPSHOT` or `ONGOING`).
+- `reports_analytics_request_list` — `app_id`.
+- `reports_analytics_request_delete` — `request_id`.
+- `reports_analytics_reports_list` — `request_id`.
+- `reports_analytics_instances_list` — `report_id`.
+- `reports_analytics_segments_list` — `instance_id`.
+- `reports_analytics_segment_download` — `segment_url` or `segment_id`,
+  `summary_only`. Downloads, gunzips, and parses the segment to CSV rows.
+
+Performance + diagnostics:
+
+- `reports_metrics_perfpower_list` — `app_id` or `build_id`.
+- `reports_metrics_diagnostics_list` — `build_id`.
+- `reports_metrics_diagnostics_get` — `signature_id`, `include_logs`.
+
+Each tool returns pretty-printed JSON in a single text block. Errors come
+back with `isError: true` and an ASC error envelope when available.
+
+### CLI commands
+
+The `storescreens reports` command tree mirrors the MCP surface. Add
+`--json` to any subcommand to emit a machine-readable payload instead of
+the human preview table.
+
+```
+storescreens reports sales      --frequency DAILY     --date 2026-05-09 --vendor 12345 [--summary] [--json]
+storescreens reports finance    --region US           --date 2026-04    --vendor 12345 [--summary] [--json]
+
+storescreens reports analytics request   --app-id 1234567890 --access-type ONE_TIME_SNAPSHOT
+storescreens reports analytics reports   list  --request-id <id>
+storescreens reports analytics instances list  --report-id <id>
+storescreens reports analytics segments  list  --instance-id <id>
+storescreens reports analytics segment   download --segment-id <id> [--output file.csv]
+storescreens reports analytics segment   download --segment-url <url>
+
+storescreens reports metrics perf-power           --app-id 1234567890
+storescreens reports metrics perf-power           --build-id <id>
+storescreens reports metrics diagnostics list     --build-id <id>
+storescreens reports metrics diagnostics get      --signature-id <id> [--include-logs]
+```
+
+The default human preview shows the first ~10 rows of the first ~6
+columns; pipe to `--json` (or `--output file.csv` on `segment download`)
+when you need the full payload.
+
+### Common workflows
+
+#### Pull a daily sales summary
+
+```
+storescreens reports sales --frequency DAILY --date 2026-05-09 --vendor 12345 --summary
+```
+
+Outputs a row count plus a numeric total per column (units, proceeds,
+etc.). Use `--json` for the structured form.
+
+#### Get a monthly finance report for one region
+
+```
+storescreens reports finance --region US --date 2026-04 --vendor 12345 --json > finance-us-2026-04.json
+```
+
+Apple emits one report per calendar month per region. `EU`, `JP`,
+`AU`, `ZZ` (rest of world), etc. are also valid `--region` codes.
+
+#### Request a one-time App Analytics snapshot and walk to the rows
+
+```
+# 1. Create the request.
+storescreens reports analytics request --app-id 1234567890 --access-type ONE_TIME_SNAPSHOT
+
+# 2. List which reports the request gives us.
+storescreens reports analytics reports list --request-id <REQ_ID>
+
+# 3. Pick a report and list its instances by date.
+storescreens reports analytics instances list --report-id <REPORT_ID>
+
+# 4. List segments for the instance you want.
+storescreens reports analytics segments list --instance-id <INSTANCE_ID>
+
+# 5. Download a segment to a CSV on disk.
+storescreens reports analytics segment download --segment-id <SEGMENT_ID> --output ./engagement.csv
+```
+
+For an ongoing pipeline, swap `ONE_TIME_SNAPSHOT` for `ONGOING` in step 1
+and reuse the request id forever; Apple emits a fresh instance every
+granularity period until you `reports_analytics_request_delete` it.
+
+#### Audit crashes on the latest build
+
+```
+storescreens reports metrics diagnostics list --build-id <BUILD_ID> --json
+storescreens reports metrics diagnostics get  --signature-id <SIG_ID> --include-logs
+```
+
+Combine with `storescreens status` to find the in-flight version, then
+look up its build id under the App Store Connect builds list.
+
+### Implementation notes
+
+- Sales and finance responses are not JSON — they are gzipped TSV / CSV
+  file bodies that don't go through the JSON:API decoder. The
+  `ReportsAPI` namespace mints a JWT via `ASCJWTSigner.sign` and uses
+  `URLSession` directly for those calls, then shells out to
+  `/usr/bin/gunzip -c` to decompress the body. We chose subprocess
+  gunzip over the Compression framework because Apple's payloads use
+  the full gzip wrapper (10-byte header + 8-byte trailer), which is
+  awkward to feed into `compression_decode_buffer` without hand-coding
+  the header strip.
+- The CSV / TSV parser handles quoted fields and embedded delimiters
+  per RFC 4180. Apple's reports are well-formed in practice but the
+  parser stays strict.
+- App Analytics segment URLs are pre-signed and live outside Apple's
+  main API host. The downloader sends the request without a Bearer
+  header (the URL carries its own auth in the query string).
+
+
+<!--
+README fragment for the Users + Developer Portal endpoints. Ready to
+merge under top-level headings such as "## Users and roles" and
+"## Developer Portal" in the main README.
+-->
+
+## Users and roles
+
+storescreens wraps the App Store Connect Users and Invitations APIs so
+agents and CLIs can manage team membership without crafting raw HTTP
+requests. The commands work against the credentials configured by
+`storescreens auth login` (or the `ASC_KEY_ID` / `ASC_ISSUER_ID` /
+`ASC_KEY_PATH` env vars).
+
+Apple's role taxonomy uses string values such as `ADMIN`, `FINANCE`,
+`ACCOUNT_HOLDER`, `SALES`, `MARKETING`, `APP_MANAGER`, `DEVELOPER`,
+`ACCESS_TO_REPORTS`, `CUSTOMER_SUPPORT`, `CREATE_APPS`, `READ_ONLY`,
+`CLOUD_MANAGED_DEVELOPER_ID`, `CLOUD_MANAGED_APP_DISTRIBUTION`,
+`GENERATE_INDIVIDUAL_KEYS`, `IMAGE_MANAGER`, and `APP_PURCHASE_MANAGER`.
+The wire type is a free-form string, so any future Apple-added role
+still round-trips through the API without a code change.
+
+### CLI
+
+```bash
+# List the team (defaults to one page of 200; pass --cursor X to paginate).
+storescreens users list
+storescreens users list --json | jq
+
+# Look at one user.
+storescreens users get USER_ID
+
+# Promote a teammate to App Manager + Developer.
+storescreens users update USER_ID --roles "APP_MANAGER,DEVELOPER"
+
+# Scope a user to two specific apps.
+storescreens users update USER_ID --no-all-apps-visible \
+    --visible-apps "1234567890,2345678901"
+
+# Remove a teammate (asks for confirmation; --yes skips it).
+storescreens users delete USER_ID
+
+# Invite a new collaborator with Developer access to every app.
+storescreens users invite \
+    --email teammate@example.com \
+    --first-name Alex \
+    --last-name Smith \
+    --roles "DEVELOPER"
+
+# See pending invitations.
+storescreens users invitations
+storescreens users invitations --email teammate@example.com
+
+# Cancel a pending invitation before they accept it.
+storescreens users cancel-invitation INVITATION_ID
+
+# List the apps a scoped user can actually see.
+storescreens users visible-apps USER_ID
+```
+
+Every subcommand accepts `--json` for machine-readable output. List
+commands return a `nextCursor` you can pass back via `--cursor X` to
+fetch the next page.
+
+### MCP tools
+
+| Tool | Purpose |
+| --- | --- |
+| `users_list` | List team users, paginated, optionally filtered by username. |
+| `users_get` | Fetch one user by ASC id. |
+| `users_update_role` | PATCH roles, visibility, provisioning rights. |
+| `users_delete` | Remove a user from the team. |
+| `users_invitations_list` | List pending invitations. |
+| `users_invitations_get` | Fetch one pending invitation. |
+| `users_invitations_create` | Invite a new teammate. |
+| `users_invitations_cancel` | Cancel a pending invitation. |
+| `users_visible_apps_list` | List the app IDs a user can see. |
+
+## Developer Portal
+
+storescreens wraps the four code-signing families surfaced by Apple's
+developer portal endpoints: certificates, provisioning profiles,
+registered test devices, and bundle identifiers (with their per-bundle
+capability flags). Together these let an agent stand up signing
+identity, register a fresh device, and enable a capability without
+opening the developer portal UI.
+
+The CLI parent command is `storescreens devportal`. Each subfamily has
+its own group under it.
+
+### Certificate types
+
+`IOS_DEVELOPMENT`, `IOS_DISTRIBUTION`, `MAC_APP_DISTRIBUTION`,
+`MAC_INSTALLER_DISTRIBUTION`, `MAC_APP_DEVELOPMENT`,
+`DEVELOPER_ID_APPLICATION`, `DEVELOPER_ID_KEXT`, `DEVELOPMENT`,
+`DISTRIBUTION`, `PASS_TYPE_ID`, `PASS_TYPE_ID_WITH_NFC`.
+
+### Profile types
+
+`IOS_APP_STORE`, `IOS_APP_DEVELOPMENT`, `IOS_APP_ADHOC`,
+`IOS_APP_INHOUSE`, `MAC_APP_STORE`, `MAC_APP_DEVELOPMENT`,
+`MAC_APP_DIRECT`, `TVOS_APP_STORE`, `TVOS_APP_DEVELOPMENT`,
+`TVOS_APP_ADHOC`, `TVOS_APP_INHOUSE`, `MAC_CATALYST_APP_STORE`,
+`MAC_CATALYST_APP_DEVELOPMENT`, `MAC_CATALYST_APP_DIRECT`.
+
+### Capability types
+
+A representative subset: `PUSH_NOTIFICATIONS`, `ICLOUD`, `APP_GROUPS`,
+`HEALTHKIT`, `HOMEKIT`, `GAME_CENTER`, `ASSOCIATED_DOMAINS`, `SIRIKIT`,
+`NETWORK_EXTENSIONS`, `NFC_TAG_READING`, `WALLET`, `MAPS`,
+`PERSONAL_VPN`, `IN_APP_PURCHASE`, `APP_ATTEST`, `FAMILY_CONTROLS`,
+`TIME_SENSITIVE_NOTIFICATIONS`, `GROUP_ACTIVITIES`. Apple adds new
+capability types over time; the wire format is a free-form string, so
+unknown types still round-trip.
+
+### CLI examples
+
+#### Certificates
+
+```bash
+# List every distribution certificate.
+storescreens devportal certificates list --type IOS_DISTRIBUTION
+
+# Look at one in detail (id from `list`).
+storescreens devportal certificates get CERT_ID
+
+# Submit a CSR. Generate one with:
+#   openssl req -new -newkey rsa:2048 -nodes -keyout ios.key \
+#       -out ios.csr -subj "/emailAddress=you@example.com, CN=Your Name, C=US"
+#   base64 -i ios.csr -o ios.csr.b64
+storescreens devportal certificates create \
+    --csr-file ./ios.csr.b64 \
+    --type IOS_DISTRIBUTION
+
+# Revoke a leaked certificate.
+storescreens devportal certificates delete CERT_ID
+```
+
+#### Provisioning profiles
+
+```bash
+# Every App Store profile.
+storescreens devportal profiles list --type IOS_APP_STORE
+
+# Every profile (any type) for one bundle id.
+storescreens devportal profiles list --bundle-id com.example.myapp
+
+# Create a new App Store profile.
+storescreens devportal profiles create \
+    --name "My App, App Store" \
+    --type IOS_APP_STORE \
+    --bundle-id BUNDLE_DB_ID \
+    --certificates CERT_ID_1,CERT_ID_2
+
+# Create a development profile that also lists explicit devices.
+storescreens devportal profiles create \
+    --name "My App, Dev" \
+    --type IOS_APP_DEVELOPMENT \
+    --bundle-id BUNDLE_DB_ID \
+    --certificates DEV_CERT_ID \
+    --devices DEVICE_ID_1,DEVICE_ID_2
+
+# Delete a stale profile.
+storescreens devportal profiles delete PROFILE_ID
+```
+
+#### Devices
+
+```bash
+# Every enabled iOS test device.
+storescreens devportal devices list --platform IOS --status ENABLED
+
+# Register a new test device.
+storescreens devportal devices create \
+    --name "QA iPad Pro" \
+    --udid 00008112-00010CDE3E29C01E \
+    --platform IOS
+
+# Disable a device to free a slot in the per-platform quota.
+storescreens devportal devices modify DEVICE_ID --status DISABLED
+```
+
+#### Bundle IDs
+
+```bash
+# Find an app identifier by reverse-DNS.
+storescreens devportal bundle-ids list --identifier com.example.myapp
+
+# Register a new app identifier.
+storescreens devportal bundle-ids create \
+    --identifier com.example.myapp \
+    --name "My App" \
+    --platform IOS
+
+# Rename the human-readable label (the identifier itself is immutable).
+storescreens devportal bundle-ids update BUNDLE_DB_ID --name "My App (renamed)"
+
+# Delete an app identifier (Apple blocks this if profiles or apps reference it).
+storescreens devportal bundle-ids delete BUNDLE_DB_ID
+```
+
+#### Capabilities
+
+```bash
+# List the capabilities currently enabled on a bundle id.
+storescreens devportal capabilities list --bundle-id BUNDLE_DB_ID
+
+# Enable Push Notifications (no extra settings needed).
+storescreens devportal capabilities enable \
+    --bundle-id BUNDLE_DB_ID \
+    --type PUSH_NOTIFICATIONS
+
+# Enable App Groups with two group ids configured. Settings file is a JSON
+# array of CapabilitySetting objects:
+#   [
+#     {
+#       "key": "APP_GROUP_CONTENTS",
+#       "options": [
+#         { "key": "group.com.example.shared", "enabled": true }
+#       ]
+#     }
+#   ]
+storescreens devportal capabilities enable \
+    --bundle-id BUNDLE_DB_ID \
+    --type APP_GROUPS \
+    --settings-file ./appgroups.json
+
+# Disable a capability.
+storescreens devportal capabilities disable CAPABILITY_ID
+```
+
+### MCP tools
+
+| Tool | Purpose |
+| --- | --- |
+| `devportal_certificates_list` | List signing certificates by type. |
+| `devportal_certificates_get` | Fetch one certificate (with base64 content). |
+| `devportal_certificates_create` | Submit a CSR and receive a signed certificate. |
+| `devportal_certificates_delete` | Revoke a certificate. |
+| `devportal_profiles_list` | List provisioning profiles by type and / or bundle id. |
+| `devportal_profiles_get` | Fetch one profile (with base64 content). |
+| `devportal_profiles_create` | Create a new provisioning profile. |
+| `devportal_profiles_delete` | Delete a profile. |
+| `devportal_devices_list` | List registered test devices. |
+| `devportal_devices_get` | Fetch one device. |
+| `devportal_devices_create` | Register a new test device. |
+| `devportal_devices_modify` | Rename or disable a device. |
+| `devportal_bundle_ids_list` | List bundle identifiers. |
+| `devportal_bundle_ids_get` | Fetch one bundle identifier. |
+| `devportal_bundle_ids_create` | Register a new app identifier. |
+| `devportal_bundle_ids_update` | Rename a bundle identifier's display name. |
+| `devportal_bundle_ids_delete` | Delete a bundle identifier. |
+| `devportal_capabilities_list` | List capabilities on a bundle identifier. |
+| `devportal_capabilities_enable` | Enable a capability on a bundle identifier. |
+| `devportal_capabilities_update` | Update a capability's settings. |
+| `devportal_capabilities_disable` | Disable a capability. |
+
+### Common workflows
+
+#### Invite a new team member
+
+```bash
+storescreens users invite \
+    --email engineer@example.com \
+    --first-name Jordan \
+    --last-name Lee \
+    --roles "DEVELOPER,APP_MANAGER" \
+    --provisioning-allowed
+
+storescreens users invitations
+```
+
+#### List your team's distribution certificates
+
+```bash
+storescreens devportal certificates list --type IOS_DISTRIBUTION --json \
+    | jq '.certificates[] | {id, name: .attributes.displayName, exp: .attributes.expirationDate}'
+```
+
+#### Create a new App ID with App Groups + Push Notifications
+
+```bash
+# Register the identifier.
+storescreens devportal bundle-ids create \
+    --identifier com.example.myapp \
+    --name "My App" \
+    --platform IOS
+
+# Grab the database id (not the reverse-DNS) for the next steps.
+BUNDLE_ID=$(storescreens devportal bundle-ids list \
+    --identifier com.example.myapp --json | jq -r '.bundleIds[0].id')
+
+# Enable Push Notifications (no configuration needed).
+storescreens devportal capabilities enable \
+    --bundle-id "$BUNDLE_ID" \
+    --type PUSH_NOTIFICATIONS
+
+# Enable App Groups with one group id configured.
+cat > /tmp/groups.json <<'JSON'
+[
+  {
+    "key": "APP_GROUP_CONTENTS",
+    "options": [
+      { "key": "group.com.example.shared", "enabled": true }
+    ]
+  }
+]
+JSON
+storescreens devportal capabilities enable \
+    --bundle-id "$BUNDLE_ID" \
+    --type APP_GROUPS \
+    --settings-file /tmp/groups.json
+
+# Confirm.
+storescreens devportal capabilities list --bundle-id "$BUNDLE_ID"
+```
+
+#### Register a developer device and issue a development profile
+
+```bash
+# Register the device.
+storescreens devportal devices create \
+    --name "Jordan's iPhone 15 Pro" \
+    --udid 00008120-001A0CD23E29C01E
+
+# Note the returned device id, then issue a profile that lists it.
+DEV_CERT_ID=$(storescreens devportal certificates list \
+    --type IOS_DEVELOPMENT --json | jq -r '.certificates[0].id')
+DEVICE_ID=$(storescreens devportal devices list --status ENABLED --json \
+    | jq -r '.devices[] | select(.attributes.name == "Jordan'\''s iPhone 15 Pro") | .id')
+BUNDLE_ID=$(storescreens devportal bundle-ids list \
+    --identifier com.example.myapp --json | jq -r '.bundleIds[0].id')
+
+storescreens devportal profiles create \
+    --name "My App Dev - Jordan" \
+    --type IOS_APP_DEVELOPMENT \
+    --bundle-id "$BUNDLE_ID" \
+    --certificates "$DEV_CERT_ID" \
+    --devices "$DEVICE_ID"
+```
+
+
+## Marketing surfaces
+
+storescreens wraps the full App Store Connect marketing / discoverability /
+extension surface so AI agents can drive these endpoints without
+constructing raw HTTP. Every surface has a typed Swift API in
+`StorescreensCore`, an MCP tool catalog in `storescreens-mcp`, and a
+parent CLI command tree under `storescreens` itself.
+
+Credentials are resolved the same way as the rest of the tool: env vars
+(`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_PATH`) or
+`~/.storescreens/asc-credentials.yml`. Run `storescreens auth login` once
+and every command below is wired up.
+
+### Sub-families
+
+#### App Previews
+
+App Preview videos appear before screenshots in the App Store carousel.
+Each `(locale, deviceType)` has one `appPreviewSet` that holds up to
+three preview videos.
+
+| MCP tool              | CLI command                              | What it does                                    |
+| --------------------- | ---------------------------------------- | ----------------------------------------------- |
+| `preview_sets_list`   | `storescreens previews sets-list`        | List preview sets on a version localization     |
+| `preview_sets_create` | `storescreens previews sets-create`      | Find-or-create an `appPreviewSet`               |
+| `preview_sets_delete` | `storescreens previews sets-delete`      | Delete a preview set + every video inside       |
+| `previews_list`       | `storescreens previews list`             | List preview videos inside a set                |
+| `previews_upload`     | `storescreens previews upload`           | 3-phase upload of a `.mp4` / `.mov` preview     |
+| `previews_delete`     | `storescreens previews delete`           | Delete a single preview video                   |
+
+#### App Clips
+
+App Clips, their default + URL-triggered advanced experiences, per-locale
+metadata, the App Clip header image, and the App Clip review-detail
+record (invocation URLs Apple's reviewers exercise).
+
+| MCP tool                                       | CLI command                                            |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| `app_clips_list`                               | `storescreens app-clips list`                          |
+| `app_clips_create`                             | `storescreens app-clips create`                        |
+| `app_clip_default_experiences_list`            | `storescreens app-clips experiences-list`              |
+| `app_clip_default_experience_create`           | `storescreens app-clips experience-create`             |
+| `app_clip_default_experience_update`           | -                                                      |
+| `app_clip_default_experience_delete`           | -                                                      |
+| `app_clip_default_localizations_list`          | -                                                      |
+| `app_clip_default_localizations_create`        | -                                                      |
+| `app_clip_default_localizations_update`        | -                                                      |
+| `app_clip_default_localizations_delete`        | -                                                      |
+| `app_clip_advanced_experiences_list`           | `storescreens app-clips experience-advanced-list`      |
+| `app_clip_advanced_experience_create`          | `storescreens app-clips experience-advanced-create`    |
+| `app_clip_advanced_experience_update`          | -                                                      |
+| `app_clip_advanced_experience_delete`          | -                                                      |
+| `app_clip_advanced_localizations_list`         | -                                                      |
+| `app_clip_advanced_localizations_create`       | -                                                      |
+| `app_clip_advanced_localizations_update`       | -                                                      |
+| `app_clip_advanced_localizations_delete`       | -                                                      |
+| `app_clip_review_detail_get`                   | `storescreens app-clips review-detail-get`             |
+| `app_clip_review_detail_update`                | `storescreens app-clips review-detail-update`          |
+| `app_clip_headers_list`                        | -                                                      |
+| `app_clip_headers_upload`                      | `storescreens app-clips header-upload`                 |
+| `app_clip_headers_delete`                      | -                                                      |
+
+CLI rows marked `-` are reachable via the MCP tool catalog for AI driven
+flows; we keep the CLI deliberately lean (only the operations end users
+typically invoke from a terminal land in the CLI).
+
+#### Custom Product Pages
+
+Up to 35 alternate product page variants per app. Each `customProductPage`
+has one editable + zero-or-more historical `customProductPageVersions`;
+each version has per-locale `customProductPageLocalizations`.
+
+| MCP tool                  | CLI command                                  |
+| ------------------------- | -------------------------------------------- |
+| `cpp_list`                | `storescreens cpp list`                      |
+| `cpp_create`              | `storescreens cpp create`                    |
+| `cpp_update`              | `storescreens cpp update`                    |
+| `cpp_delete`              | `storescreens cpp delete`                    |
+| `cpp_versions_list`       | `storescreens cpp versions-list`             |
+| `cpp_versions_create`     | `storescreens cpp versions-create`           |
+| `cpp_versions_delete`     | -                                            |
+| `cpp_localizations_list`  | `storescreens cpp localizations-list`        |
+| `cpp_localizations_create`| `storescreens cpp localizations-create`      |
+| `cpp_localizations_update`| `storescreens cpp localizations-update`      |
+| `cpp_localizations_delete`| -                                            |
+
+#### App Events
+
+Tournaments, premieres, content drops. Each `appEvent` has per-locale
+localizations (name, short + long descriptions, deep link via parent
+attribute) plus `appEventScreenshots` and `appEventVideoClips` uploaded
+via the 3-phase asset reservation flow.
+
+| MCP tool                         | CLI command                                       |
+| -------------------------------- | ------------------------------------------------- |
+| `events_list`                    | `storescreens events list`                        |
+| `events_get`                     | `storescreens events get`                         |
+| `events_create`                  | `storescreens events create`                      |
+| `events_update`                  | `storescreens events update`                      |
+| `events_delete`                  | `storescreens events delete`                      |
+| `events_localizations_list`      | `storescreens events localizations-list`          |
+| `events_localizations_create`    | `storescreens events localizations-create`        |
+| `events_localizations_update`    | `storescreens events localizations-update`        |
+| `events_localizations_delete`    | -                                                 |
+| `events_screenshots_list`        | -                                                 |
+| `events_screenshots_upload`      | `storescreens events screenshot-upload`           |
+| `events_screenshots_delete`      | -                                                 |
+| `events_videos_list`             | -                                                 |
+| `events_videos_upload`           | `storescreens events video-upload`                |
+| `events_videos_delete`           | -                                                 |
+
+#### App Store Version Experiments (V2)
+
+A/B tests on screenshots + product pages, scoped to a particular App
+Store version. Each experiment owns a set of treatments (variants);
+each treatment has its own localizations + screenshot sets + preview
+sets that ASC rotates between while the experiment runs.
+
+| MCP tool                                          | CLI command                                                |
+| ------------------------------------------------- | ---------------------------------------------------------- |
+| `experiments_list`                                | `storescreens experiments list`                            |
+| `experiments_get`                                 | `storescreens experiments get`                             |
+| `experiments_create`                              | `storescreens experiments create`                          |
+| `experiments_update`                              | `storescreens experiments update`                          |
+| `experiments_delete`                              | `storescreens experiments delete`                          |
+| `experiments_treatments_list`                     | `storescreens experiments treatments-list`                 |
+| `experiments_treatments_create`                   | `storescreens experiments treatments-create`               |
+| `experiments_treatments_update`                   | -                                                          |
+| `experiments_treatments_delete`                   | -                                                          |
+| `experiments_treatment_localizations_list`        | -                                                          |
+| `experiments_treatment_localizations_create`      | `storescreens experiments treatment-localizations-create`  |
+| `experiments_treatment_localizations_update`      | -                                                          |
+| `experiments_treatment_localizations_delete`      | -                                                          |
+| `experiments_treatment_screenshots_upload`        | `storescreens experiments treatment-screenshot-upload`     |
+| `experiments_treatment_previews_upload`           | `storescreens experiments treatment-preview-upload`        |
+
+#### App Encryption Declarations
+
+The standalone `appEncryptionDeclarations` resource (distinct from the
+simpler `submit.export_compliance` flag handled in `SubmitCommand`).
+Used when the app's encryption usage requires full ERN-style paperwork
+with supporting documents.
+
+| MCP tool                          | CLI command                                       |
+| --------------------------------- | ------------------------------------------------- |
+| `encryption_decl_list`            | `storescreens encryption-decl list`               |
+| `encryption_decl_get`             | `storescreens encryption-decl get`                |
+| `encryption_decl_create`          | `storescreens encryption-decl create`             |
+| `encryption_decl_update`          | `storescreens encryption-decl update`             |
+| `encryption_decl_documents_list`  | `storescreens encryption-decl documents-list`     |
+| `encryption_decl_documents_upload`| `storescreens encryption-decl documents-upload`   |
+| `encryption_decl_documents_delete`| `storescreens encryption-decl documents-delete`   |
+
+#### Routing App Coverage
+
+The routing-app coverage JSON file (the polygon describing where a
+Driving and Navigation app provides coverage). At most one coverage
+record per app. Same 3-phase upload pattern as the other asset
+resources, but the file is JSON instead of an image or video.
+
+| MCP tool                  | CLI command                              |
+| ------------------------- | ---------------------------------------- |
+| `routing_coverage_get`    | `storescreens routing-coverage get`      |
+| `routing_coverage_upload` | `storescreens routing-coverage upload`   |
+| `routing_coverage_delete` | `storescreens routing-coverage delete`   |
+
+### Workflows
+
+#### Upload an App Preview video for the iPhone 6.9 set
+
+```bash
+# 1. Resolve the version localization id (from `storescreens status --json` or
+#    by listing localizations on the editable version).
+LOC_ID=...
+
+# 2. Find or create the iPhone 6.9 preview set.
+storescreens previews sets-create \
+  --localization-id "$LOC_ID" \
+  --preview-type APP_IPHONE_67 \
+  --json
+
+# 3. Upload the video. The CLI runs reserve + per-chunk PUT + confirm; the
+#    file is sliced into chunks Apple's pre-signed URLs accept.
+storescreens previews upload \
+  --set-id <appPreviewSet id> \
+  --file ./previews/iphone-6.9-trailer.mp4 \
+  --mime-type video/mp4 \
+  --poster-time-code 00:00:02.500
+```
+
+#### Create a custom product page version for a marketing campaign
+
+```bash
+APP_ID=1234567890
+
+# 1. Create the campaign-variant landing page.
+storescreens cpp create --app-id "$APP_ID" --name "Holiday Sale" --json
+
+# 2. Open a fresh editable version on it.
+storescreens cpp versions-create --page-id <customProductPage id> --json
+
+# 3. Drop in a per-locale promotional text override.
+storescreens cpp localizations-create \
+  --version-id <customProductPageVersion id> \
+  --locale en-US \
+  --promotional-text "Holiday savings on every plan, this week only."
+```
+
+#### Configure an A/B experiment on the screenshots
+
+```bash
+# 1. List versions and pick the editable target.
+storescreens status --json
+
+# 2. Spin up an experiment on the version. Each treatment is a variant.
+storescreens experiments create \
+  --version-id <version id> \
+  --name "Hero shot test" \
+  --traffic-proportion 50
+
+# 3. Create a treatment + localized overrides.
+storescreens experiments treatments-create \
+  --experiment-id <experiment id> \
+  --name "Treatment A" \
+  --traffic-proportion 25
+storescreens experiments treatment-localizations-create \
+  --treatment-id <treatment id> \
+  --locale en-US \
+  --promotional-text "Treatment-A promo copy"
+
+# 4. Upload the variant screenshots into the treatment's appScreenshotSet.
+storescreens experiments treatment-screenshot-upload \
+  --set-id <appScreenshotSet id> \
+  --file ./treatment-a/iphone-67-shot-1.png
+
+# 5. Launch the experiment when you're done staging it.
+storescreens experiments update <experiment id> --started --json
+```
+
+#### Upload an app encryption declaration document
+
+```bash
+APP_ID=1234567890
+
+# 1. Create the declaration record.
+storescreens encryption-decl create \
+  --app-id "$APP_ID" \
+  --uses-encryption \
+  --no-exempt \
+  --platform IOS \
+  --document-name "ERN_R3_2026.pdf" \
+  --document-type "ERN" \
+  --code-value "5A002" \
+  --json
+
+# 2. Attach the supporting document via the 3-phase upload flow.
+storescreens encryption-decl documents-upload \
+  --declaration-id <declaration id> \
+  --file ./paperwork/ERN_R3_2026.pdf
+```
+
+#### Attach a routing-coverage file to a Driving / Navigation app
+
+```bash
+APP_ID=1234567890
+
+# Each app has at most one coverage record. Calling upload overwrites the
+# previous one when one is already present.
+storescreens routing-coverage upload \
+  --app-id "$APP_ID" \
+  --file ./coverage.geojson
+```
+
 ## App Store Connect Screenshot Sizes
 
 StoreScreens labels devices by physical screen dimension (6.9", 6.3", etc.). Here's how those map to what App Store Connect requires:

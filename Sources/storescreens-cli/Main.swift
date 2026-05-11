@@ -15,7 +15,21 @@ struct StoreScreensCLI: AsyncParsableCommand {
         commandName: "storescreens",
         abstract: "Capture App Store screenshots across iOS simulators and macOS.",
         version: storescreensVersion,
-        subcommands: [ListCommand.self, InitCommand.self, SetupCommand.self, CaptureCommand.self, CheckCommand.self, ScreenshotCommand.self, BezelsCommand.self, RenderCommand.self, TemplatesCommand.self, AuthCommand.self, SubmitCommand.self, MetadataCommand.self, UploadBuildCommand.self, StatusCommand.self]
+        subcommands: [
+            // Capture / render / setup
+            ListCommand.self, InitCommand.self, SetupCommand.self, CaptureCommand.self,
+            CheckCommand.self, ScreenshotCommand.self, BezelsCommand.self, RenderCommand.self,
+            TemplatesCommand.self,
+            // App Store Connect: submit + binary upload + state
+            AuthCommand.self, SubmitCommand.self, MetadataCommand.self, UploadBuildCommand.self,
+            StatusCommand.self,
+            // App Store Connect: full API surface (added 2026-05)
+            TestFlightCommand.self, InAppPurchaseCommand.self, SubscriptionCommand.self,
+            ReviewsCommand.self, ReportsCommand.self, UsersCommand.self, DevPortalCommand.self,
+            PreviewsCommand.self, AppClipsCommand.self, CustomProductPagesCommand.self,
+            EventsCommand.self, ExperimentsCommand.self, EncryptionDeclCommand.self,
+            RoutingCoverageCommand.self,
+        ]
     )
 
     mutating func validate() throws {
