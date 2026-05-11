@@ -963,9 +963,9 @@ package struct AppClipsAPI {
 /// App Store Connect endpoints for custom product pages (up to 35 alternate
 /// product page variants per app, each with their own screenshots / preview
 /// videos / promo text — used to A/B different campaign landing experiences).
-/// Each `customProductPage` has one editable + zero-or-more historical
-/// `customProductPageVersions`. Each version has per-locale
-/// `customProductPageLocalizations` that hold the screenshot sets +
+/// Each `appCustomProductPage` has one editable + zero-or-more historical
+/// `appCustomProductPageVersions`. Each version has per-locale
+/// `appCustomProductPageLocalizations` that hold the screenshot sets +
 /// promo text overrides for that page variant.
 ///
 /// Docs: https://developer.apple.com/documentation/appstoreconnectapi/custom_product_pages
@@ -1002,7 +1002,7 @@ package struct CustomProductPagesAPI {
         var query: [String: String] = ["limit": "\(limit)"]
         if let cursor { query["cursor"] = cursor }
         let resp: Resp = try await client.get(
-            path: "apps/\(appID)/customProductPages",
+            path: "apps/\(appID)/appCustomProductPages",
             query: query, as: Resp.self
         )
         return (resp.data, resp.links?.next)
@@ -1012,7 +1012,7 @@ package struct CustomProductPagesAPI {
         struct Resp: Decodable { let data: Page }
         do {
             let resp: Resp = try await client.get(
-                path: "customProductPages/\(id)", as: Resp.self
+                path: "appCustomProductPages/\(id)", as: Resp.self
             )
             return resp.data
         } catch let e as ASCClient.APIError where e.statusCode == 404 {
@@ -1027,7 +1027,7 @@ package struct CustomProductPagesAPI {
     ) async throws -> Page {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "customProductPages"
+                let type = "appCustomProductPages"
                 let attributes: Attrs
                 let relationships: Rels
             }
@@ -1050,7 +1050,7 @@ package struct CustomProductPagesAPI {
         ))
         struct Resp: Decodable { let data: Page }
         let resp: Resp = try await client.post(
-            path: "customProductPages", body: body, as: Resp.self
+            path: "appCustomProductPages", body: body, as: Resp.self
         )
         return resp.data
     }
@@ -1063,7 +1063,7 @@ package struct CustomProductPagesAPI {
     ) async throws -> Page {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "customProductPages"
+                let type = "appCustomProductPages"
                 let id: String
                 let attributes: Attrs
             }
@@ -1078,13 +1078,13 @@ package struct CustomProductPagesAPI {
         ))
         struct Resp: Decodable { let data: Page }
         let resp: Resp = try await client.patch(
-            path: "customProductPages/\(id)", body: body, as: Resp.self
+            path: "appCustomProductPages/\(id)", body: body, as: Resp.self
         )
         return resp.data
     }
 
     package func deletePage(id: String) async throws {
-        try await client.delete(path: "customProductPages/\(id)")
+        try await client.delete(path: "appCustomProductPages/\(id)")
     }
 
     // MARK: Versions
@@ -1112,7 +1112,7 @@ package struct CustomProductPagesAPI {
         var query: [String: String] = ["limit": "\(limit)"]
         if let cursor { query["cursor"] = cursor }
         let resp: Resp = try await client.get(
-            path: "customProductPages/\(pageID)/customProductPageVersions",
+            path: "appCustomProductPages/\(pageID)/customProductPageVersions",
             query: query, as: Resp.self
         )
         return (resp.data, resp.links?.next)
@@ -1121,12 +1121,12 @@ package struct CustomProductPagesAPI {
     package func createVersion(pageID: String) async throws -> Version {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "customProductPageVersions"
+                let type = "appCustomProductPageVersions"
                 let relationships: Rels
             }
             struct Rels: Encodable {
                 struct P: Encodable {
-                    struct Data: Encodable { let type = "customProductPages"; let id: String }
+                    struct Data: Encodable { let type = "appCustomProductPages"; let id: String }
                     let data: Data
                 }
                 let customProductPage: P
@@ -1138,13 +1138,13 @@ package struct CustomProductPagesAPI {
         ))
         struct Resp: Decodable { let data: Version }
         let resp: Resp = try await client.post(
-            path: "customProductPageVersions", body: body, as: Resp.self
+            path: "appCustomProductPageVersions", body: body, as: Resp.self
         )
         return resp.data
     }
 
     package func deleteVersion(id: String) async throws {
-        try await client.delete(path: "customProductPageVersions/\(id)")
+        try await client.delete(path: "appCustomProductPageVersions/\(id)")
     }
 
     // MARK: Localizations
@@ -1172,7 +1172,7 @@ package struct CustomProductPagesAPI {
         var query: [String: String] = ["limit": "\(limit)"]
         if let cursor { query["cursor"] = cursor }
         let resp: Resp = try await client.get(
-            path: "customProductPageVersions/\(versionID)/customProductPageLocalizations",
+            path: "appCustomProductPageVersions/\(versionID)/customProductPageLocalizations",
             query: query, as: Resp.self
         )
         return (resp.data, resp.links?.next)
@@ -1185,7 +1185,7 @@ package struct CustomProductPagesAPI {
     ) async throws -> Localization {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "customProductPageLocalizations"
+                let type = "appCustomProductPageLocalizations"
                 let attributes: Attrs
                 let relationships: Rels
             }
@@ -1196,7 +1196,7 @@ package struct CustomProductPagesAPI {
             struct Rels: Encodable {
                 struct V: Encodable {
                     struct Data: Encodable {
-                        let type = "customProductPageVersions"
+                        let type = "appCustomProductPageVersions"
                         let id: String
                     }
                     let data: Data
@@ -1211,7 +1211,7 @@ package struct CustomProductPagesAPI {
         ))
         struct Resp: Decodable { let data: Localization }
         let resp: Resp = try await client.post(
-            path: "customProductPageLocalizations", body: body, as: Resp.self
+            path: "appCustomProductPageLocalizations", body: body, as: Resp.self
         )
         return resp.data
     }
@@ -1223,7 +1223,7 @@ package struct CustomProductPagesAPI {
     ) async throws -> Localization {
         struct Body: Encodable {
             struct Data: Encodable {
-                let type = "customProductPageLocalizations"
+                let type = "appCustomProductPageLocalizations"
                 let id: String
                 let attributes: Attrs
             }
@@ -1235,13 +1235,13 @@ package struct CustomProductPagesAPI {
         ))
         struct Resp: Decodable { let data: Localization }
         let resp: Resp = try await client.patch(
-            path: "customProductPageLocalizations/\(id)", body: body, as: Resp.self
+            path: "appCustomProductPageLocalizations/\(id)", body: body, as: Resp.self
         )
         return resp.data
     }
 
     package func deleteLocalization(id: String) async throws {
-        try await client.delete(path: "customProductPageLocalizations/\(id)")
+        try await client.delete(path: "appCustomProductPageLocalizations/\(id)")
     }
 }
 
