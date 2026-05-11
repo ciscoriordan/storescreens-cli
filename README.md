@@ -411,6 +411,9 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens alt-dist ...` | Alternative Distribution (EU DMA): keys, packages, package versions/deltas/variants, domains, marketplace search + webhooks |
 | `storescreens apple-pay ...` | Apple Pay: pass type IDs + certificates (from CSR), merchant domains |
 | `storescreens sandbox / resource-limits / diagnostic-sessions` | Sandbox testers, team resource quotas, Xcode Instruments diagnostic sessions |
+| `storescreens webhooks ...` | General-purpose ASC webhooks: subscribe to build/review/availability events, list deliveries, resend, health-ping |
+| `storescreens build-uploads ...` | API-native .ipa upload (alternative to altool): buildUploads + buildUploadFiles, chunked PUT, high-level `upload-ipa` convenience |
+| `storescreens accessibility ...` | Accessibility Nutrition Labels: per-device-family declaration of VoiceOver / captions / contrast / motion / etc. support |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
@@ -4247,6 +4250,328 @@ storescreens diagnostic-sessions delete <session-id>
 Sessions left in `IN_PROGRESS` indefinitely still time out on Apple's
 side after a few hours, but completing them explicitly frees the slot
 sooner.
+
+## Webhooks
+
+Wraps the App Store Connect general-purpose Webhooks API (shipped by Apple in OpenAPI spec v4.0, June 2025). Webhooks let a reactive AI agent (or any other automation) subscribe an HTTPS endpoint to live ASC events, build status changes, review state transitions, app availability changes, TestFlight events, in-app purchase events, and so on, without polling.
+
+This is the general-purpose webhooks surface. It is distinct from `marketplaceWebhooks` (EU DMA Alternative Distribution only), which is wrapped separately under `## Alternative Distribution` as `storescreens alt-dist marketplace webhooks` / `altdist_marketplace_webhooks_*`. Use the surface below for everything that is not marketplace-distribution-specific.
+
+### Resources
+
+| Resource                        | What it is                                                                                                                                       | Operations          |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|
+| `webhooks`                      | The subscription itself. Target URL, friendly name, list of subscribed event types, HMAC signing secret, active toggle, owning-app relationship. | CRUD + per-app list |
+| `webhookDeliveries`             | Read-only history of every payload Apple has sent for a webhook (event type, state, attempt count, HTTP response code/body, the JSON payload).   | List, get, resend   |
+| `webhookPings`                  | Synthetic ping deliveries used to confirm a webhook URL is reachable and properly verifying signatures.                                          | Create (dispatch)   |
+
+The `eventTypes` field is passed through as `[String]` rather than a pinned Swift enum: Apple ships new event types every quarter, so the catalog moves faster than the release cycle for this CLI. Consult Apple's docs for the current list and pass identifiers through verbatim.
+
+### MCP tools
+
+All operations are exposed under the `webhooks_*` namespace so MCP-driven agents can subscribe, inspect, and recover deliveries directly.
+
+| Tool name                       | What it does                                                                                       |
+|---------------------------------|----------------------------------------------------------------------------------------------------|
+| `webhooks_list`                 | List every webhook subscription on the account.                                                    |
+| `webhooks_list_for_app`         | List subscriptions scoped to a specific app (`apps/{id}/webhooks`).                                |
+| `webhooks_get`                  | Get a single subscription by id.                                                                   |
+| `webhooks_create`               | Create a new subscription. Apple returns the HMAC secret once on create, capture it then.          |
+| `webhooks_update`               | PATCH any non-nil fields (url, name, event_types, secret, active). Owning app is immutable.        |
+| `webhooks_delete`               | Delete a subscription. Apple drops associated delivery history.                                    |
+| `webhooks_deliveries_list`      | Paged list of delivery records for a single webhook.                                               |
+| `webhooks_deliveries_get`       | Get one delivery, including the JSON payload Apple sent and the response the endpoint returned.   |
+| `webhooks_deliveries_resend`    | Retrigger a past delivery against the webhook's URL.                                               |
+| `webhooks_pings_create`         | Dispatch a synthetic ping at a webhook URL to verify the endpoint is alive.                       |
+
+### CLI
+
+```
+storescreens webhooks list [--limit N] [--cursor C] [--json]
+storescreens webhooks list-for-app --app-id <id> [--limit N] [--cursor C] [--json]
+storescreens webhooks get <id> [--json]
+storescreens webhooks create --app-id <id> --url https://... --name "ci-watch" --events build.finished,review.approved [--secret ...] [--inactive] [--json]
+storescreens webhooks update <id> [--url ...] [--name ...] [--events ...] [--secret ...] [--active true|false] [--json]
+storescreens webhooks delete <id>
+storescreens webhooks deliveries list --webhook-id <id> [--limit N] [--cursor C] [--json]
+storescreens webhooks deliveries get <id> [--json]
+storescreens webhooks deliveries resend --id <id> [--json]
+storescreens webhooks ping --webhook-id <id> [--json]
+```
+
+Pass `--events` as a comma-separated list on the create/update commands; the CLI splits on commas and trims whitespace before sending the list to Apple. The MCP tools accept either a JSON array or a comma-separated string for resilience against agent quirks.
+
+### Common workflows
+
+Configure a webhook to fire on build status changes:
+
+```
+storescreens webhooks create \
+  --app-id 1234567890 \
+  --url https://ci.example.com/asc-hook \
+  --name "ci-build-watch" \
+  --events buildState,prereleaseVersion
+```
+
+Apple returns the HMAC `secret` once in the create response; store it locally to verify signatures on incoming payloads. Subsequent reads redact it.
+
+Inspect a recent delivery:
+
+```
+storescreens webhooks deliveries list --webhook-id <webhook-id>
+storescreens webhooks deliveries get <delivery-id> --json
+```
+
+The `get` response carries the JSON payload Apple POSTed and the HTTP status, body, and attempt count from the endpoint, useful for debugging why a delivery is failing.
+
+Resend a failed delivery:
+
+```
+storescreens webhooks deliveries resend --id <delivery-id>
+```
+
+Ping a webhook to verify the endpoint is alive without waiting for a real event:
+
+```
+storescreens webhooks ping --webhook-id <webhook-id>
+```
+
+The response includes the HTTP status and body the endpoint returned, so a single round-trip confirms reachability and signature verification.
+
+
+## Build Uploads (API-native build upload)
+
+The `build-uploads` family wraps App Store Connect's API-native chunked binary upload pipeline (the `buildUploads` and `buildUploadFiles` resources introduced in OpenAPI spec v4.1, October 2025). It's the programmatic equivalent of `xcrun altool --upload-app`: register a buildUpload, PUT the .ipa bytes to Apple's signed URLs, PATCH a commit, and let ASC process the binary into a regular `Build` resource on the app.
+
+This is the API-native alternative to the existing `storescreens upload-build` command, which wraps `xcrun altool`. The altool path is still recommended for production submissions: it is battle-tested, hooks into Apple's local validation tooling, and gets the same TestFlight processing path Apple's own xcrun stack uses. The `build-uploads` family is documented here for two use cases:
+
+1. Early adopters who want to drive the upload pipeline directly without depending on Xcode being installed.
+2. CI environments where Xcode is not available (containers, headless Linux runners, future cross-platform tooling).
+
+### Resources
+
+| Resource | Purpose |
+|----------|---------|
+| `buildUploads` | Outer reservation. One per .ipa upload attempt. Scopes the upload to an app and exposes processing state (`PENDING`, `UPLOADED`, `PROCESSING`, `VALID`, `INVALID`, `FAILED`) and any `errorMessages`. |
+| `buildUploadFiles` | Per-file chunked-upload target inside a buildUpload. Each file's response includes `uploadOperations` — the signed PUT URLs, headers, offsets, and lengths that the client uses to push bytes. Most uploads have a single file (the .ipa). |
+| `apps/{id}/buildUploads` | Relationship listing for an app, surfacing in-flight and completed reservations. |
+
+### MCP tools
+
+| Tool name | What it does |
+|-----------|--------------|
+| `build_uploads_list` | List buildUploads via `GET /buildUploads?filter[app]=<id>`. |
+| `build_uploads_list_for_app` | List buildUploads via the relationship endpoint `apps/{id}/buildUploads`. |
+| `build_uploads_get` | Fetch a single buildUpload (poll `state` and `errorMessages`). |
+| `build_uploads_create` | POST `/buildUploads` to reserve a chunked upload for an app. |
+| `build_uploads_delete` | Discard an in-progress reservation. |
+| `build_uploads_files_list` | List buildUploadFiles attached to a buildUpload. |
+| `build_uploads_files_get` | Fetch a single buildUploadFile (inspect `uploadOperations` + state). |
+| `build_uploads_files_create` | POST `/buildUploadFiles` to reserve a chunked-upload target inside a buildUpload. |
+| `build_uploads_files_commit` | PATCH `/buildUploadFiles/{id}` with `uploaded:true` + checksum once every chunk for the file has been PUT. |
+| `build_uploads_upload_ipa` | High-level convenience: full create -> chunk-PUT -> commit -> poll workflow for a single .ipa on disk. |
+
+### CLI
+
+```sh
+# Upload a fresh .ipa using the API path (no altool)
+storescreens build-uploads upload-ipa \
+  --app-id 1234567890 \
+  --file /path/to/MyApp.ipa
+
+# List the buildUploads currently registered for an app
+storescreens build-uploads list --app-id 1234567890
+
+# Or via the relationship endpoint apps/{id}/buildUploads
+storescreens build-uploads list-for-app --app-id 1234567890
+
+# Poll the upload status (state: PENDING / UPLOADED / PROCESSING / VALID / INVALID / FAILED)
+storescreens build-uploads get --id <buildUploadId>
+
+# Inspect a specific file's upload operations (chunk URLs + headers)
+storescreens build-uploads files-get --id <buildUploadFileId>
+
+# Cancel an in-progress reservation
+storescreens build-uploads delete <buildUploadId>
+```
+
+For workflows that need to drive the resources directly (resumable uploads, multi-file binaries, custom chunking, etc.), the primitive subcommands `create`, `files-create`, and `files-commit` exposed by the CLI map one-to-one to the underlying POST / POST / PATCH calls.
+
+### Workflow: upload a fresh .ipa using the API path
+
+The high-level `upload-ipa` subcommand wraps the entire flow. Internally it:
+
+1. Hashes the .ipa with MD5 (Apple's `sourceFileChecksum` field).
+2. POSTs `/buildUploads` with the app relationship, file name, and file size.
+3. POSTs `/buildUploadFiles` with the parent buildUpload relationship plus the MD5 checksum. ASC returns the file resource with one or more `uploadOperations`.
+4. PUTs each chunk to its pre-signed URL with the headers Apple specified. No ASC Authorization header is used (the URLs are pre-signed).
+5. PATCHes `/buildUploadFiles/{id}` with `uploaded:true` + the checksum once all chunks land.
+6. Polls `/buildUploads/{id}` until `state` reaches `VALID` / `INVALID` / `FAILED` (default timeout 15 minutes).
+7. Looks up the matching `Build` resource on the app and prints it.
+
+Per-chunk progress is streamed to stderr while the upload runs, so `--json` output on stdout stays parseable.
+
+### Workflow: poll the upload status
+
+The buildUpload `state` advances asynchronously: client work (`PENDING` -> `UPLOADED`) flips to ASC processing (`PROCESSING` -> `VALID` or `INVALID` / `FAILED`). To poll from outside the convenience command:
+
+```sh
+storescreens build-uploads get --id <buildUploadId> --json | jq .attributes.state
+```
+
+Once the state is `VALID`, the corresponding `Build` resource is visible under the app:
+
+```sh
+storescreens status --app-id 1234567890
+# or, more directly:
+storescreens testflight builds --app-id 1234567890
+```
+
+### Workflow: inspect failed chunks
+
+When the upload runs against a flaky connection or the local .ipa is corrupted, ASC will surface diagnostics in two places:
+
+1. The buildUpload's `attributes.errorMessages` (overall validation failure):
+
+```sh
+storescreens build-uploads get --id <buildUploadId>
+# prints: errors: [VALIDATION_FAILURE] Bundle signing required.
+```
+
+2. The buildUploadFile's `attributes.errorMessages` (per-file failure, e.g. checksum mismatch on a specific chunk range):
+
+```sh
+storescreens build-uploads files-list --build-upload-id <buildUploadId>
+# inspect the file id, then:
+storescreens build-uploads files-get --id <buildUploadFileId>
+```
+
+If only a subset of chunks failed to land, the file's `state` stays `AWAITING_UPLOAD` and the `uploadOperations` array remains populated. You can re-PUT just the missing chunks against the same signed URLs (Apple's S3 fronting tolerates a re-PUT of the same chunk within a short window), then re-issue `files-commit` once the checksum matches.
+
+### When to use this vs. `storescreens upload-build`
+
+| Concern | `upload-build` (altool) | `build-uploads upload-ipa` (API) |
+|---------|-------------------------|----------------------------------|
+| Local validation | Yes — altool runs Apple's pre-upload checks. | No — ASC validates server-side only. |
+| Xcode dependency | Yes — needs a pinned non-beta Xcode. | No — pure HTTPS. |
+| Battle-tested | Yes — every Xcode submission goes through altool. | New (spec v4.1, October 2025). |
+| Resumable | No — altool runs to completion. | Yes — `buildUploads` can be re-listed and `buildUploadFiles` re-committed. |
+| Recommended for production | Yes. | Use altool unless you specifically need API-only. |
+
+The altool path remains the default. If you do not have a specific reason to drive the API directly, stick with `storescreens upload-build`.
+
+
+## Accessibility declarations (Accessibility Nutrition Labels)
+
+Apple's Accessibility Nutrition Labels are the per-app, per-device-family
+accessibility-support summary that appears on the App Store product page. They
+encode answers to a small set of yes/no questions about whether the app supports
+VoiceOver, Voice Control, Dynamic Type / Larger Text, captions, audio
+descriptions, sufficient contrast, differentiate-without-color-alone, reduce
+motion, and dark interface. Apple shipped the resource in App Store Connect API
+v4.0 (June 2025); storescreens wraps it as the `accessibilityDeclarations`
+resource family.
+
+A declaration is created in DRAFT state, edited as many times as needed, and
+then PATCHed with `publish: true` to transition it to PUBLISHED. Apple
+automatically moves any previously PUBLISHED record for the same
+(app, deviceFamily) to REPLACED.
+
+Localizations: Apple's OpenAPI spec v4.3 (2026-03-10) does not expose an
+`accessibilityDeclarationLocalizations` resource. The declaration is global per
+(app, deviceFamily); there is no per-locale variant. If Apple adds one in a
+later spec version, it will land here as a sub-namespace.
+
+### Resources
+
+- `accessibilityDeclarations` (CRUD + publish flag)
+- `apps/{id}/accessibilityDeclarations` (paginated relationship list per app)
+
+### Apple attribute names
+
+The supports-* booleans are passed through verbatim using Apple's camelCase
+attribute names:
+
+- `supportsVoiceover`
+- `supportsVoiceControl`
+- `supportsLargerText`
+- `supportsCaptions`
+- `supportsAudioDescriptions`
+- `supportsSufficientContrast`
+- `supportsDifferentiateWithoutColorAlone`
+- `supportsReducedMotion`
+- `supportsDarkInterface`
+
+Plus:
+
+- `deviceFamily` (required on create; one of `IPHONE`, `IPAD`, `APPLE_TV`,
+  `APPLE_WATCH`, `MAC`, `VISION`)
+- `state` (read-only; one of `DRAFT`, `PUBLISHED`, `REPLACED`)
+- `publish` (PATCH-only transition flag; `true` moves DRAFT to PUBLISHED)
+
+### MCP tool catalog
+
+- `accessibility_declarations_list` - list per app, with optional
+  `device_family` and `state` filters
+- `accessibility_declarations_list_for_app` - same operation, named to mirror
+  the relationship-endpoint phrasing
+- `accessibility_declarations_get` - read one record by id
+- `accessibility_declarations_create` - create a DRAFT declaration for an
+  (app, deviceFamily)
+- `accessibility_declarations_update` - PATCH attributes and / or publish
+- `accessibility_declarations_delete` - delete a declaration by id
+
+### CLI commands
+
+```
+storescreens accessibility list          --app-id <ID> [--device-family IPHONE] [--state DRAFT]
+storescreens accessibility list-for-app  --app-id <ID> [--device-family IPHONE] [--state DRAFT]
+storescreens accessibility get           <ID>
+storescreens accessibility create        --app-id <ID> --device-family IPHONE [--supports-voiceover true ...]
+storescreens accessibility update        --id <ID> [--publish true] [--supports-voiceover true ...]
+storescreens accessibility delete        <ID>
+```
+
+Every supports-* flag takes an explicit `true` / `false` value (or `yes` / `no`,
+`1` / `0`) so callers can downgrade an answer from `true` to `false`; omitting
+the flag leaves the existing answer untouched on Apple's side. Every leaf
+subcommand accepts `--json` for machine-readable output.
+
+### Common workflows
+
+#### Declare an app's accessibility support before submission
+
+```
+storescreens accessibility create \
+  --app-id 1234567890 \
+  --device-family IPHONE \
+  --supports-voiceover true \
+  --supports-voice-control true \
+  --supports-larger-text true \
+  --supports-sufficient-contrast true \
+  --supports-differentiate-without-color-alone true \
+  --supports-reduced-motion true \
+  --supports-dark-interface true
+
+storescreens accessibility update --id <returned-draft-id> --publish true
+```
+
+#### Inspect existing declaration
+
+```
+storescreens accessibility list --app-id 1234567890
+storescreens accessibility get <declaration-id>
+```
+
+#### Update a single declaration field after improving accessibility support
+
+```
+storescreens accessibility update --id <declaration-id> --supports-captions true
+```
+
+The same flow can be driven entirely from an MCP agent by calling
+`accessibility_declarations_list`, then `accessibility_declarations_update` with
+the same fields.
 
 ## App Store Connect Screenshot Sizes
 

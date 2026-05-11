@@ -118,6 +118,9 @@ struct StorescreensMCP {
         + XcodeCloudMCPTools.tools
         + AltDistributionMCPTools.tools
         + ApplePayAndMiscMCPTools.tools
+        + WebhooksMCPTools.tools
+        + BuildUploadsMCPTools.tools
+        + AccessibilityDeclarationsMCPTools.tools
 
     static let baseTools: [Tool] = [
         Tool(
@@ -381,6 +384,15 @@ struct StorescreensMCP {
             }
             if ApplePayAndMiscMCPTools.tools.contains(where: { $0.name == params.name }) {
                 return try await ApplePayAndMiscMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("webhooks_") {
+                return try await WebhooksMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("build_uploads_") {
+                return try await BuildUploadsMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("accessibility_declarations_") {
+                return try await AccessibilityDeclarationsMCPTools.handle(params)
             }
 
             // Built-in capture / render / preview tools.
