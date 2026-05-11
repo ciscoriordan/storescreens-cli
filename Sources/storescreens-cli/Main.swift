@@ -37,6 +37,13 @@ struct StoreScreensCLI: AsyncParsableCommand {
             // ASC API Wave 3 (added 2026-05): general-purpose webhooks, API-native
             // build uploads, accessibility nutrition labels
             WebhooksCommand.self, BuildUploadsCommand.self, AccessibilityDeclarationsCommand.self,
+            // ASC API Wave 4 (added 2026-05): Apple's 2025-2026 additions
+            BackgroundAssetsCommand.self, VersionReleaseControlCommand.self,
+            GameCenterActivitiesCommand.self,
+            BetaFeedbackCommand.self, BetaRecruitmentCommand.self,
+            BetaAppClipInvocationsCommand.self, IAPOfferCodesCommand.self,
+            SubscriptionExtrasCommand.self, ReviewExtrasCommand.self,
+            AscExtrasCommand.self,
         ]
     )
 

@@ -121,6 +121,10 @@ struct StorescreensMCP {
         + WebhooksMCPTools.tools
         + BuildUploadsMCPTools.tools
         + AccessibilityDeclarationsMCPTools.tools
+        + BackgroundAssetsMCPTools.tools
+        + GameCenterActivitiesMCPTools.tools
+        + BetaFeedbackAndExtrasMCPTools.tools
+        + Wave4ExtrasMCPTools.tools
 
     static let baseTools: [Tool] = [
         Tool(
@@ -353,11 +357,39 @@ struct StorescreensMCP {
 
     static func handle(_ params: CallTool.Parameters, server: Server) async -> CallTool.Result {
         do {
-            // ASC API families. Each family handler dispatches its own
-            // tool names internally; routing here is by either a prefix
-            // check or a Result? convention (nil = unrecognised).
+            // ASC API families. Two routing strategies coexist here:
+            //   1. tools.contains(...) checks — most specific, used for any
+            //      family that shares a prefix with another (Wave 4 GC
+            //      Activities reuses `gc_*`; Wave 4 IAP Offer Codes reuses
+            //      `iap_*`; etc.). These must come BEFORE the prefix checks
+            //      so the more-specific family wins.
+            //   2. hasPrefix(...) — fallback for namespaces with a single
+            //      owner (`testflight_*`, `subs_*`, `reports_*`, …).
+            //   3. Result? — a couple of early Wave 1 families returned
+            //      nil for unknown names; left as-is.
             if let r = try await CustomerReviewsMCPTools.handle(params) { return r }
             if let r = try await UsersAndDevPortalMCPTools.handle(params) { return r }
+            // Wave 4 family-specific catalogs (most-specific first).
+            if GameCenterActivitiesMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await GameCenterActivitiesMCPTools.handle(params)
+            }
+            if BackgroundAssetsMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await BackgroundAssetsMCPTools.handle(params)
+            }
+            if BetaFeedbackAndExtrasMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await BetaFeedbackAndExtrasMCPTools.handle(params)
+            }
+            if Wave4ExtrasMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await Wave4ExtrasMCPTools.handle(params)
+            }
+            // Marketing + Apple Pay grab-bag use tools.contains too.
+            if MarketingMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await MarketingMCPTools.handle(params)
+            }
+            if ApplePayAndMiscMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await ApplePayAndMiscMCPTools.handle(params)
+            }
+            // Prefix-based fallback routing for single-owner namespaces.
             if params.name.hasPrefix("testflight_") {
                 return try await TestFlightMCPTools.handle(params)
             }
@@ -370,9 +402,6 @@ struct StorescreensMCP {
             if params.name.hasPrefix("reports_") {
                 return try await ReportsMCPTools.handle(params)
             }
-            if MarketingMCPTools.tools.contains(where: { $0.name == params.name }) {
-                return try await MarketingMCPTools.handle(params)
-            }
             if params.name.hasPrefix("gc_") {
                 return try await GameCenterMCPTools.handle(params)
             }
@@ -381,9 +410,6 @@ struct StorescreensMCP {
             }
             if params.name.hasPrefix("altdist_") {
                 return try await AltDistributionMCPTools.handle(params)
-            }
-            if ApplePayAndMiscMCPTools.tools.contains(where: { $0.name == params.name }) {
-                return try await ApplePayAndMiscMCPTools.handle(params)
             }
             if params.name.hasPrefix("webhooks_") {
                 return try await WebhooksMCPTools.handle(params)

@@ -414,6 +414,12 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens webhooks ...` | General-purpose ASC webhooks: subscribe to build/review/availability events, list deliveries, resend, health-ping |
 | `storescreens build-uploads ...` | API-native .ipa upload (alternative to altool): buildUploads + buildUploadFiles, chunked PUT, high-level `upload-ipa` convenience |
 | `storescreens accessibility ...` | Accessibility Nutrition Labels: per-device-family declaration of VoiceOver / captions / contrast / motion / etc. support |
+| `storescreens background-assets ...` | Background Assets: large post-install asset download (200GB/app); upload chunks, version + state per build channel |
+| `storescreens version-release ...` | Version release control: phased releases, promo carousels, manual release requests, end-of-pre-order |
+| `storescreens game-center-v2 ...` | Game Center Activities + Challenges (+ images + localizations + versions), V2 versioning for achievements / leaderboards / sets, sandbox-only score and achievement submissions |
+| `storescreens beta-feedback / beta-recruitment / beta-app-clip ...` | Modern TestFlight: feedback crash + screenshot submissions, beta crash logs, automatic-recruitment criteria, App Clip invocation configs |
+| `storescreens iap-offer-codes ...` | One-time-IAP offer codes (custom + one-time-use variants); distinct from subscription offer codes covered by `subscriptions` |
+| `storescreens subs-extras / review-extras / asc-extras` | Subscription intro / win-back offers / grace periods / group submissions, review summarizations + attachments, plus merchant IDs / nominations / app tags / EULAs / Android→iOS mapping / actors / app price points V3 / etc. |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
@@ -4572,6 +4578,953 @@ storescreens accessibility update --id <declaration-id> --supports-captions true
 The same flow can be driven entirely from an MCP agent by calling
 `accessibility_declarations_list`, then `accessibility_declarations_update` with
 the same fields.
+
+## Background Assets
+
+App Store Connect Background Assets are Apple's mechanism for shipping bulky
+media (game packs, ML model weights, large content libraries) outside the
+.ipa binary. Apple downloads the asset to the device after install or on
+first launch, so the binary stays small while the app can ship up to ~200GB
+of supplemental content per app. This wrapper covers Apple's six JSON:API
+resources for the feature (shipped in OpenAPI spec v4.0 June 2025, with the
+read-only release-state records added in v4.1 October 2025):
+
+- `backgroundAssets`: the parent record attached to an app.
+- `backgroundAssetVersions`: one logical asset release per app version.
+- `backgroundAssetUploadFiles`: the chunked-upload children of a version.
+- `backgroundAssetVersionAppStoreReleases`: read-only App Store delivery state.
+- `backgroundAssetVersionExternalBetaReleases`: read-only External Beta state.
+- `backgroundAssetVersionInternalBetaReleases`: read-only Internal Beta state.
+
+The chunked file upload mirrors `buildUploads`: POST registers a file +
+size and returns `uploadOperations` (signed S3-style PUT URLs + headers +
+offsets), the client PUTs each chunk, then PATCHes `uploaded:true` to
+commit. For one-shot use, the high-level `upload-file` subcommand bundles
+all three phases including local MD5 streaming.
+
+### MCP tools
+
+| Tool | Description |
+| --- | --- |
+| `bg_assets_list` | List backgroundAssets for an app (filter[app]) |
+| `bg_assets_list_for_app` | List via apps/{id}/backgroundAssets relationship |
+| `bg_assets_get` | Fetch a single backgroundAsset by id |
+| `bg_assets_create` | POST /backgroundAssets — create parent record on app |
+| `bg_assets_update` | PATCH state attributes (internal/external beta, app store) |
+| `bg_assets_delete` | DELETE /backgroundAssets/{id} (cascades to children) |
+| `bg_asset_versions_list` | List versions on a backgroundAsset |
+| `bg_asset_versions_get` | Fetch a single backgroundAssetVersion |
+| `bg_asset_versions_create` | POST /backgroundAssetVersions on a backgroundAsset |
+| `bg_asset_files_list` | List backgroundAssetUploadFiles on a version |
+| `bg_asset_files_get` | Fetch a single file (inspect uploadOperations + state) |
+| `bg_asset_files_create` | POST /backgroundAssetUploadFiles — reserve chunked-upload target |
+| `bg_asset_files_commit` | PATCH uploaded:true + sourceFileChecksum |
+| `bg_asset_files_upload` | High-level chunked upload (create + chunk-PUT + commit) |
+| `bg_asset_app_store_release_get` | Read App Store delivery state (v4.1) |
+| `bg_asset_external_beta_release_get` | Read External Beta delivery state |
+| `bg_asset_internal_beta_release_get` | Read Internal Beta delivery state |
+
+### CLI examples
+
+```bash
+# List backgroundAssets on an app
+storescreens background-assets list --app-id 12345 --json
+
+# Create the parent record on a new app (one-time setup)
+storescreens background-assets create --app-id 12345
+
+# Start a new version
+storescreens background-assets versions-create \
+    --background-asset-id 678 --version "2.0.0"
+
+# Upload a single asset file (high-level: handles create + chunks + commit)
+storescreens background-assets upload-file \
+    --version-id 9001 \
+    --file ./game-pack-01.bin
+
+# Inspect a file's chunked-upload reservation manually
+storescreens background-assets files-create \
+    --version-id 9001 \
+    --file-name pack-02.bin \
+    --file-size 524288000
+
+# Poll the App Store delivery state for a version
+storescreens background-assets app-store-release-get --id 4242 --json
+```
+
+### Workflow: upload a new background asset file in chunks
+
+```bash
+# 1) One-time setup: parent record on the app.
+storescreens background-assets create --app-id 12345
+
+# 2) For each release, create a new version.
+storescreens background-assets versions-create \
+    --background-asset-id 678 --version "2.0.0"
+
+# 3) Upload each file in the pack. Per-chunk progress streams to stderr.
+storescreens background-assets upload-file \
+    --version-id 9001 --file ./assets/level-01.pack
+storescreens background-assets upload-file \
+    --version-id 9001 --file ./assets/level-02.pack
+
+# 4) Poll delivery state on each channel.
+storescreens background-assets versions-get --id 9001
+```
+
+## Version release control
+
+App Store Connect's release-control surface governs *when and how* an
+approved appStoreVersion reaches users. Four resources cover the timeline:
+
+- `appStoreVersionPhasedReleases`: 7-day rollout management (start, pause,
+  resume, expedite to 100%, or revert to immediate release).
+- `appStoreVersionPromotions`: one-shot opt-in to App Store editorial promo
+  carousels. Apple decides whether the version actually appears.
+- `appStoreVersionReleaseRequests`: the modern "release this version now"
+  action for manually-released versions in `PENDING_DEVELOPER_RELEASE`.
+- `endAppAvailabilityPreOrders`: one-shot to end an app's pre-order period
+  early and transition customers to live install state.
+
+Each resource maps to a different release-timeline point; the parent
+(`appStoreVersion`, or `app` for pre-orders) is set by relationship at
+create time.
+
+### MCP tools
+
+| Tool | Description |
+| --- | --- |
+| `phased_release_get_for_version` | Read the phased-release attached to a version |
+| `phased_release_get` | Fetch a single appStoreVersionPhasedRelease by id |
+| `phased_release_create` | Start a 7-day rollout on a version |
+| `phased_release_update` | Pause / resume / expedite (PAUSED, ACTIVE, COMPLETE) |
+| `phased_release_delete` | Revert the version to immediate release |
+| `version_promotion_create` | Opt the version into editorial promo carousels |
+| `version_release_request_create` | Release a manually-released version now |
+| `end_preorder_create` | End an app's pre-order period early |
+
+### CLI examples
+
+```bash
+# Start a 7-day phased rollout on an approved version
+storescreens version-release phased create --version-id 7001
+
+# Check rollout progress
+storescreens version-release phased get-for-version --version-id 7001
+
+# Pause the rollout (e.g. after a regression report)
+storescreens version-release phased update --id 8000 --phased-release-state PAUSED
+
+# Resume the rollout
+storescreens version-release phased update --id 8000 --phased-release-state ACTIVE
+
+# Expedite to 100% immediately
+storescreens version-release phased update --id 8000 --phased-release-state COMPLETE
+
+# Revert (version releases immediately on next ASC pass)
+storescreens version-release phased delete 8000
+
+# Opt the version into App Store editorial promo carousels
+storescreens version-release promote --version-id 7001
+
+# Release a manually-released version now (PENDING_DEVELOPER_RELEASE -> live)
+storescreens version-release release-request --version-id 7001
+
+# End pre-orders early
+storescreens version-release end-preorder --app-id 12345
+```
+
+### Workflow: start a phased release
+
+```bash
+# 1) Submit + approve a version through the normal flow.
+storescreens submit ...
+
+# 2) Once Apple approves, start the 7-day rollout.
+storescreens version-release phased create --version-id 7001
+
+# 3) Monitor progress (currentDayNumber goes 1..7).
+storescreens version-release phased get-for-version --version-id 7001 --json
+```
+
+### Workflow: manually release a pending version
+
+```bash
+# Approved by Apple, currently in PENDING_DEVELOPER_RELEASE.
+storescreens version-release release-request --version-id 7001
+```
+
+### Workflow: end pre-orders early
+
+```bash
+# App currently in pre-order state. Customers transition to live install.
+storescreens version-release end-preorder --app-id 12345
+```
+
+
+## Game Center Activities, Challenges, and V2 versions
+
+storescreens-cli wraps the Game Center surfaces Apple added to App Store Connect
+in OpenAPI spec v4.0 (June 2025) and v4.2 (December 2025):
+
+- **Activities**: live in-game events and tournaments shown in the Game Center
+  surface, with per-locale display copy and per-locale art
+- **Challenges**: player-vs-player or community challenges, optionally linked
+  to a leaderboard so submitted scores feed a ranking
+- **V2 versioning**: per-app-version snapshots of achievement, leaderboard,
+  and leaderboard-set config so the live shape on older app versions stays
+  stable while the editable shape evolves with each release
+- **Sandbox-only submissions**: post fake leaderboard scores and achievement
+  progress events on behalf of test players so QA can drive rendering and
+  ranking flows without a real Game Center client
+
+These sit alongside the Wave 2 Game Center surface (`storescreens game-center`,
+which covers achievements / leaderboards / leaderboard-sets / matchmaking /
+groups). The new surface ships under a separate top-level parent so the two
+trees can evolve independently:
+
+```
+storescreens game-center      # Wave 2: V1 achievements, leaderboards, matchmaking, groups
+storescreens game-center-v2   # this fragment: activities, challenges, V2 versions, sandbox submits
+```
+
+Both wrap the same `gameCenterDetails` and `gameCenterGroups` parent records,
+so you can mix the two CLIs against the same app without conflict.
+
+### CLI commands
+
+All leaf commands accept `--json` for machine-readable output. The parent
+command is `storescreens game-center-v2`.
+
+**Activities** (live events / tournaments)
+
+```
+storescreens game-center-v2 activities list --app-id 1234567890
+storescreens game-center-v2 activities create \
+    --detail-id GC_DETAIL_ID \
+    --reference-name "Holiday Tournament 2026" \
+    --vendor-identifier holiday_tournament_2026 \
+    --activity-type TOURNAMENT \
+    --event-start-date 2026-12-20T00:00:00Z \
+    --event-end-date 2026-12-31T23:59:59Z
+storescreens game-center-v2 activities get $ACTIVITY_ID
+storescreens game-center-v2 activities update $ACTIVITY_ID --activity-type EVENT
+storescreens game-center-v2 activities archive $ACTIVITY_ID --archived true
+storescreens game-center-v2 activities delete $ACTIVITY_ID
+
+storescreens game-center-v2 activity-localizations create \
+    --activity-id $ACTIVITY_ID --locale en-US \
+    --name "Holiday Cup" --subtitle "Win prizes" \
+    --activity-description "Compete from Dec 20 through Dec 31"
+storescreens game-center-v2 activity-images upload \
+    --localization-id $LOC_ID ./tournament_art.png
+
+storescreens game-center-v2 activity-versions create \
+    --activity-id $ACTIVITY_ID --app-version-id $GC_APP_VERSION_ID
+storescreens game-center-v2 activity-versions update $VERSION_ID --live true
+```
+
+**Challenges** (player-vs-player / community)
+
+```
+storescreens game-center-v2 challenges create \
+    --detail-id $GC_DETAIL_ID \
+    --leaderboard-id $LEADERBOARD_ID \
+    --reference-name "Daily Speed Run" \
+    --vendor-identifier daily_speed_run
+
+storescreens game-center-v2 challenge-localizations create \
+    --challenge-id $CHALLENGE_ID --locale en-US \
+    --name "Daily Speed Run" --challenge-description "Beat today's time."
+storescreens game-center-v2 challenge-images upload \
+    --localization-id $LOC_ID ./speedrun_banner.png
+
+storescreens game-center-v2 challenge-versions create --challenge-id $CHALLENGE_ID
+```
+
+**V2 versioning** (per-app-version snapshots)
+
+```
+storescreens game-center-v2 achievement-versions-v2 create \
+    --achievement-id $ACH_ID --app-version-id $GC_APP_VERSION_ID
+storescreens game-center-v2 leaderboard-versions-v2 create \
+    --leaderboard-id $LB_ID --app-version-id $GC_APP_VERSION_ID
+storescreens game-center-v2 leaderboard-set-versions-v2 create \
+    --leaderboard-set-id $LS_ID --app-version-id $GC_APP_VERSION_ID
+```
+
+**Sandbox-only test submissions**
+
+```
+storescreens game-center-v2 leaderboard-entry-submissions create \
+    --leaderboard-id $LB_ID --player-id $PLAYER_ID --score 12500
+storescreens game-center-v2 player-achievement-submissions create \
+    --achievement-id $ACH_ID --player-id $PLAYER_ID --percent-complete 100
+```
+
+### MCP tools
+
+The same operations are exposed as MCP tools so AI agents can drive them
+without shelling out:
+
+| Tool name | Op |
+| --- | --- |
+| `gc_activities_list` | List activities by app, detail, or group |
+| `gc_activities_get` | Get an activity by id |
+| `gc_activities_create` | Create an activity under a detail or group |
+| `gc_activities_update` | PATCH an activity's attributes |
+| `gc_activities_archive` | Toggle archived on an activity |
+| `gc_activities_delete` | Delete an activity |
+| `gc_activity_localizations_list` | List per-locale entries for an activity |
+| `gc_activity_localizations_get` | Get a per-locale entry by id |
+| `gc_activity_localizations_create` | Create a per-locale entry |
+| `gc_activity_localizations_update` | PATCH a per-locale entry |
+| `gc_activity_localizations_delete` | Delete a per-locale entry |
+| `gc_activity_images_list` | List per-locale activity images |
+| `gc_activity_images_get` | Get an activity image by id |
+| `gc_activity_images_upload` | 3-phase upload of an activity image |
+| `gc_activity_images_update` | PATCH activity image metadata |
+| `gc_activity_images_delete` | Delete an activity image |
+| `gc_activity_versions_list` | List activity version snapshots |
+| `gc_activity_versions_get` | Get an activity version snapshot |
+| `gc_activity_versions_create` | Create an activity version snapshot |
+| `gc_activity_versions_update` | PATCH an activity version snapshot |
+| `gc_challenges_list` | List challenges by app, detail, or group |
+| `gc_challenges_get` | Get a challenge by id |
+| `gc_challenges_create` | Create a challenge, optionally linked to a leaderboard |
+| `gc_challenges_update` | PATCH a challenge's attributes |
+| `gc_challenges_archive` | Toggle archived on a challenge |
+| `gc_challenges_delete` | Delete a challenge |
+| `gc_challenge_localizations_list` | List per-locale entries for a challenge |
+| `gc_challenge_localizations_get` | Get a per-locale entry by id |
+| `gc_challenge_localizations_create` | Create a per-locale entry |
+| `gc_challenge_localizations_update` | PATCH a per-locale entry |
+| `gc_challenge_localizations_delete` | Delete a per-locale entry |
+| `gc_challenge_images_list` | List per-locale challenge images |
+| `gc_challenge_images_get` | Get a challenge image by id |
+| `gc_challenge_images_upload` | 3-phase upload of a challenge image |
+| `gc_challenge_images_update` | PATCH challenge image metadata |
+| `gc_challenge_images_delete` | Delete a challenge image |
+| `gc_challenge_versions_list` | List challenge version snapshots |
+| `gc_challenge_versions_get` | Get a challenge version snapshot |
+| `gc_challenge_versions_create` | Create a challenge version snapshot |
+| `gc_achievement_versions_v2_list` | List V2 achievement version snapshots |
+| `gc_achievement_versions_v2_get` | Get a V2 achievement version snapshot |
+| `gc_achievement_versions_v2_create` | Create a V2 achievement version snapshot |
+| `gc_leaderboard_versions_v2_list` | List V2 leaderboard version snapshots |
+| `gc_leaderboard_versions_v2_get` | Get a V2 leaderboard version snapshot |
+| `gc_leaderboard_versions_v2_create` | Create a V2 leaderboard version snapshot |
+| `gc_leaderboard_set_versions_v2_list` | List V2 leaderboard set version snapshots |
+| `gc_leaderboard_set_versions_v2_get` | Get a V2 leaderboard set version snapshot |
+| `gc_leaderboard_set_versions_v2_create` | Create a V2 leaderboard set version snapshot |
+| `gc_leaderboard_entry_submissions_create` | Sandbox-only test score submit |
+| `gc_player_achievement_submissions_create` | Sandbox-only test achievement progress submit |
+
+### Common workflows
+
+**Create an Activity for a holiday tournament.** Run `activities create` with
+`--activity-type TOURNAMENT` and the event window. Add at least one locale
+under `activity-localizations create` (Apple rejects activities without a
+default locale at submission). Upload art with `activity-images upload`. Cut
+a per-app-version snapshot with `activity-versions create` so the next
+release picks up the activity.
+
+**Add a Challenge linked to a leaderboard.** Create the leaderboard via the
+Wave 2 `storescreens game-center leaderboards create`, then run
+`game-center-v2 challenges create --leaderboard-id $LB_ID`. Scores submitted
+through the challenge feed that leaderboard's ranking.
+
+**Submit test scores during development.** Use `leaderboard-entry-submissions
+create` with a sandbox tester's `gameCenterPlayer` id and a stringified
+integer score. Apple rejects these calls outside the sandbox environment, so
+you can leave them in CI without worrying about polluting production
+rankings.
+
+**Version an achievement for the next app release.** When you're about to
+ship a new app version that should pick up the latest editable achievement
+shape, run `achievement-versions-v2 create --achievement-id $ID
+--app-version-id $GC_APP_VERSION_ID`. Older app versions keep their existing
+snapshot; the new one becomes the live shape once the app version goes live.
+
+### Authentication
+
+Same as the rest of `storescreens` and the Wave 2 Game Center surface:
+credentials are resolved from `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_PATH`
+env vars, or from `~/.storescreens/asc-credentials.yml` written by
+`storescreens auth login`.
+
+
+## TestFlight feedback, beta recruitment, beta App Clip invocations, IAP offer codes
+
+Four newer App Store Connect resource families wired into `storescreens-cli`,
+the MCP server, and the agent skill. All four follow the same conventions as
+the Wave 1 wrappers (`testflight`, `subscriptions`, etc.): credentials
+resolve through `storescreens auth login` or the `ASC_*` env vars, every
+leaf CLI subcommand accepts `--json`, list endpoints accept `--limit` /
+`--cursor` and return a `nextCursor` on the next page, and the same surface
+is exposed as MCP tools so AI agents can drive the workflows without raw
+HTTP.
+
+### TestFlight feedback (modern API)
+
+`storescreens beta-feedback` wraps the modern TestFlight feedback API Apple
+shipped in OpenAPI spec v4.0 (June 2025): `betaFeedbackCrashSubmissions`,
+`betaFeedbackScreenshotSubmissions`, and `betaCrashLogs`. These replace the
+older per-tester crash submission endpoints, which were deprecated in the
+same release.
+
+A crash submission is one piece of feedback a tester sent via the
+TestFlight client; it carries device context (model, OS, locale, battery,
+connectivity) plus the optional comment the tester typed. A screenshot
+submission has the same metadata plus an attached image. The actual
+`.crash` binary lives in `betaCrashLogs`, accessible via a time-limited
+Apple-hosted URL.
+
+#### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `betaFeedbackCrashSubmissions` | TestFlight client crash reports | `beta-feedback crash` |
+| `betaFeedbackScreenshotSubmissions` | TestFlight client screenshot reports | `beta-feedback screenshot` |
+| `betaCrashLogs` | Crash log artifact + download URL | `beta-feedback crash-logs` |
+
+#### CLI command catalog
+
+```
+storescreens beta-feedback crash get <id> [--json]
+storescreens beta-feedback crash delete <id>
+
+storescreens beta-feedback screenshot get <id> [--json]
+storescreens beta-feedback screenshot delete <id>
+
+storescreens beta-feedback crash-logs get <id> [--json]
+storescreens beta-feedback crash-logs download <id> [--output ./crash.log]
+```
+
+#### MCP tool catalog
+
+- `beta_feedback_crash_get`, `beta_feedback_crash_delete`
+- `beta_feedback_screenshot_get`, `beta_feedback_screenshot_delete`
+- `beta_crash_logs_get`, `beta_crash_logs_download`
+
+`beta_crash_logs_download` writes the bytes to `output_path` if provided,
+otherwise returns them base64-encoded in the JSON response.
+
+#### Common workflows
+
+Inspect a crash report referenced by a tester comment:
+
+```bash
+storescreens beta-feedback crash get FEEDBACK_ID --json | jq .
+```
+
+Pull the `.crash` artifact for an offline symbolicator:
+
+```bash
+storescreens beta-feedback crash-logs download LOG_ID --output ./reports/issue-42.crash
+```
+
+### TestFlight automatic recruitment
+
+`storescreens beta-recruitment` wraps the `betaRecruitmentCriteria` family
+from OpenAPI spec v3.8 (February 2025). A criterion attaches to a beta
+group and decides which testers will be admitted automatically when they
+apply via the group's public TestFlight link. Apple matches on device
+family, minimum / maximum OS version, and allowed regions.
+
+The set of valid values for those fields evolves on Apple's side as new
+device families ship and new region codes appear. The
+`criterion-options list` subcommand exposes the live catalog; always read
+that before constructing a `criteria create` call rather than hard-coding
+strings.
+
+#### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `betaRecruitmentCriteria` | Auto-admit rules per beta group | `beta-recruitment criteria` |
+| `betaRecruitmentCriterionOptions` | Read-only catalog of valid values | `beta-recruitment criterion-options` |
+
+#### CLI command catalog
+
+```
+storescreens beta-recruitment criteria create \
+  --beta-group-id GROUP_ID \
+  --display-name "iPhone iOS 17 in EU" \
+  --device-families IPHONE \
+  --minimum-os-version 17.0 \
+  --allowed-regions DEU FRA ITA ESP \
+  --is-active true [--json]
+
+storescreens beta-recruitment criteria update <id> \
+  [--display-name N] [--device-families ...] [--minimum-os-version V] \
+  [--maximum-os-version V] [--allowed-regions ...] [--is-active B]
+
+storescreens beta-recruitment criteria delete <id>
+
+storescreens beta-recruitment criterion-options list [--limit 200] [--cursor C] [--json]
+```
+
+#### MCP tool catalog
+
+- `beta_recruitment_criteria_create`, `beta_recruitment_criteria_update`, `beta_recruitment_criteria_delete`
+- `beta_recruitment_criterion_options_list`
+
+#### Common workflows
+
+Add a criterion that admits only EU iPhone testers on iOS 17+:
+
+```bash
+# 1. Fetch the live catalog of valid values.
+storescreens beta-recruitment criterion-options list --json | jq
+
+# 2. Create the criterion using values from the catalog.
+storescreens beta-recruitment criteria create \
+  --beta-group-id GROUP_ID \
+  --display-name "iPhone iOS 17 in EU" \
+  --device-families IPHONE \
+  --minimum-os-version 17.0 \
+  --allowed-regions DEU FRA ITA ESP
+```
+
+Pause a criterion without deleting it (useful when you want to suspend a
+campaign without losing the configuration):
+
+```bash
+storescreens beta-recruitment criteria update CRITERION_ID --is-active false
+```
+
+### Beta App Clip invocations
+
+`storescreens beta-app-clip` wraps `betaAppClipInvocations` and
+`betaAppClipInvocationLocalizations`, the URL trigger configurations Apple
+uses when distributing App Clips through TestFlight. Sibling of the
+production `marketing` App Clip commands (the `app_clip_*` MCP tools); the
+beta variant is scoped to a single build and lives only for the duration
+of that build's beta cycle.
+
+An invocation is one URL trigger (NFC tag, QR code, Safari banner). Each
+invocation can have per-locale title strings so testers see the right
+copy when Apple surfaces the Clip card.
+
+#### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `betaAppClipInvocations` | URL trigger config for a beta build | `beta-app-clip invocations` |
+| `betaAppClipInvocationLocalizations` | Per-locale title strings | `beta-app-clip localizations` |
+
+#### CLI command catalog
+
+```
+storescreens beta-app-clip invocations list --build-id B [--json]
+storescreens beta-app-clip invocations create --build-id B --url URL [--action OPEN] [--json]
+storescreens beta-app-clip invocations get <id> [--json]
+storescreens beta-app-clip invocations update <id> [--url U] [--action A]
+storescreens beta-app-clip invocations delete <id>
+
+storescreens beta-app-clip localizations create --invocation-id I --locale en-US --title T [--subtitle S]
+storescreens beta-app-clip localizations update <id> [--title T] [--subtitle S]
+storescreens beta-app-clip localizations delete <id>
+```
+
+#### MCP tool catalog
+
+- `beta_app_clip_invocations_list`, `beta_app_clip_invocations_create`, `beta_app_clip_invocations_get`, `beta_app_clip_invocations_update`, `beta_app_clip_invocations_delete`
+- `beta_app_clip_invocation_localizations_create`, `beta_app_clip_invocation_localizations_update`, `beta_app_clip_invocation_localizations_delete`
+
+#### Common workflows
+
+Configure a Safari banner trigger for a beta build with an English title:
+
+```bash
+INVOCATION=$(storescreens beta-app-clip invocations create \
+  --build-id BUILD_ID \
+  --url "https://example.com/promo" \
+  --action OPEN \
+  --json | jq -r .id)
+
+storescreens beta-app-clip localizations create \
+  --invocation-id "$INVOCATION" \
+  --locale en-US \
+  --title "Try the spring promo"
+```
+
+### In-app purchase offer codes
+
+`storescreens iap-offer-codes` wraps `inAppPurchaseOfferCodes`, the
+offer-code equivalent of `subscriptionOfferCodes` but scoped to one-time
+IAPs (consumable, non-consumable, non-renewing subscription). Shipped in
+OpenAPI spec v4.2 (December 2025).
+
+The shape mirrors the subscription side: the parent
+`inAppPurchaseOfferCodes` resource owns the program, and the code
+material itself lives in either the one-time-use or custom-codes child
+resource. The `one-time-use-codes values` subcommand fetches the actual
+generated strings after Apple processes the batch.
+
+For auto-renewable subscription offer codes, use the existing
+`storescreens subscriptions offer-codes` family.
+
+#### Resources covered
+
+| ASC resource | What it does | CLI namespace |
+|--------------|--------------|---------------|
+| `inAppPurchaseOfferCodes` | Offer-code program scoped to one IAP | (top-level) |
+| `inAppPurchaseOfferCodeCustomCodes` | Developer-chosen redemption strings | `custom-codes` |
+| `inAppPurchaseOfferCodeOneTimeUseCodes` | Batches of unique single-use codes | `one-time-use-codes` |
+| `inAppPurchaseOfferCodeOneTimeUseCodes/{id}/values` | Generated code strings | `one-time-use-codes values` |
+
+#### CLI command catalog
+
+```
+storescreens iap-offer-codes create \
+  --in-app-purchase-id IAP_ID \
+  --reference-name "Spring promo" \
+  --customer-eligibilities NEW EXISTING \
+  [--expiration-date 2026-06-30T23:59:59Z] [--json]
+
+storescreens iap-offer-codes get <id> [--json]
+storescreens iap-offer-codes update <id> \
+  [--reference-name N] [--is-active B] [--customer-eligibilities ...] [--expiration-date D]
+
+storescreens iap-offer-codes custom-codes create \
+  --offer-code-id OC --custom-code "BLACKFRIDAY25_PRO" --count 1000 [--expiration-date D]
+storescreens iap-offer-codes custom-codes get <id> [--json]
+storescreens iap-offer-codes custom-codes update <id> [--is-active B] [--expiration-date D]
+
+storescreens iap-offer-codes one-time-use-codes create --offer-code-id OC --count 500 [--expiration-date D]
+storescreens iap-offer-codes one-time-use-codes get <id> [--json]
+storescreens iap-offer-codes one-time-use-codes update <id> [--is-active B] [--expiration-date D]
+storescreens iap-offer-codes one-time-use-codes values <id> [--limit 200] [--cursor C] [--json]
+```
+
+#### MCP tool catalog
+
+- `iap_offer_codes_create`, `iap_offer_codes_get`, `iap_offer_codes_update`
+- `iap_offer_code_custom_codes_create`, `iap_offer_code_custom_codes_get`, `iap_offer_code_custom_codes_update`
+- `iap_offer_code_one_time_use_codes_create`, `iap_offer_code_one_time_use_codes_get`, `iap_offer_code_one_time_use_codes_update`
+- `iap_offer_code_one_time_use_code_values_get`
+
+#### Common workflows
+
+Generate a one-shot batch of 500 unique redemption codes for a spring promo:
+
+```bash
+# 1. Create the parent offer-code program.
+OC=$(storescreens iap-offer-codes create \
+  --in-app-purchase-id IAP_ID \
+  --reference-name "Spring 2026 promo" \
+  --customer-eligibilities NEW EXISTING \
+  --json | jq -r .id)
+
+# 2. Generate the batch.
+BATCH=$(storescreens iap-offer-codes one-time-use-codes create \
+  --offer-code-id "$OC" --count 500 --json | jq -r .id)
+
+# 3. Apple processes asynchronously. Poll until the batch is active.
+until storescreens iap-offer-codes one-time-use-codes get "$BATCH" --json \
+  | jq -e '.attributes.isActive == true' > /dev/null; do
+  sleep 5
+done
+
+# 4. Fetch the generated code strings.
+storescreens iap-offer-codes one-time-use-codes values "$BATCH" --json > codes.json
+```
+
+Create a memorable developer-chosen code (no async processing):
+
+```bash
+storescreens iap-offer-codes custom-codes create \
+  --offer-code-id "$OC" \
+  --custom-code "BLACKFRIDAY25_PRO" \
+  --count 1000
+```
+
+Pause a code program without deleting it:
+
+```bash
+storescreens iap-offer-codes update "$OC" --is-active false
+```
+
+
+## Subscription extras, review extras, and the ASC late-2025 grab-bag
+
+This fragment documents the late-2025 / niche resources covered by
+`Wave4ExtrasAPI`, the matching MCP tool surface in
+`Wave4ExtrasMCPTools`, and the CLI commands in
+`SubscriptionExtrasCommand`, `ReviewExtrasCommand`, and
+`AscExtrasCommand`.
+
+Three parent CLI commands group these:
+
+- `storescreens subs-extras` covers the subscription resources that
+  didn't fit in the original `subscriptions` parent (intro offers,
+  win-back offers, billing grace periods, group-wide submissions, and
+  the standalone subscriptionPricePoint GET).
+- `storescreens review-extras` covers the customer review surfaces
+  beyond the basic list-and-respond flow (Apple Intelligence summary
+  rollups and App Store review attachments).
+- `storescreens asc-extras` covers the late-2025 grab-bag (merchant
+  ids, editorial nominations, app tags, custom EULAs, Android-to-iOS
+  mapping, in-app actors, app price points V3, app clip advanced
+  experience images, in-app purchase availabilities + contents, and
+  per-(app, territory) availabilities).
+
+All MCP tools resolve credentials through `ASCCredentialResolver.resolve()`
+and return pretty-printed JSON. CLI commands accept `--json` on every
+leaf, and resolve credentials from env vars or
+`~/.storescreens/asc-credentials.yml`.
+
+### Subscription extras
+
+#### Overview
+
+`Wave4ExtrasAPI.SubscriptionExtras` is a sibling of `SubscriptionsAPI`.
+It does not edit anything `SubscriptionsAPI` already exposes; it adds
+the resources Apple introduced after the original wrapper landed:
+
+- `subscriptionIntroductoryOffers` — intro offers for new subscribers,
+  scoped per (subscription, territory, price-point). Distinct from
+  `subscriptionPromotionalOffers` (already in Wave 1), which targets
+  existing subscribers.
+- `winBackOffers` — incentives for lapsed subscribers, with a separate
+  per-territory price relationship (`winBackOfferPrices`).
+- `subscriptionGracePeriods` — billing grace-period config on a whole
+  subscription group; read and update.
+- `subscriptionGroupSubmissions` — single-shot submit-for-review
+  covering every pending change in a subscription group.
+- `subscriptionPricePoints` GET by id — fills in the read path missing
+  from the Wave 1 wrapper (which only listed price points scoped to a
+  subscription).
+
+#### MCP tools
+
+| Tool | Notes |
+|---|---|
+| `subext_intro_offers_create` | New intro offer (PAY_AS_YOU_GO / PAY_UP_FRONT / FREE_TRIAL) |
+| `subext_intro_offers_update` | Update date range; other attributes are immutable |
+| `subext_intro_offers_delete` | Delete by id |
+| `subext_winback_offers_list` | List win-back offers on a subscription |
+| `subext_winback_offers_get` | Fetch one |
+| `subext_winback_offers_create` | Create a new win-back offer |
+| `subext_winback_offers_update` | Update name + date range |
+| `subext_winback_offers_delete` | Delete by id |
+| `subext_winback_offer_prices_list` | List per-territory prices |
+| `subext_winback_offer_prices_create` | Attach (territory, price-point) |
+| `subext_grace_period_get` | Read the group's grace-period config |
+| `subext_grace_period_update` | Toggle opt-in + renewal type |
+| `subext_group_submission_create` | Submit a whole group for review |
+| `subext_price_point_get` | Fetch one subscriptionPricePoint by id |
+
+#### CLI examples
+
+```
+storescreens subs-extras intro-offers create \
+  --subscription-id 1234567890 \
+  --territory-id USA \
+  --price-point-id 9876543210 \
+  --offer-mode FREE_TRIAL \
+  --duration ONE_MONTH \
+  --number-of-periods 1
+
+storescreens subs-extras winback-offers create \
+  --subscription-id 1234567890 \
+  --name "Welcome back" \
+  --offer-code com.example.app.winback \
+  --offer-mode PAY_AS_YOU_GO \
+  --duration TWO_MONTHS \
+  --number-of-periods 2
+
+storescreens subs-extras grace-period get --group-id 1112223334
+storescreens subs-extras group-submission create --group-id 1112223334
+```
+
+#### Workflows
+
+1. After creating a win-back offer, attach a per-territory price for
+   every storefront you want it active in. Use
+   `subs-extras winback-offers prices-create` per territory.
+2. After updating any field on a subscription in a group, fire
+   `subs-extras group-submission create` to push the whole group for
+   review in one round-trip.
+
+### Review extras
+
+#### Overview
+
+`Wave4ExtrasAPI.CustomerReviewExtras` adds the two review surfaces the
+base `CustomerReviewsAPI` does not cover:
+
+- `customerReviewSummarizations` — Apple Intelligence generated
+  per-(locale, territory) rollup summaries. READ-ONLY.
+- `appStoreReviewAttachments` — developer-supplied supporting files
+  (sign-in walkthroughs, network captures, etc.) attached to an App
+  Review submission. CRUD plus the standard 3-phase upload pattern
+  Apple uses for assets.
+
+#### MCP tools
+
+| Tool | Notes |
+|---|---|
+| `revext_summarizations_list_for_app` | List Apple Intelligence summaries |
+| `revext_summarizations_get` | Fetch one summary |
+| `revext_attachments_list` | List attachments on a review-detail record |
+| `revext_attachments_get` | Fetch one attachment |
+| `revext_attachments_create` | Phase 1: reserve slot, returns uploadOperations |
+| `revext_attachments_update` | Phase 3: PATCH uploaded:true + checksum |
+| `revext_attachments_delete` | Remove an attachment |
+| `revext_attachments_upload` | Convenience: run all 3 phases at once |
+
+#### CLI examples
+
+```
+storescreens review-extras summarizations list --app-id 1234567890
+storescreens review-extras summarizations get sum-deadbeef
+
+storescreens review-extras attachments list \
+  --review-detail-id rd-deadbeef
+
+storescreens review-extras attachments upload \
+  --review-detail-id rd-deadbeef \
+  --file-path ./walkthrough.mp4
+```
+
+#### Workflows
+
+1. After Apple has accumulated reviews for a new app, the
+   summarizations endpoint may not return data for a few days. Treat an
+   empty list as "Apple Intelligence hasn't computed one yet."
+2. Use the `attachments upload` convenience for normal flows. Drop
+   down to the three-phase methods only when you need streaming
+   progress reporting for very large files.
+
+### ASC extras
+
+#### Overview
+
+`Wave4ExtrasAPI` namespaces a grab-bag of small late-2025 resources:
+
+- `merchantIds` — Apple Pay merchant identifiers (distinct from
+  `merchantDomains` which Wave 2's ApplePayAPI already covers);
+  includes a `merchantIdCertificates` list relationship.
+- `nominations` — App Store editorial feature nomination submissions.
+- `appTags` — Per-(app, territory) tags from Apple's editorial taxonomy.
+- `endUserLicenseAgreements` — Per-app custom EULA; an override of
+  Apple's standard EULA.
+- `androidToIosAppMappingDetails` — Metadata for Android-to-iOS user
+  migration flows.
+- `actors` — Read-only registry of in-app actors (niche, mostly games).
+- App price points V3 — Get by id + cross-territory `equalizations`.
+- `appClipAdvancedExperienceImages` — Sibling of the App Clip advanced
+  experiences (already in Wave 1's MarketingAPI); standard 3-phase
+  upload.
+- `inAppPurchaseAvailabilities` — Per-territory availability for
+  one-time IAPs (subscription siblings live in SubscriptionsAPI).
+- `inAppPurchaseContents` — Apple-hosted content metadata for IAPs;
+  read-only.
+- `territoryAvailabilities` — Single-shot update of an (app, territory)
+  pair.
+
+#### MCP tools
+
+| Tool | Notes |
+|---|---|
+| `ascext_merchant_ids_list` / `_get` / `_create` / `_update` / `_delete` | Merchant id CRUD |
+| `ascext_merchant_ids_certificates_list` | Certificates attached to a merchant id |
+| `ascext_nominations_list` / `_get` / `_create` / `_update` / `_delete` | Nomination CRUD |
+| `ascext_app_tags_update` | Replace the per-territory tag list |
+| `ascext_eulas_list` / `_get` / `_create` / `_update` / `_delete` | Custom EULA CRUD |
+| `ascext_android_to_ios_get` / `_create` / `_update` / `_delete` | Migration mapping |
+| `ascext_actors_list` / `_get` | Read-only actors |
+| `ascext_app_price_points_v3_get` | Single V3 price point GET |
+| `ascext_app_price_points_v3_equalizations` | Cross-territory equivalents |
+| `ascext_app_clip_advanced_experience_images_get` | Read one image |
+| `ascext_app_clip_advanced_experience_images_create` | Phase 1 reserve |
+| `ascext_app_clip_advanced_experience_images_update` | Phase 3 finalize |
+| `ascext_app_clip_advanced_experience_images_upload` | All-in-one upload |
+| `ascext_iap_availabilities_get` / `_create` | Per-IAP territory list |
+| `ascext_iap_contents_get` | Read Apple-hosted content metadata |
+| `ascext_territory_availabilities_update` | Flip (app, territory) on or off |
+
+#### CLI examples
+
+```
+storescreens asc-extras merchant-ids create \
+  --identifier merchant.com.example \
+  --name "Example Storefront"
+
+storescreens asc-extras nominations create \
+  --app-id 1234567890 \
+  --title "Best Use of Apple Intelligence" \
+  --description "We re-rank product search with on-device intelligence..."
+
+storescreens asc-extras app-tags update \
+  --app-id 1234567890 \
+  --territory-id USA \
+  --tag-ids tag-001 tag-002 tag-003
+
+storescreens asc-extras eulas create \
+  --app-id 1234567890 \
+  --agreement-text "$(cat eula.txt)" \
+  --territory-ids USA CAN GBR
+
+storescreens asc-extras android-to-ios update \
+  --app-id 1234567890 \
+  --android-package com.example.app \
+  --migration-description "Sign in with the same account to keep your library."
+
+storescreens asc-extras app-price-points-v3 get pp-deadbeef
+storescreens asc-extras app-price-points-v3 equalizations pp-deadbeef
+
+storescreens asc-extras app-clip-images upload \
+  --advanced-experience-id ae-deadbeef \
+  --file-path ./clip-header.png
+
+storescreens asc-extras iap-availabilities create \
+  --iap-id 1234567890 \
+  --territory-ids USA CAN GBR \
+  --available-in-new-territories true
+
+storescreens asc-extras territory-availabilities update \
+  --app-id 1234567890 \
+  --territory-id JPN \
+  --available true
+```
+
+#### Workflows
+
+1. Apple Pay setup with custom merchant ids: create a merchant id,
+   then list its certificates to retrieve the Apple-signed payment
+   processing certificate Wallet expects.
+2. Editorial outreach via `nominations`: most teams submit one
+   nomination per quarter. Use `nominations list` to audit prior
+   submissions before drafting a new one.
+3. Custom EULAs override Apple's default per territory. After
+   `eulas create`, push a `subscriptionGroupSubmission` (or a regular
+   metadata submission) so Apple's reviewers see the change.
+4. App tags are a per-territory exhaustive list. Always read the
+   existing set before calling `app-tags update` or you will silently
+   clear any tags you didn't include in your payload.
+5. Territory availabilities flip a single (app, territory) pair. Use
+   `PricingAvailabilityAPI.getCurrentAvailability` (Wave 0 wrapper) to
+   read the existing state; this endpoint is write-only.
+
+### Notes on Apple's evolving schema
+
+The resources in this fragment ship in App Store Connect API v4.x.
+Apple has shipped minimal public schema documentation for some of
+them, notably `customerReviewSummarizations`, `appStoreReviewAttachments`,
+`nominations`, `appTags`, `actors`, and
+`androidToIosAppMappingDetails`. The wrappers capture every attribute
+Apple has surfaced in test envelopes so far; future Apple changes may
+add fields that ride through as ignored values. Callers needing extra
+fields can extend the `Attributes` structs.
+
+The `territoryAvailabilities` update uses a compound id Apple
+constructs as `"{appID}-{territoryID}"`. If a future Apple release
+changes that composition, only the `updateAvailability(...)` method
+needs adjustment.
 
 ## App Store Connect Screenshot Sizes
 
