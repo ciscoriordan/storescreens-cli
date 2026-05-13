@@ -44,6 +44,8 @@ struct StoreScreensCLI: AsyncParsableCommand {
             BetaAppClipInvocationsCommand.self, IAPOfferCodesCommand.self,
             SubscriptionExtrasCommand.self, ReviewExtrasCommand.self,
             AscExtrasCommand.self,
+            // Community: submit your app to storescreens.app's Wall of Apps.
+            WallCommand.self,
         ]
     )
 
