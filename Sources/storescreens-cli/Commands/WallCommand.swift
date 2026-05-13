@@ -27,7 +27,10 @@ struct WallSubmitCommand: AsyncParsableCommand {
             """
     )
 
-    @Option(name: .long, help: "App Store app ID (numeric — find it in the App Store URL).")
+    @Option(
+        name: .long,
+        help: "App Store app ID (e.g. 1234567890) OR full App Store URL (e.g. https://apps.apple.com/us/app/foo/id1234567890)."
+    )
     var app: String
 
     @Flag(name: .long, help: "Confirm submission. Required.")
@@ -43,13 +46,13 @@ struct WallSubmitCommand: AsyncParsableCommand {
         let logger = Logger(isVerbose: verbose)
         logger.log("storescreens v\(storescreensVersion) wall submit", level: .info)
 
-        // 1. App ID must be a numeric string. The App Store's own URLs use
-        //    integers exclusively, so anything else is a typo.
-        let id = app.trimmingCharacters(in: .whitespaces)
-        guard !id.isEmpty, id.allSatisfy({ $0.isNumber }) else {
-            logger.log("App ID must be numeric. Got: \(app)", level: .error)
-            print("  Tip: copy the digits after /id in the App Store URL,")
-            print("       e.g. https://apps.apple.com/app/id1234567890 -> 1234567890")
+        // 1. Accept either a bare numeric ID (1234567890) or a full App
+        //    Store URL with /id<digits> somewhere in the path. Extract the
+        //    digits either way; if neither shape matches, bail with a tip.
+        guard let id = Self.extractAppID(app) else {
+            logger.log("Could not parse an app ID from: \(app)", level: .error)
+            print("  Pass either the numeric ID (1234567890) or the full App Store URL")
+            print("  (https://apps.apple.com/us/app/foo/id1234567890).")
             throw ExitCode(1)
         }
 
@@ -100,6 +103,26 @@ struct WallSubmitCommand: AsyncParsableCommand {
     }
 
     // MARK: - helpers
+
+    /// Accepts either a bare numeric app ID or an App Store URL containing
+    /// `/id<digits>`, returning the digits. Returns nil if neither matches.
+    static func extractAppID(_ input: String) -> String? {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        // Pure numeric: return as-is.
+        if trimmed.allSatisfy({ $0.isNumber }) {
+            return trimmed
+        }
+        // Look for "id" followed by one-or-more digits (App Store URL form,
+        // e.g. .../app/foo/id1234567890?mt=8).
+        if let range = trimmed.range(of: #"id(\d+)"#, options: .regularExpression) {
+            // Strip the leading "id" — the digits are everything after the
+            // 2-char prefix in the matched substring.
+            let match = trimmed[range]
+            return String(match.dropFirst(2))
+        }
+        return nil
+    }
 
     struct AppMeta: Codable {
         let id: String
