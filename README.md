@@ -424,6 +424,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens beta-feedback / beta-recruitment / beta-app-clip ...` | Modern TestFlight: feedback crash + screenshot submissions, beta crash logs, automatic-recruitment criteria, App Clip invocation configs |
 | `storescreens iap-offer-codes ...` | One-time-IAP offer codes (custom + one-time-use variants); distinct from subscription offer codes covered by `subscriptions` |
 | `storescreens subs-extras / review-extras / asc-extras` | Subscription intro / win-back offers / grace periods / group submissions, review summarizations + attachments, plus merchant IDs / nominations / app tags / EULAs / Android→iOS mapping / actors / app price points V3 / etc. |
+| `storescreens wall submit` | Submit your app to the storescreens.app Wall of Apps |
 | `storescreens --help` | Show help and available commands |
 
 ### `storescreens init`
