@@ -5830,6 +5830,19 @@ Steps 2-4 are `continue-on-error: true`. A missing or too-narrowly-scoped token 
 
 This tool is for native Apple platforms (iOS, iPadOS, watchOS, macOS). For cross-platform screenshot automation (Android, React Native, Flutter), use [fastlane](https://fastlane.tools/).
 
+### Caption typography vs fastlane `frameit`
+
+If you've used fastlane's `frameit` for App Store screenshots, the most concrete difference is in caption rendering. `frameit` reads each caption from a `.strings` file and draws it with one font, one size, and one color from start to end of the line. You can point its `title` and `keyword` lines at different `.ttf` files (so the whole title can be set in a Bold variant of a typeface), but inside a single line you cannot bold, italicize, recolor, or resize a fragment, and you cannot mix typefaces.
+
+`storescreens` treats captions as styled text, not a single-font string:
+
+- Inline Markdown is parsed in every caption: `**bold**`, `*italic*`, and `` `code` `` style fragments of a line without splitting it into separate roles.
+- A `highlights:` map overrides color, weight, and italic on literal substring matches, so a keyword can pick up an accent color without restructuring the caption.
+- `title` and `subtitle` are independent roles, each with its own font, size, weight, color, and horizontal alignment.
+- `locale_overrides:` swaps any role-level field (font, weight, color, size) when rendering a specific locale, so Greek slides can use Didot and Japanese slides can use Hiragino Mincho without forking the whole config.
+
+See [Captions](#captions) for the full schema.
+
 ## Acknowledgements
 
 - Built-in render templates (`ascent`, `all_the_wiser`, `ethereal`, `sahara`, `midnight`, `pinecrest`, `blueprint`, `sunset_blvd`, `jazz_and_wine`) take their names and visual direction from the free MIT-licensed templates at [ButterKit](https://butterkit.app/templates/). The implementations here are independent and no ButterKit code or artwork is bundled. See [Template credits](#template-credits) for more.
