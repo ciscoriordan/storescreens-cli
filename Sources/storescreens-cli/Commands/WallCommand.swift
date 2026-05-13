@@ -27,14 +27,10 @@ struct WallSubmitCommand: AsyncParsableCommand {
             """
     )
 
-    @Option(
-        name: .long,
-        help: "App Store app ID (e.g. 1234567890) OR full App Store URL (e.g. https://apps.apple.com/us/app/foo/id1234567890)."
+    @Argument(
+        help: "App Store app ID (1234567890) or full App Store URL (https://apps.apple.com/us/app/foo/id1234567890)."
     )
     var app: String
-
-    @Flag(name: .long, help: "Confirm submission. Required.")
-    var confirm: Bool = false
 
     @Option(name: .long, help: "Override the submit endpoint URL.")
     var endpoint: String = "https://api.storescreens.app/wall/submit"
@@ -56,15 +52,7 @@ struct WallSubmitCommand: AsyncParsableCommand {
             throw ExitCode(1)
         }
 
-        // 2. Guard the network call behind --confirm so a stray invocation
-        //    can't silently submit junk to the wall.
-        guard confirm else {
-            logger.log("Submission requires --confirm.", level: .warning)
-            print("  Re-run with --confirm to send your app to the wall.")
-            throw ExitCode(1)
-        }
-
-        // 3. Resolve metadata via iTunes Lookup so the submission carries
+        // 2. Resolve metadata via iTunes Lookup so the submission carries
         //    name + dev + icon + canonical store URL.
         logger.log("Looking up app \(id) on the App Store…", level: .info)
         let meta: AppMeta
@@ -84,7 +72,7 @@ struct WallSubmitCommand: AsyncParsableCommand {
 
         logger.log("Found: \(meta.name) by \(meta.dev)", level: .success)
 
-        // 4. POST to the submit endpoint. The backend may not exist yet —
+        // 3. POST to the submit endpoint. The backend may not exist yet —
         //    if the request fails, tell the user where to file an issue
         //    instead of throwing a raw network error.
         logger.log("Submitting to \(endpoint)…", level: .info)
