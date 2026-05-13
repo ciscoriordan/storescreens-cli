@@ -2,7 +2,11 @@
 
 # StoreScreens
 
-Capture App Store screenshots across every required device size in one command. Runs your UI tests on multiple simulators in parallel (or natively on macOS), organizes the output by device and locale, and auto-detects which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
+Every App Store Connect API call. Granular, agentic screenshot rendering.
+
+StoreScreens is a `brew`-installed Swift MCP/CLI (and MD Skill) that drives the entire App Store Connect pipeline from one config file: XCUITest screenshots, framed renders with markdown captions (optionally unique per device/locale), metadata and binary upload via Apple's official API. Beautiful, modern bezels, no Ruby version hell.
+
+Captures run your UI tests on multiple simulators in parallel (or natively on macOS), organize the output by device and locale, and auto-detect which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
 ## Three pieces, one workflow
 
