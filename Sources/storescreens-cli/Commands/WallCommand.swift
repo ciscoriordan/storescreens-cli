@@ -34,7 +34,7 @@ struct WallSubmitCommand: AsyncParsableCommand {
     var confirm: Bool = false
 
     @Option(name: .long, help: "Override the submit endpoint URL.")
-    var endpoint: String = "https://storescreens.app/api/wall/submit"
+    var endpoint: String = "https://api.storescreens.app/wall/submit"
 
     @Flag(name: .long, help: "Verbose output.")
     var verbose: Bool = false
