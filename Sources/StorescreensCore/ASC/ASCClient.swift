@@ -101,6 +101,30 @@ package final class ASCClient: @unchecked Sendable {
                 return false
             }
         }
+
+        /// Apple returns this when PATCH `canceled:true` (or
+        /// `submitted:true`) is sent to a `reviewSubmission` whose items
+        /// list is empty. The submission has to have a version attached
+        /// before either transition is accepted - even the cancel side,
+        /// which is otherwise valid on a READY_FOR_REVIEW resource.
+        /// SubmitOrchestrator's stale-submission cleanup uses this to
+        /// recover: attach the upcoming version to the orphan, then retry
+        /// the cancel.
+        ///
+        /// Apple shares the same `STATE_ERROR.ENTITY_STATE_INVALID` code
+        /// with several other 409s (rejected version, attribute already
+        /// set, etc.) so we narrow on the literal "not in cancellable
+        /// state" / "does not have any items" detail strings rather than
+        /// the bare code.
+        package var isNotCancellableState: Bool {
+            guard statusCode == 409 else { return false }
+            return details.contains { d in
+                guard d.code == "STATE_ERROR.ENTITY_STATE_INVALID" else { return false }
+                let msg = d.detail.lowercased()
+                return msg.contains("not in cancellable state")
+                    || msg.contains("does not have any items")
+            }
+        }
     }
 
     package struct ErrorDetail: Codable, Sendable {

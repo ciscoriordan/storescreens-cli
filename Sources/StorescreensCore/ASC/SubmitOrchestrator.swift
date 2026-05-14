@@ -392,6 +392,7 @@ package struct SubmitOrchestrator {
                 appsAPI: appsAPI,
                 appID: appID,
                 platform: platform,
+                versionID: versionID,
                 report: &report,
                 progress: progress
             )
@@ -451,6 +452,7 @@ package struct SubmitOrchestrator {
         appsAPI: AppsAPI,
         appID: String,
         platform: String,
+        versionID: String,
         report: inout Report,
         progress: ((String) -> Void)?
     ) async throws {
@@ -497,6 +499,37 @@ package struct SubmitOrchestrator {
                 // as success: nothing more to do.
                 progress?("submit for review: prior submission \(sub.id) already finalized")
                 report.canceledReviewSubmissionIDs.append(sub.id)
+            } catch let e as ASCClient.APIError where e.isNotCancellableState {
+                // Apple refuses to cancel a reviewSubmission with no items.
+                // The submission has to have at least one item attached
+                // before either `submitted:true` or `canceled:true` is
+                // accepted - both transitions return 409
+                // STATE_ERROR.ENTITY_STATE_INVALID otherwise. This happens
+                // when a prior submit aborted between creating the
+                // submission and attaching the version, leaving an orphan
+                // that storescreens itself could not unstick. Recover by
+                // attaching our version to the orphan, then retry the
+                // cancel. Apple frees the version back up the moment the
+                // submission goes COMPLETE, so the upcoming
+                // createReviewSubmission can re-attach it cleanly.
+                progress?("submit for review: prior submission \(sub.id) is empty; attaching version to unstick + retrying cancel")
+                do {
+                    _ = try await appsAPI.addVersionToReviewSubmission(
+                        reviewSubmissionID: sub.id, versionID: versionID
+                    )
+                } catch {
+                    // Most likely cause: the same version is already
+                    // attached to a DIFFERENT prior submission that we
+                    // can't see in our cancellable list, or the version
+                    // moved to a non-attachable state. Surface the
+                    // unstick failure so the operator sees what blocked
+                    // us instead of swallowing it as a cancel error.
+                    throw error
+                }
+                _ = try await appsAPI.cancelReviewSubmission(id: sub.id)
+                progress?("submit for review: canceled prior submission \(sub.id) (was \(originalState))")
+                report.canceledReviewSubmissionIDs.append(sub.id)
+                try await waitForSubmissionToSettle(appsAPI: appsAPI, id: sub.id)
             }
             // Other errors propagate up so submit-for-review aborts; we
             // don't want to charge ahead and POST a new submission while
