@@ -459,6 +459,18 @@ package struct CaptureOrchestrator: Sendable {
             await logLine("Booting simulator for configuration...")
             try await simulatorManager.boot(device.udid)
 
+            if let loc = locale {
+                // xcodebuild's -testLanguage / -testRegion alone aren't enough
+                // to flip the AUT's locale - the AUT inherits its preferred
+                // languages from the simulator's .GlobalPreferences.plist,
+                // which only setLocale (plist edit + reboot) updates. Without
+                // this, every per-locale iteration ends up launching the AUT
+                // in whatever locale the simulator last got set to (typically
+                // en-US), and screenshots all show English app UI.
+                try await simulatorManager.setLocale(loc, udid: device.udid)
+                await logLine("Set locale: \(loc)")
+            }
+
             try await simulatorManager.setAppearance(appearance, udid: device.udid)
             await logLine("Set appearance: \(appearance)")
 

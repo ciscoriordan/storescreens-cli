@@ -580,6 +580,21 @@ struct CaptureCommand: AsyncParsableCommand {
     ) async throws -> [CaptureManifest.DeviceCapture] {
         // Each call gets its own actor instances so concurrent calls don't serialize on a shared actor
         let buildRunner = XcodeBuildRunner(verbose: verbose, logDir: logDir)
+        let simulatorManager = SimulatorManager()
+
+        // Pre-configure the simulator's locale before xcodebuild test runs. The
+        // -testLanguage / -testRegion flags below tell xcodebuild what locale
+        // the test runner should report, but the AUT itself reads
+        // `Locale.preferredLanguages` from the simulator's
+        // .GlobalPreferences.plist (which xcodebuild does NOT update). Setting
+        // the locale here, before xcodebuild boots its clone, means the clone
+        // inherits the localized GlobalPreferences and the AUT renders in the
+        // target language instead of always defaulting to en-US.
+        if !device.isMacOS, let loc = locale {
+            try await simulatorManager.boot(device.udid)
+            try await simulatorManager.setLocale(loc, udid: device.udid)
+            logLine("Set locale: \(loc)")
+        }
 
         // Note: appearance/status bar are not pre-configured because xcodebuild test
         // boots its own clone simulator. To set appearance, use test launch arguments
