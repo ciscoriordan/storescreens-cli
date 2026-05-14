@@ -96,6 +96,25 @@ package struct CaptureOrchestrator: Sendable {
     package static let breadcrumbFile = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".storescreens-cache-dir")
 
+    /// Per-iteration locale hint, written before each capture iteration and
+    /// read by the test bundle's setUpWithError so it can forward
+    /// `-AppleLanguages` / `-AppleLocale` to the AUT via
+    /// XCUIApplication.launchArguments. Adopts fastlane snapshot's pattern -
+    /// rather than mutating the simulator's GlobalPreferences (which only
+    /// takes effect after a reboot and rapidly destabilises iPad clones),
+    /// the test reads this file and overrides locale at launch time.
+    package static let currentLocaleFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".storescreens-cache")
+        .appendingPathComponent("current-locale.txt")
+
+    /// Writes the active locale (or empties the file) so the test bundle
+    /// can pick it up via SIMULATOR_HOST_HOME in setUpWithError.
+    package static func writeCurrentLocaleHint(_ locale: String?) {
+        let dir = currentLocaleFile.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? (locale ?? "").write(to: currentLocaleFile, atomically: true, encoding: .utf8)
+    }
+
     /// Parent directory of `screenshotFilterFile`. Lives under HOME (not cwd)
     /// because simulator-side test code reads it via `SIMULATOR_HOST_HOME`.
     /// Cleaning it up keeps `~/.storescreens-cache` from accumulating across runs.
@@ -454,22 +473,15 @@ package struct CaptureOrchestrator: Sendable {
         )
         let simulatorManager = SimulatorManager()
 
+        // Per-iteration locale hint for the test bundle. See
+        // `writeCurrentLocaleHint` for the rationale - the AUT picks up
+        // locale via launch arguments, not simulator GlobalPreferences.
+        Self.writeCurrentLocaleHint(locale)
+
         // macOS tests run natively - skip all simulator setup
         if !device.isMacOS {
             await logLine("Booting simulator for configuration...")
             try await simulatorManager.boot(device.udid)
-
-            if let loc = locale {
-                // xcodebuild's -testLanguage / -testRegion alone aren't enough
-                // to flip the AUT's locale - the AUT inherits its preferred
-                // languages from the simulator's .GlobalPreferences.plist,
-                // which only setLocale (plist edit + reboot) updates. Without
-                // this, every per-locale iteration ends up launching the AUT
-                // in whatever locale the simulator last got set to (typically
-                // en-US), and screenshots all show English app UI.
-                try await simulatorManager.setLocale(loc, udid: device.udid)
-                await logLine("Set locale: \(loc)")
-            }
 
             try await simulatorManager.setAppearance(appearance, udid: device.udid)
             await logLine("Set appearance: \(appearance)")

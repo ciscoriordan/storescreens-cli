@@ -326,17 +326,9 @@ actor SimulatorManager {
             throw CLIError.localeSetFailed(reason: langResult.stderr)
         }
 
-        // Shut the simulator down so xcodebuild test's clone boots fresh
-        // and reads the updated GlobalPreferences from disk. If we leave
-        // the simulator running, the clone inherits cached locale data
-        // from the parent's running process and ignores the plist edit.
-        // We deliberately do NOT re-boot here - xcodebuild test boots its
-        // own clone, and that clone goes through the full boot lifecycle
-        // (including services like the accessibility server) on its own.
-        // Pre-booting + bootstatus before xcodebuild only added a brittle
-        // race window where the AX server hadn't initialised by the time
-        // xcodebuild attached.
+        // Reboot for changes to take effect
         try? await shutdown(udid)
+        try await boot(udid)
     }
 }
 

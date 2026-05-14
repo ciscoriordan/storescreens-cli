@@ -198,6 +198,24 @@ struct CaptureCommand: AsyncParsableCommand {
         .appendingPathComponent("screenshot-filter.txt")
         .path
 
+    /// Per-iteration locale hint, written by storescreens-cli before each
+    /// capture iteration and read by the test bundle's setUpWithError so it
+    /// can forward `-AppleLanguages` / `-AppleLocale` to the AUT via
+    /// XCUIApplication.launchArguments. Empty file means "no locale" (the
+    /// test should not override).
+    private static let currentLocaleFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".storescreens-cache")
+        .appendingPathComponent("current-locale.txt")
+        .path
+
+    /// Writes the active locale (or empties the file) so the test bundle
+    /// can pick it up via the breadcrumb chain in setUpWithError.
+    private static func writeCurrentLocaleHint(_ locale: String?) {
+        let dir = (currentLocaleFile as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? (locale ?? "").write(toFile: currentLocaleFile, atomically: true, encoding: .utf8)
+    }
+
     /// ANSI color codes cycled per device for distinguishing log output.
     private static let deviceColors = [36, 35, 33, 32] // cyan, magenta, yellow, green
 
@@ -580,21 +598,16 @@ struct CaptureCommand: AsyncParsableCommand {
     ) async throws -> [CaptureManifest.DeviceCapture] {
         // Each call gets its own actor instances so concurrent calls don't serialize on a shared actor
         let buildRunner = XcodeBuildRunner(verbose: verbose, logDir: logDir)
-        let simulatorManager = SimulatorManager()
 
-        // Pre-configure the simulator's locale before xcodebuild test runs. The
-        // -testLanguage / -testRegion flags below tell xcodebuild what locale
-        // the test runner should report, but the AUT itself reads
-        // `Locale.preferredLanguages` from the simulator's
-        // .GlobalPreferences.plist (which xcodebuild does NOT update). Setting
-        // the locale here, before xcodebuild boots its clone, means the clone
-        // inherits the localized GlobalPreferences and the AUT renders in the
-        // target language instead of always defaulting to en-US.
-        if !device.isMacOS, let loc = locale {
-            try await simulatorManager.boot(device.udid)
-            try await simulatorManager.setLocale(loc, udid: device.udid)
-            logLine("Set locale: \(loc)")
-        }
+        // Write the active locale to a cache file the test bundle reads on
+        // setUp. Adopts fastlane snapshot's pattern: rather than mutating
+        // the simulator's GlobalPreferences (which only takes effect after
+        // a reboot and rapidly destabilises iPad clones), we let the test
+        // forward `-AppleLanguages` / `-AppleLocale` directly to the AUT
+        // via XCUIApplication.launchArguments. The AUT's NSLocale picks up
+        // the override on launch and renders in the right locale, no
+        // simulator state changes needed.
+        Self.writeCurrentLocaleHint(locale)
 
         // Note: appearance/status bar are not pre-configured because xcodebuild test
         // boots its own clone simulator. To set appearance, use test launch arguments
