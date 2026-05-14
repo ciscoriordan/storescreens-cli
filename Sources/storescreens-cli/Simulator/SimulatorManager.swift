@@ -326,9 +326,15 @@ actor SimulatorManager {
             throw CLIError.localeSetFailed(reason: langResult.stderr)
         }
 
-        // Reboot for changes to take effect
+        // Reboot for changes to take effect.
         try? await shutdown(udid)
         try await boot(udid)
+        // `simctl boot` returns as soon as the boot is initiated, not when
+        // the simulator is fully usable. `bootstatus -b` waits for the
+        // services (notably accessibility) to come up - without this,
+        // xcodebuild test races the AX server and fails the first
+        // iteration with "Error getting main window kAXErrorServerNotFound".
+        _ = try? await shell.xcrun("simctl", arguments: ["bootstatus", udid, "-b"])
     }
 }
 
