@@ -485,6 +485,27 @@ package struct AppsAPI {
 
     package struct ReviewSubmissionItem: Codable, Sendable {
         package let id: String
+        package let relationships: Relationships?
+
+        package struct Relationships: Codable, Sendable {
+            package let appStoreVersion: AppStoreVersionRel?
+
+            package struct AppStoreVersionRel: Codable, Sendable {
+                package let data: AppStoreVersionData?
+                package struct AppStoreVersionData: Codable, Sendable {
+                    package let id: String
+                    package let type: String
+                }
+            }
+        }
+
+        /// Convenience: returns the `appStoreVersion` ID this item attaches
+        /// to its parent reviewSubmission, when the response carried it in
+        /// `relationships`. Nil for responses that omit relationships (e.g.
+        /// the POST response we return from `addVersionToReviewSubmission`).
+        package var appStoreVersionID: String? {
+            relationships?.appStoreVersion?.data?.id
+        }
     }
 
     /// Review-submission states that block creating a new submission for the
@@ -570,6 +591,24 @@ package struct AppsAPI {
         struct Resp: Decodable { let data: ReviewSubmission }
         let resp: Resp = try await client.get(
             path: "reviewSubmissions/\(id)", as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// Lists the items attached to a `reviewSubmission`. Used by the
+    /// submit cleanup path to figure out whether a stale draft already
+    /// owns the target version (in which case we finalize the draft
+    /// instead of cancelling it). The response carries each item's
+    /// `appStoreVersion` relationship so callers can match on the
+    /// version ID without an additional GET.
+    package func listReviewSubmissionItems(
+        reviewSubmissionID: String
+    ) async throws -> [ReviewSubmissionItem] {
+        struct Resp: Decodable { let data: [ReviewSubmissionItem] }
+        let resp: Resp = try await client.get(
+            path: "reviewSubmissions/\(reviewSubmissionID)/items",
+            query: ["limit": "200"],
+            as: Resp.self
         )
         return resp.data
     }

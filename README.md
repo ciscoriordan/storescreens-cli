@@ -1309,16 +1309,25 @@ Submission runs only after screenshots + metadata have been successfully uploade
 
 Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create the submission, POST a `reviewSubmissionItems` to attach the version, PATCH `submitted:true` to push it into `WAITING_FOR_REVIEW`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
 
-#### Auto-cancel of stuck prior submissions
+#### Auto-cleanup of stuck prior submissions
 
-When Apple rejects a build, the previous `reviewSubmission` transitions to state `UNRESOLVED_ISSUES` and the rejected version is "stuck inside" that submission. The next `submit` cycle would otherwise fail at the POST `reviewSubmissionItems` step with a 409 (`STATE_ERROR.ENTITY_STATE_INVALID`, "Item is already present in [other-submission]"). To avoid manual cleanup in the ASC web UI, `submit` does a pre-flight cleanup before creating a new submission:
+When Apple rejects a build, the previous `reviewSubmission` transitions to state `UNRESOLVED_ISSUES` and the rejected version is "stuck inside" that submission. Aborted prior runs can also leave `READY_FOR_REVIEW` drafts behind. To avoid manual cleanup in the ASC web UI, `submit` runs a pre-flight that either cancels or adopts the stale submissions before creating a new one:
 
 1. List existing `reviewSubmissions` for the app on the configured platform.
-2. If any are in `UNRESOLVED_ISSUES` (rejected) or `READY_FOR_REVIEW` (an aborted prior submit's draft), PATCH `canceled: true` on each one and poll until the state settles to `COMPLETE`. The IDs of canceled submissions land in `report.canceledReviewSubmissionIDs`.
-3. If any are in `IN_REVIEW` or `WAITING_FOR_REVIEW`, **bail loudly with an error**. Apple is actively reviewing (or about to), and pulling the rug out from under that wastes a review slot. Cancel manually via the ASC web UI if you really mean to resubmit.
-4. Once the cleanup settles, proceed with the normal three-step flow.
+2. If any are in `IN_REVIEW` or `WAITING_FOR_REVIEW`, bail loudly with an error. Apple is actively reviewing (or about to), and pulling the rug out from under that wastes a review slot. Cancel manually via the ASC web UI if you really mean to resubmit.
+3. For each `UNRESOLVED_ISSUES` (rejected) submission: PATCH `canceled: true` and poll until the state settles to `COMPLETE`. The IDs land in `report.canceledReviewSubmissionIDs`.
+4. For each stale `READY_FOR_REVIEW` draft: GET its items first.
+    - If items reference our target version (or the items list is empty so we can attach our version): adopt the draft as our submission. The flow attaches the version if needed and PATCHes `submitted: true` in place rather than recreating. The adopted ID lands in `report.adoptedReviewSubmissionID`.
+    - If items reference a different version: PATCH `canceled: true` like the rejected path above.
+5. Proceed with the three-step flow against the adopted draft (just PATCH `submitted:true`) or a fresh submission (create + attach + finalize).
+
+Adoption is what unblocks the "first submit ran before Apple finished processing the build" scenario - Apple refuses to cancel an empty draft AND refuses to cancel a draft once items are attached, so adopting it is the only programmatic way out.
 
 Note: programmatic cancel uses PATCH `{"canceled": true}` on the submission. ASC's `DELETE /v1/reviewSubmissions/{id}` returns 403 regardless of state, so `submit` does not attempt DELETE.
+
+#### Waiting for the build to finish processing
+
+When `attach_build: true` (the default) and `submit_for_review: true`, `submit` will poll `/v1/builds` for up to 20 minutes waiting for a VALID build to appear for the target marketing version before continuing. Submitting against a build-less version is what leaves an empty draft `reviewSubmission` behind, so the wait is cheaper than the cleanup. If the wait times out, `submit` skips the review-submission step entirely (no empty draft is created) and reports an explicit "submit for review: skipped because no VALID build was attached" error; re-run once `storescreens testflight builds list` shows the build as `VALID`.
 
 Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version.
 
@@ -1536,6 +1545,18 @@ Before archiving, `upload-build` queries App Store Connect for your app and deci
 When a bump is required, it rewrites the `project.pbxproj` in place (every config of every target, matching `agvtool new-version -all` / `new-marketing-version`) and syncs `submit.create_version` in `storescreens.yml` so the next `storescreens submit` picks up the right version. Opt out with `upload_build.auto_bump: false` or `--no-auto-bump`.
 
 Full schema (every field + defaults, ExportOptions.plist generation, altool flow, version resolver rules, troubleshooting): run `storescreens upload-build --help` and `storescreens upload-build init --help`.
+
+### Troubleshooting
+
+**`xcodebuild` fails with `iOS <version> is not installed`** (common right after upgrading to a new Xcode major, e.g. 26.x). The new Xcode often ships without its iOS platform component bundled. Download it once:
+
+```bash
+xcodebuild -downloadPlatform iOS
+```
+
+It's an 8+ GB download; once it finishes, re-run `storescreens upload-build`.
+
+**`storescreens submit --submit-for-review` waits a long time on "no VALID build for <version> yet; polling".** That's the orchestrator waiting for Apple to finish processing the build you just uploaded. Processing typically takes 5-15 min after `upload-build` completes; the wait is capped at 20 min by default. If Apple is slow, re-run `submit` once `storescreens testflight builds list` reports the build as `VALID`.
 
 ## App Store Connect API coverage
 

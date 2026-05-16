@@ -125,6 +125,30 @@ package final class ASCClient: @unchecked Sendable {
                     || msg.contains("does not have any items")
             }
         }
+
+        /// Apple returns this when POST `/v1/reviewSubmissionItems` tries to
+        /// attach an `appStoreVersion` to a `reviewSubmission` that already
+        /// has the same version attached. The wire shape is 409 with
+        /// `ENTITY_ERROR.RELATIONSHIP.INVALID.NOT_ALLOWED` + a detail like
+        /// "appStoreVersion <id> was already added to this reviewSubmission".
+        ///
+        /// SubmitOrchestrator's cleanup uses this to recover the
+        /// already-attached-then-failed-cancel case: when the unstick attach
+        /// hits this, the version is in fact on the submission, so the
+        /// orchestrator can pivot to finalize instead of failing.
+        ///
+        /// Distinct from `isAlreadySetConflict`, which matches the "attached
+        /// to a DIFFERENT submission" wording ("Item is already present in
+        /// [other-submission]"). That case means another reviewSubmission
+        /// still owns the version and the caller has to clean it up first.
+        package var isAlreadyAttachedToSameReviewSubmission: Bool {
+            guard statusCode == 409 else { return false }
+            return details.contains { d in
+                guard d.code == "ENTITY_ERROR.RELATIONSHIP.INVALID.NOT_ALLOWED" else { return false }
+                let msg = d.detail.lowercased()
+                return msg.contains("already added to this reviewsubmission")
+            }
+        }
     }
 
     package struct ErrorDetail: Codable, Sendable {

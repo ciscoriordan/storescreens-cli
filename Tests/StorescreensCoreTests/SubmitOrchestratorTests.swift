@@ -946,9 +946,11 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
     }
 
-    /// `READY_FOR_REVIEW` (an aborted prior submit's draft submission) is
-    /// also cancellable. Same mechanism as UNRESOLVED_ISSUES.
-    func testSubmit_submitForReview_cancelsStaleReadyForReviewDraft() async throws {
+    /// `READY_FOR_REVIEW` stale draft that holds a DIFFERENT version
+    /// (a sibling submission for some other version that's still
+    /// blocking us) gets cancelled and a fresh submission is created
+    /// for our version. Same mechanism as UNRESOLVED_ISSUES.
+    func testSubmit_submitForReview_cancelsStaleDraftWithDifferentVersion() async throws {
         let (client, _) = makeClient()
 
         ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
@@ -959,6 +961,11 @@ final class SubmitOrchestratorTests: XCTestCase {
         }
         ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
             (200, Data(#"{"data":[{"id":"RSUB-STALE","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        // Items on the stale draft point at a DIFFERENT version, so the
+        // orchestrator must cancel-and-recreate rather than adopting.
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-STALE/items") { _ in
+            (200, Data(#"{"data":[{"id":"RI-OLD","type":"reviewSubmissionItems","relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"VER-OTHER"}}}}]}"#.utf8))
         }
         var staleCanceled = false
         ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-STALE") { _ in
@@ -1003,9 +1010,244 @@ final class SubmitOrchestratorTests: XCTestCase {
             shouldUploadMetadata: false
         )
 
-        XCTAssertTrue(staleCanceled, "stale READY_FOR_REVIEW must be canceled")
+        XCTAssertTrue(staleCanceled, "stale READY_FOR_REVIEW with another version must be canceled")
         XCTAssertEqual(report.canceledReviewSubmissionIDs, ["RSUB-STALE"])
         XCTAssertEqual(report.reviewSubmissionID, "RSUB-NEW")
+        XCTAssertNil(report.adoptedReviewSubmissionID,
+                     "fresh submission, nothing was adopted")
+    }
+
+    /// The bug-report scenario, common case: a prior submit run created
+    /// a `reviewSubmission` and POST item failed (e.g. build wasn't VALID
+    /// yet), leaving an empty `READY_FOR_REVIEW` draft. The cleanup
+    /// must adopt that draft (attach our version + finalize) instead of
+    /// trying to cancel it - Apple refuses to cancel an empty submission
+    /// AND refuses to cancel a draft once items are attached, so the only
+    /// way out is the finalize path.
+    func testSubmit_submitForReview_adoptsEmptyReadyForReviewDraft() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-EMPTY","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        // Empty items: this is the orphan-from-prior-failed-run state.
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-EMPTY/items") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        // Attach must hit the adopted draft, NOT a fresh one. Capture
+        // the body so we can verify the reviewSubmission relationship.
+        var attachBody: Data?
+        var attachHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            attachHits += 1
+            attachBody = ASCStub.requestBodies.last
+            return (201, Data(#"{"data":{"id":"RI-NEW","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        // Finalize via PATCH submitted:true on the adopted draft.
+        var finalizeBody: Data?
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-EMPTY") { _ in
+            finalizeHits += 1
+            finalizeBody = ASCStub.requestBodies.last
+            return (200, Data(#"{"data":{"id":"RSUB-EMPTY","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+        // Cancel and POST create must NOT be called.
+        var cancelHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            cancelHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(attachHits, 1, "must attach version to the adopted draft")
+        XCTAssertEqual(finalizeHits, 1, "must PATCH submitted:true on the adopted draft")
+        XCTAssertEqual(cancelHits, 0, "must NOT POST a fresh reviewSubmission when adopting")
+        let attachStr = String(data: attachBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(attachStr.contains("\"id\":\"RSUB-EMPTY\""),
+                      "attach must target the adopted draft, got: \(attachStr)")
+        let finalizeStr = String(data: finalizeBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(finalizeStr.contains("\"submitted\":true"),
+                      "finalize must send submitted:true, got: \(finalizeStr)")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-EMPTY")
+        XCTAssertEqual(report.adoptedReviewSubmissionID, "RSUB-EMPTY")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
+        XCTAssertTrue(report.canceledReviewSubmissionIDs.isEmpty,
+                      "adoption is not a cancel; canceledReviewSubmissionIDs stays empty")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// The bug-report scenario, recovery case: a prior aborted submit
+    /// already attached the version to the draft (e.g. the user re-ran
+    /// once after hitting the bug and the unstick-attach succeeded but
+    /// the second cancel failed). Cleanup now sees the draft with our
+    /// version attached and just finalizes it - no attach, no cancel.
+    func testSubmit_submitForReview_adoptsDraftWithOurVersionAlreadyAttached() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-ADOPT","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-ADOPT/items") { _ in
+            (200, Data(#"{"data":[{"id":"RI-EXIST","type":"reviewSubmissionItems","relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"VER-1"}}}}]}"#.utf8))
+        }
+        var attachHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            attachHits += 1
+            return (201, Data(#"{"data":{"id":"RI-NEW","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        var createHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createHits += 1
+            return (201, Data(#"{"data":{"id":"X","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+        var finalizeBody: Data?
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-ADOPT") { _ in
+            finalizeHits += 1
+            finalizeBody = ASCStub.requestBodies.last
+            return (200, Data(#"{"data":{"id":"RSUB-ADOPT","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(attachHits, 0,
+                       "version already attached; must NOT re-POST reviewSubmissionItems")
+        XCTAssertEqual(createHits, 0,
+                       "must NOT create a fresh reviewSubmission when one already owns our version")
+        XCTAssertEqual(finalizeHits, 1, "must PATCH submitted:true on the adopted draft")
+        let finalizeStr = String(data: finalizeBody ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(finalizeStr.contains("\"submitted\":true"),
+                      "finalize must send submitted:true, got: \(finalizeStr)")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-ADOPT")
+        XCTAssertEqual(report.adoptedReviewSubmissionID, "RSUB-ADOPT")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
+        XCTAssertTrue(report.canceledReviewSubmissionIDs.isEmpty)
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// Eventual-consistency edge case: items list reports empty, so we
+    /// pick the adopt-empty branch and POST item, but Apple replies 409
+    /// `ENTITY_ERROR.RELATIONSHIP.INVALID.NOT_ALLOWED` "already added to
+    /// this reviewSubmission". The orchestrator treats it as success and
+    /// proceeds to finalize.
+    func testSubmit_submitForReview_adoptsEmptyDraft_attachAlreadyAttachedTreatedAsSuccess() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[{"id":"RSUB-EMPTY","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-EMPTY/items") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        // Attach returns 409 with the "already added to this reviewSubmission"
+        // wording. Real wire shape from Apple.
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            let body = #"{"errors":[{"id":"X","status":"409","code":"ENTITY_ERROR.RELATIONSHIP.INVALID.NOT_ALLOWED","title":"The provided entity includes a relationship with an invalid value","detail":"The appStoreVersion VER-1 was already added to this reviewSubmission."}]}"#
+            return (409, Data(body.utf8))
+        }
+        var finalizeHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-EMPTY") { _ in
+            finalizeHits += 1
+            return (200, Data(#"{"data":{"id":"RSUB-EMPTY","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: false
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(finalizeHits, 1,
+                       "must still finalize even when attach reports already-attached")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-EMPTY")
+        XCTAssertEqual(report.adoptedReviewSubmissionID, "RSUB-EMPTY")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
+        XCTAssertTrue(report.errors.isEmpty,
+                      "already-attached must not be surfaced as an error: \(report.errors)")
     }
 
     /// `IN_REVIEW` and `WAITING_FOR_REVIEW` are off-limits for auto-cancel:
@@ -1135,6 +1377,12 @@ final class SubmitOrchestratorTests: XCTestCase {
             ]}
             """
             return (200, Data(body.utf8))
+        }
+        // RSUB-A is UNRESOLVED_ISSUES so items are not consulted.
+        // RSUB-B is a READY_FOR_REVIEW draft holding a DIFFERENT version,
+        // so it routes to must-cancel rather than adoption.
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions/RSUB-B/items") { _ in
+            (200, Data(#"{"data":[{"id":"RI-X","type":"reviewSubmissionItems","relationships":{"appStoreVersion":{"data":{"type":"appStoreVersions","id":"VER-OTHER"}}}}]}"#.utf8))
         }
         var cancelAHits = 0, cancelBHits = 0
         ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-A") { _ in
@@ -1356,6 +1604,161 @@ final class SubmitOrchestratorTests: XCTestCase {
 
         XCTAssertEqual(createHits, 0, "submit-for-review must not fire when the flag is unset")
         XCTAssertNil(report.reviewSubmissionID)
+    }
+
+    // MARK: - Submit for review: wait-for-build
+
+    /// When attach_build and submit_for_review are both true and the
+    /// first `latestValidBuild` lookup finds no VALID build yet, the
+    /// orchestrator polls. As soon as a VALID build appears the attach
+    /// proceeds and the submission goes through normally. Submitting
+    /// against a build-less version is exactly what leaves an empty
+    /// reviewSubmission orphan behind, so waiting is the cheaper fix.
+    func testSubmit_submitForReview_waitsForBuildToProcess() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // First two /builds calls report no VALID build, the third returns
+        // VALID. The orchestrator should poll until VALID appears.
+        let buildHits = Counter()
+        ASCStub.add(method: "GET", suffix: "/v1/builds") { _ in
+            let n = buildHits.increment()
+            if n < 3 {
+                return (200, Data(#"{"data":[{"id":"BLD-1","type":"builds","attributes":{"version":"1","processingState":"PROCESSING"}}]}"#.utf8))
+            }
+            return (200, Data(#"{"data":[{"id":"BLD-1","type":"builds","attributes":{"version":"1","processingState":"VALID"}}]}"#.utf8))
+        }
+        var attachBuildHits = 0
+        ASCStub.add(method: "PATCH", suffix: "/v1/appStoreVersions/VER-1") { _ in
+            attachBuildHits += 1
+            return (200, Data(#"{"data":{"id":"VER-1","type":"appStoreVersions","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/builds/BLD-1") { _ in
+            (200, Data(#"{"data":{"id":"BLD-1","type":"builds","attributes":{}}}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            (201, Data(#"{"data":{"id":"RI-1","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-1") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: true
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0,
+            buildWaitInterval: 0, buildWaitMaxAttempts: 10
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(attachBuildHits, 1,
+                       "must attach the build once it finishes processing")
+        XCTAssertEqual(report.attachedBuildNumber, "1")
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-1")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    /// When the build never goes VALID within the wait budget, the
+    /// orchestrator gives up, surfaces the no-VALID-build error, and
+    /// MUST NOT proceed to runSubmitForReview - creating a reviewSubmission
+    /// against a build-less version is the exact thing that leaves the
+    /// empty draft orphan behind.
+    func testSubmit_submitForReview_buildWaitTimeoutSkipsRunSubmitForReview() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // /builds always returns no VALID build (everything is still
+        // PROCESSING). Wait must time out.
+        ASCStub.add(method: "GET", suffix: "/v1/builds") { _ in
+            (200, Data(#"{"data":[{"id":"BLD-1","type":"builds","attributes":{"version":"1","processingState":"PROCESSING"}}]}"#.utf8))
+        }
+        var listReviewHits = 0
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            listReviewHits += 1
+            return (200, Data(#"{"data":[]}"#.utf8))
+        }
+        var createReviewHits = 0
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            createReviewHits += 1
+            return (201, Data(#"{"data":{"id":"BAD","type":"reviewSubmissions","attributes":{}}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.0.0",
+                submitForReview: true,
+                attachBuild: true
+            )
+        )
+        let orchestrator = SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0,
+            buildWaitInterval: 0, buildWaitMaxAttempts: 3
+        )
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertNil(report.attachedBuildNumber)
+        XCTAssertNil(report.reviewSubmissionID,
+                     "must NOT create a reviewSubmission when no build was attached")
+        XCTAssertEqual(listReviewHits, 0,
+                       "cleanup phase must not even list submissions when the build timed out")
+        XCTAssertEqual(createReviewHits, 0,
+                       "creating an empty reviewSubmission is the exact bug we're avoiding")
+        XCTAssertTrue(
+            report.errors.contains { $0.contains("no VALID build") },
+            "expected the no-VALID-build error, got: \(report.errors)"
+        )
+        XCTAssertTrue(
+            report.errors.contains { $0.contains("submit for review: skipped") },
+            "expected an explicit submit-for-review-skipped error, got: \(report.errors)"
+        )
     }
 
     // MARK: - Pricing & Availability

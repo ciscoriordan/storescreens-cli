@@ -24,16 +24,31 @@ package struct SubmitOrchestrator {
     /// polling entirely.
     package let settlePollMaxAttempts: Int
 
+    /// How long to wait between `latestValidBuild` polls when waiting for
+    /// Apple to finish processing a newly uploaded build. Nanoseconds.
+    /// Default 60s; tests pass 0 to skip the sleep.
+    package let buildWaitInterval: UInt64
+
+    /// Max number of poll attempts before giving up on the build going
+    /// VALID. Default 20 (20 min with default interval). Only consulted
+    /// when `attach_build` and `submit_for_review` are both true; without
+    /// submit-for-review the orchestrator never waits.
+    package let buildWaitMaxAttempts: Int
+
     package init(
         client: ASCClient,
         config: AppStoreConnectConfig,
         settlePollInterval: UInt64 = 1_000_000_000,  // 1s
-        settlePollMaxAttempts: Int = 30
+        settlePollMaxAttempts: Int = 30,
+        buildWaitInterval: UInt64 = 60_000_000_000,  // 60s
+        buildWaitMaxAttempts: Int = 20               // ~20 min total
     ) {
         self.client = client
         self.config = config
         self.settlePollInterval = settlePollInterval
         self.settlePollMaxAttempts = settlePollMaxAttempts
+        self.buildWaitInterval = buildWaitInterval
+        self.buildWaitMaxAttempts = buildWaitMaxAttempts
     }
 
     // MARK: - Report
@@ -72,6 +87,13 @@ package struct SubmitOrchestrator {
         /// READY_FOR_REVIEW from an aborted run). Empty when there was
         /// nothing to clean up.
         package var canceledReviewSubmissionIDs: [String]
+        /// ID of a stale draft `reviewSubmission` we adopted as our
+        /// submission instead of creating a new one. Non-nil when the
+        /// cleanup phase found a READY_FOR_REVIEW draft from a prior
+        /// crashed run with our version already attached (or empty so we
+        /// could attach to it and finalize). Nil when we created a fresh
+        /// submission from scratch.
+        package var adoptedReviewSubmissionID: String?
         /// True when the version-level review-detail (notes + contact info)
         /// was PATCHed this run. False when no review fields were configured
         /// or all values matched what ASC already had.
@@ -194,6 +216,7 @@ package struct SubmitOrchestrator {
             reviewSubmissionID: nil,
             reviewSubmissionState: nil,
             canceledReviewSubmissionIDs: [],
+            adoptedReviewSubmissionID: nil,
             reviewDetailUpdated: false,
             pricingStatus: nil,
             availabilityStatus: nil,
@@ -296,15 +319,35 @@ package struct SubmitOrchestrator {
         // submitted for review. Defaults: attach on, export
         // compliance = `.none` (app uses only standard iOS
         // cryptography covered by Apple's exemption).
+        //
+        // When submit-for-review is also requested, poll for the build
+        // to finish processing before continuing. Submitting against an
+        // unattached version leaves an empty draft reviewSubmission
+        // behind that's hard to recover from on the next run, so we'd
+        // rather wait the (usually 5-15 min) processing window than
+        // ship that state.
         let attachBuildEnabled = config.submit?.attachBuild ?? true
+        let submitForReviewEnabled = config.submit?.submitForReview == true
         if attachBuildEnabled {
             let buildsAPI = BuildsAPI(client: client)
             do {
-                if let build = try await buildsAPI.latestValidBuild(
-                    appID: app.id,
-                    marketingVersion: createVersion,
-                    platform: platform
-                ) {
+                let resolvedBuild: BuildsAPI.Build?
+                if submitForReviewEnabled {
+                    resolvedBuild = try await waitForLatestValidBuild(
+                        buildsAPI: buildsAPI,
+                        appID: app.id,
+                        marketingVersion: createVersion,
+                        platform: platform,
+                        progress: progress
+                    )
+                } else {
+                    resolvedBuild = try await buildsAPI.latestValidBuild(
+                        appID: app.id,
+                        marketingVersion: createVersion,
+                        platform: platform
+                    )
+                }
+                if let build = resolvedBuild {
                     // Both PATCHes are idempotent from the user's
                     // perspective: re-running submit after values are
                     // already on the version/build should be a no-op,
@@ -335,7 +378,11 @@ package struct SubmitOrchestrator {
                         report.exportComplianceSet = true
                     }
                 } else {
-                    report.errors.append("attach build: no VALID build found for \(createVersion) — wait for Apple's processing to finish (usually 10-30 min after upload-build), then re-run submit")
+                    let waited = submitForReviewEnabled
+                    let context = waited
+                        ? "waited for Apple's processing and gave up"
+                        : "Apple's processing usually finishes 10-30 min after upload-build"
+                    report.errors.append("attach build: no VALID build found for \(createVersion) (\(context)); re-run submit once `storescreens testflight builds list` reports the build as VALID")
                 }
             } catch {
                 report.errors.append("attach build: \(error)")
@@ -344,16 +391,26 @@ package struct SubmitOrchestrator {
 
         // 5. Submit for review if requested. Must run after screenshots +
         // metadata so the version is complete when Apple picks it up.
-        if config.submit?.submitForReview == true {
-            await runSubmitForReview(
-                appsAPI: appsAPI,
-                appID: app.id,
-                versionID: version.id,
-                versionString: createVersion,
-                platform: platform,
-                report: &report,
-                progress: progress
-            )
+        //
+        // Skip when attach_build was requested but no build actually
+        // landed on the version: creating a reviewSubmission against a
+        // build-less version leaves an empty draft behind that Apple
+        // refuses to cancel programmatically.
+        if submitForReviewEnabled {
+            let buildExpectedButMissing = attachBuildEnabled && report.attachedBuildNumber == nil
+            if buildExpectedButMissing {
+                report.errors.append("submit for review: skipped because no VALID build was attached to \(createVersion); re-run submit once the build is processed")
+            } else {
+                await runSubmitForReview(
+                    appsAPI: appsAPI,
+                    appID: app.id,
+                    versionID: version.id,
+                    versionString: createVersion,
+                    platform: platform,
+                    report: &report,
+                    progress: progress
+                )
+            }
         }
 
         return report
@@ -361,19 +418,35 @@ package struct SubmitOrchestrator {
 
     // MARK: - Submit for review (with pre-flight cleanup)
 
-    /// Drives the 3-step `reviewSubmissions` flow with the cleanup phase
-    /// that's missing from the bare `appsAPI.submitForReview` convenience:
+    /// Outcome of `cleanupOrAdoptStaleReviewSubmissions`. Either a fresh
+    /// reviewSubmission needs to be created in step 4, or a prior stale
+    /// draft was claimed and step 4 just finalizes it.
+    private enum CleanupResult {
+        /// No stale draft is in a usable state; POST a fresh submission,
+        /// attach the version, then PATCH submitted:true.
+        case proceedWithFreshSubmission
+        /// A stale draft already has the target version attached (or had
+        /// the version attached during cleanup). Step 4 just PATCHes
+        /// submitted:true on this id.
+        case adoptedExistingDraft(submissionID: String)
+    }
+
+    /// Drives the `reviewSubmissions` flow with a cleanup-or-adopt phase
+    /// that recovers from orphans left by earlier failed runs:
     ///
     /// 1. List existing reviewSubmissions for the app.
     /// 2. If any are in WAITING_FOR_REVIEW or IN_REVIEW: bail loudly.
     ///    Operator must cancel via the ASC web UI; we won't pull the rug
     ///    out from under an active Apple review.
-    /// 3. If any are in READY_FOR_REVIEW (stale draft from an aborted
-    ///    submit) or UNRESOLVED_ISSUES (a rejected submission still
-    ///    "owning" the version): PATCH `canceled: true`. Poll until the
-    ///    state settles to COMPLETE so the next POST sees a freed version.
-    /// 4. Create a fresh submission, attach the version (POST item), PATCH
-    ///    `submitted: true` to push it into WAITING_FOR_REVIEW.
+    /// 3. For each cancellable (READY_FOR_REVIEW / UNRESOLVED_ISSUES):
+    ///    - If its items already reference our target version: adopt it.
+    ///    - If its items list is empty: attach our version and adopt it.
+    ///      (Apple refuses both cancel-empty and submit-empty on a
+    ///      reviewSubmission with no items, but cancel-stays-refused even
+    ///      after a successful attach, so adoption is the only way out.)
+    ///    - Else (items reference a different version): PATCH canceled:true.
+    /// 4. Either finalize the adopted draft, or create + attach + finalize
+    ///    a fresh submission.
     ///
     /// Errors at each step land in `report.errors`; the orchestrator never
     /// throws here so the rest of the report is preserved.
@@ -386,9 +459,9 @@ package struct SubmitOrchestrator {
         report: inout Report,
         progress: ((String) -> Void)?
     ) async {
-        // Step 1+2+3: cleanup pre-existing submissions that would block us.
+        let cleanupResult: CleanupResult
         do {
-            try await cancelStaleReviewSubmissions(
+            cleanupResult = try await cleanupOrAdoptStaleReviewSubmissions(
                 appsAPI: appsAPI,
                 appID: appID,
                 platform: platform,
@@ -404,67 +477,78 @@ package struct SubmitOrchestrator {
             return
         }
 
-        // Step 4: create + attach + finalize.
         do {
-            let submission = try await appsAPI.createReviewSubmission(appID: appID, platform: platform)
-            report.reviewSubmissionID = submission.id
-            report.reviewSubmissionState = submission.attributes?.state
-            progress?("submit for review: created submission \(submission.id) (state: \(submission.attributes?.state ?? "?"))")
-
-            do {
-                _ = try await appsAPI.addVersionToReviewSubmission(
-                    reviewSubmissionID: submission.id, versionID: versionID
-                )
-            } catch let e as ASCClient.APIError {
-                // The "version is already attached" path: Apple returns 409
-                // ENTITY_STATE_INVALID with "Item is already present in
-                // [other-submission]". Cleanup should have handled this -
-                // if we still hit it, surface the original error so the
-                // operator sees it instead of swallowing.
-                report.errors.append("submit for review: failed to attach version \(versionString) to new submission \(submission.id): \(e)")
-                return
+            let submissionID: String
+            switch cleanupResult {
+            case .adoptedExistingDraft(let id):
+                // Cleanup already ensured this draft has our version
+                // attached. Just finalize.
+                submissionID = id
+                report.reviewSubmissionID = id
+            case .proceedWithFreshSubmission:
+                let submission = try await appsAPI.createReviewSubmission(appID: appID, platform: platform)
+                report.reviewSubmissionID = submission.id
+                report.reviewSubmissionState = submission.attributes?.state
+                progress?("submit for review: created submission \(submission.id) (state: \(submission.attributes?.state ?? "?"))")
+                do {
+                    _ = try await appsAPI.addVersionToReviewSubmission(
+                        reviewSubmissionID: submission.id, versionID: versionID
+                    )
+                } catch let e as ASCClient.APIError {
+                    // "Item is already present in [other-submission]":
+                    // cleanup should have handled it, but if Apple's state
+                    // propagation lagged or a parallel run is in flight,
+                    // surface the raw error so the operator can re-run.
+                    report.errors.append("submit for review: failed to attach version \(versionString) to new submission \(submission.id): \(e)")
+                    return
+                }
+                progress?("submit for review: attached version \(versionString) to submission")
+                submissionID = submission.id
             }
-            progress?("submit for review: attached version \(versionString) to submission")
 
-            let finalized = try await appsAPI.finalizeReviewSubmission(id: submission.id)
+            let finalized = try await appsAPI.finalizeReviewSubmission(id: submissionID)
             report.reviewSubmissionState = finalized.attributes?.state
             let finalState = finalized.attributes?.state ?? "?"
             if finalState == "WAITING_FOR_REVIEW" {
-                progress?("submit for review: submitted (state: \(finalState))")
+                progress?("submit for review: submitted \(submissionID) (state: \(finalState))")
             } else {
                 // Apple sometimes responds 200 with a transient state. Don't
                 // treat it as a hard failure - just surface so the operator
                 // can poll the ASC web UI.
-                progress?("submit for review: PATCH submitted=true returned state \(finalState) (expected WAITING_FOR_REVIEW)")
+                progress?("submit for review: PATCH submitted=true on \(submissionID) returned state \(finalState) (expected WAITING_FOR_REVIEW)")
             }
         } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
-            // Hit if the version was somehow already attached + finalized.
+            // Version was somehow already attached + finalized between
+            // our list and our finalize. Treat as a no-op success.
             progress?("version \(versionString) is already submitted for review")
         } catch {
             report.errors.append("submit for review: \(error)")
         }
     }
 
-    /// Pre-flight cleanup: cancel any reviewSubmissions for this app that
-    /// would block creating a new one. Throws `Failure.activeReviewInProgress`
-    /// when an in-flight review is found that we refuse to auto-cancel.
-    private func cancelStaleReviewSubmissions(
+    /// Pre-flight that either canonicalises the stale reviewSubmissions out
+    /// of the way for a fresh create+attach+finalize, or adopts a stale draft
+    /// as our submission. Throws `Failure.activeReviewInProgress` when an
+    /// in-flight review blocks us.
+    private func cleanupOrAdoptStaleReviewSubmissions(
         appsAPI: AppsAPI,
         appID: String,
         platform: String,
         versionID: String,
         report: inout Report,
         progress: ((String) -> Void)?
-    ) async throws {
+    ) async throws -> CleanupResult {
         let existing: [AppsAPI.ReviewSubmission]
         do {
             existing = try await appsAPI.listReviewSubmissions(appID: appID, platform: platform)
         } catch {
-            // If we can't list submissions we can't reason about cleanup;
-            // proceed anyway so a brand-new app (no submissions yet) still
-            // works. Surface the read failure as a progress note.
+            // Can't reason about cleanup without the list; proceed so a
+            // brand-new app (no submissions yet) still works. If a stale
+            // sub is actually blocking us, the downstream POST will fail
+            // loudly with ENTITY_STATE_INVALID and the operator will see
+            // the real reason.
             progress?("submit for review: could not list existing submissions (\(error)); continuing")
-            return
+            return .proceedWithFreshSubmission
         }
 
         // Bail loudly on active reviews. Refuse to cancel.
@@ -482,17 +566,65 @@ package struct SubmitOrchestrator {
             let s = $0.attributes?.state ?? ""
             return AppsAPI.cancellableReviewSubmissionStates.contains(s)
         }
-        guard !cancellable.isEmpty else { return }
+        guard !cancellable.isEmpty else { return .proceedWithFreshSubmission }
 
+        // Classify each stale sub by what's attached to it. Only
+        // READY_FOR_REVIEW drafts are adoptable: UNRESOLVED_ISSUES means
+        // Apple already rejected the submission and the only valid action
+        // is to cancel + recreate. Within READY_FOR_REVIEW, a draft that
+        // already has our version (or is empty and so can take it) is
+        // adoptable; a draft holding a different version needs to be
+        // canceled.
+        enum Disposition { case adoptHasOurVersion, adoptEmpty, mustCancel }
+        var classified: [(sub: AppsAPI.ReviewSubmission, disposition: Disposition)] = []
         for sub in cancellable {
+            let state = sub.attributes?.state ?? ""
+            guard state == "READY_FOR_REVIEW" else {
+                // UNRESOLVED_ISSUES (or any non-READY_FOR_REVIEW
+                // cancellable state). Resubmitting a rejected sub
+                // requires a fresh reviewSubmission.
+                classified.append((sub, .mustCancel))
+                continue
+            }
+            let items: [AppsAPI.ReviewSubmissionItem]
+            do {
+                items = try await appsAPI.listReviewSubmissionItems(
+                    reviewSubmissionID: sub.id
+                )
+            } catch {
+                // If we can't read items, fall back to cancel so we don't
+                // leave the stale sub blocking the rest of the flow.
+                progress?("submit for review: could not list items on \(sub.id) (\(error)); treating as must-cancel")
+                classified.append((sub, .mustCancel))
+                continue
+            }
+            let attachedVersionIDs = items.compactMap { $0.appStoreVersionID }
+            if attachedVersionIDs.isEmpty {
+                classified.append((sub, .adoptEmpty))
+            } else if attachedVersionIDs == [versionID] {
+                classified.append((sub, .adoptHasOurVersion))
+            } else {
+                classified.append((sub, .mustCancel))
+            }
+        }
+
+        // Pick at most one adoption candidate. Prefer one that already has
+        // our version (no attach call needed) over an empty one.
+        let adoptIdx = classified.firstIndex { $0.disposition == .adoptHasOurVersion }
+            ?? classified.firstIndex { $0.disposition == .adoptEmpty }
+
+        // Cancel everything else (best effort). A sub we're not adopting
+        // doesn't own our version, so a cancel that fails ("not in
+        // cancellable state") only leaves an orphan that won't block our
+        // submission. Log and move on rather than throwing.
+        for (i, entry) in classified.enumerated() {
+            if i == adoptIdx { continue }
+            let sub = entry.sub
             let originalState = sub.attributes?.state ?? "?"
             do {
                 _ = try await appsAPI.cancelReviewSubmission(id: sub.id)
                 progress?("submit for review: canceled prior submission \(sub.id) (was \(originalState))")
                 report.canceledReviewSubmissionIDs.append(sub.id)
-                // Poll until the cancel settles. Apple typically transitions
-                // to COMPLETE within a few seconds; poll up to ~30s with
-                // 1-second backoff.
                 try await waitForSubmissionToSettle(appsAPI: appsAPI, id: sub.id)
             } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
                 // Submission already in a non-cancellable end state. Treat
@@ -500,41 +632,74 @@ package struct SubmitOrchestrator {
                 progress?("submit for review: prior submission \(sub.id) already finalized")
                 report.canceledReviewSubmissionIDs.append(sub.id)
             } catch let e as ASCClient.APIError where e.isNotCancellableState {
-                // Apple refuses to cancel a reviewSubmission with no items.
-                // The submission has to have at least one item attached
-                // before either `submitted:true` or `canceled:true` is
-                // accepted - both transitions return 409
-                // STATE_ERROR.ENTITY_STATE_INVALID otherwise. This happens
-                // when a prior submit aborted between creating the
-                // submission and attaching the version, leaving an orphan
-                // that storescreens itself could not unstick. Recover by
-                // attaching our version to the orphan, then retry the
-                // cancel. Apple frees the version back up the moment the
-                // submission goes COMPLETE, so the upcoming
-                // createReviewSubmission can re-attach it cleanly.
-                progress?("submit for review: prior submission \(sub.id) is empty; attaching version to unstick + retrying cancel")
-                do {
-                    _ = try await appsAPI.addVersionToReviewSubmission(
-                        reviewSubmissionID: sub.id, versionID: versionID
-                    )
-                } catch {
-                    // Most likely cause: the same version is already
-                    // attached to a DIFFERENT prior submission that we
-                    // can't see in our cancellable list, or the version
-                    // moved to a non-attachable state. Surface the
-                    // unstick failure so the operator sees what blocked
-                    // us instead of swallowing it as a cancel error.
-                    throw error
-                }
-                _ = try await appsAPI.cancelReviewSubmission(id: sub.id)
-                progress?("submit for review: canceled prior submission \(sub.id) (was \(originalState))")
-                report.canceledReviewSubmissionIDs.append(sub.id)
-                try await waitForSubmissionToSettle(appsAPI: appsAPI, id: sub.id)
+                // Apple refuses to cancel this orphan. Since it doesn't
+                // own our version, leave it; the rest of the flow can
+                // still proceed.
+                progress?("submit for review: prior submission \(sub.id) is not cancellable (\(originalState)); leaving as orphan")
             }
-            // Other errors propagate up so submit-for-review aborts; we
-            // don't want to charge ahead and POST a new submission while
-            // a stale one is still attached to the version.
         }
+
+        // Apply the adoption decision.
+        guard let adoptIdx else { return .proceedWithFreshSubmission }
+        let adopt = classified[adoptIdx]
+        switch adopt.disposition {
+        case .adoptHasOurVersion:
+            progress?("submit for review: adopting existing draft \(adopt.sub.id) (already has version attached)")
+            report.adoptedReviewSubmissionID = adopt.sub.id
+            return .adoptedExistingDraft(submissionID: adopt.sub.id)
+        case .adoptEmpty:
+            progress?("submit for review: adopting empty draft \(adopt.sub.id); attaching version")
+            do {
+                _ = try await appsAPI.addVersionToReviewSubmission(
+                    reviewSubmissionID: adopt.sub.id, versionID: versionID
+                )
+            } catch let e as ASCClient.APIError where e.isAlreadyAttachedToSameReviewSubmission {
+                // Items list said empty but the attach reveals our version
+                // is in fact on this submission (eventual consistency, or
+                // a partial-success from a prior crashed run). Either way,
+                // attached: proceed to finalize.
+                progress?("submit for review: version was already on draft \(adopt.sub.id) per ASC; proceeding to finalize")
+            }
+            report.adoptedReviewSubmissionID = adopt.sub.id
+            return .adoptedExistingDraft(submissionID: adopt.sub.id)
+        case .mustCancel:
+            // Unreachable: adoptIdx only points at adopt* dispositions.
+            return .proceedWithFreshSubmission
+        }
+    }
+
+    /// Polls `BuildsAPI.latestValidBuild` until a VALID build is found
+    /// for `marketingVersion`, or `buildWaitMaxAttempts` is exhausted.
+    /// Returns the build (success) or nil (timeout). Only called from the
+    /// submit-for-review path, where attempting to attach a build-less
+    /// version to a reviewSubmission leaves an orphan that's expensive
+    /// to recover from; waiting is cheaper.
+    private func waitForLatestValidBuild(
+        buildsAPI: BuildsAPI,
+        appID: String,
+        marketingVersion: String,
+        platform: String,
+        progress: ((String) -> Void)?
+    ) async throws -> BuildsAPI.Build? {
+        let pollSeconds = max(Int(buildWaitInterval / 1_000_000_000), 1)
+        let totalSeconds = pollSeconds * buildWaitMaxAttempts
+        for attempt in 0..<buildWaitMaxAttempts {
+            if let build = try await buildsAPI.latestValidBuild(
+                appID: appID, marketingVersion: marketingVersion, platform: platform
+            ) {
+                if attempt > 0 {
+                    progress?("attach build: build for \(marketingVersion) is VALID after \(attempt * pollSeconds)s; proceeding")
+                }
+                return build
+            }
+            if attempt == 0 {
+                progress?("attach build: no VALID build for \(marketingVersion) yet; polling every \(pollSeconds)s for up to \(totalSeconds)s")
+            } else if attempt % 5 == 0 {
+                progress?("attach build: still waiting for Apple to finish processing \(marketingVersion) (\(attempt)/\(buildWaitMaxAttempts))")
+            }
+            try? await Task.sleep(nanoseconds: buildWaitInterval)
+        }
+        return nil
     }
 
     /// Polls `getReviewSubmission` until the state leaves the canceling /
