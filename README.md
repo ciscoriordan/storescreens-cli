@@ -1123,6 +1123,43 @@ render:
 
 When the current render's locale matches a key, that entry replaces the slide's `caption:` for that pass. Locales absent from the map fall back to the slide's default caption. This is distinct from the `locale_overrides:` on caption roles documented above: `locale_overrides` swaps font/weight/color for the whole role across all slides; `caption_locales` swaps the actual title text on a single slide.
 
+## App Store search preview
+
+`storescreens search-preview` renders a faithful iPhone App Store search-result row — icon (squircle), name, subtitle, stars + review count, GET button, "category | category | developer" meta row, and a 3-up screenshot strip — wrapped in an iPhone bezel + status bar + Dynamic Island. Light and dark.
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/search-preview-light.png" width="320" alt="Tonos light search preview"></td>
+    <td align="center"><img src="assets/search-preview-dark.png" width="320" alt="Tonos dark search preview"></td>
+  </tr>
+  <tr>
+    <td align="center">Light</td>
+    <td align="center">Dark</td>
+  </tr>
+</table>
+
+Honest preview of how the app will look when surfaced in App Store search, before you ship. Sources every input from config and metadata you already have — no new copy to maintain.
+
+```yaml
+search_preview:
+  enabled: true
+  output_dir: ./storescreens-search-preview
+  appearances: [light, dark]
+  developer: "Acme Co"
+  rating: 4.8
+  reviews: "1.2K"
+  # categories falls back to app_store_connect.categories.primary/secondary
+  # name + subtitle fall back to metadata/<locale>/{name,subtitle}.txt
+  # icon falls back to the extracted AppIcon.png from your last capture
+  # screenshots falls back to the first 3 entries in screenshots: (or the manifest)
+```
+
+With `enabled: true`, the preview runs automatically after `storescreens capture`. Skip with `--no-search-preview`. Standalone usage:
+
+```bash
+storescreens search-preview --appearance light --appearance dark --locale en-US
+```
+
 ## Device bezels
 
 The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple licenses these for use with Apple products; we don't redistribute.
