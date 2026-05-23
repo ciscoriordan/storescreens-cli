@@ -1152,14 +1152,11 @@ package struct SearchPreviewRenderer {
         // Slight top inset so the three lines visually nest inside the
         // icon's vertical extent.
         let stackTopY = iconRect.minY + iconSize * 0.03
-        // Generous inter-row gaps so the three-line stack reads with
-        // breathing room — matches App Store search-row optical spacing.
-        let titleSubtitleGap = iconSize * 0.18
-        let subtitleStarsGap = iconSize * 0.10
+        let lineGap = iconSize * 0.04
 
         let nameTopY = stackTopY
-        let subtitleTopY = nameTopY + nameLineHeight + titleSubtitleGap
-        let starsTopY = subtitleTopY + subtitleLineHeight + subtitleStarsGap
+        let subtitleTopY = nameTopY + nameLineHeight + lineGap
+        let starsTopY = subtitleTopY + subtitleLineHeight + lineGap * 0.6
 
         let nameTracking = -CGFloat(CTFontGetSize(nameFont)) * 0.018
         let subtitleTracking = -CGFloat(CTFontGetSize(subtitleFont)) * 0.012
