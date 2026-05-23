@@ -1152,11 +1152,16 @@ package struct SearchPreviewRenderer {
         // Slight top inset so the three lines visually nest inside the
         // icon's vertical extent.
         let stackTopY = iconRect.minY + iconSize * 0.03
-        let lineGap = iconSize * 0.04
+        // iOS App Store row uses roughly ~30% of the title font size as the
+        // gap between title baseline and subtitle ascent. Our drawText
+        // helper draws from `topLeft` (the ascender top), so we add
+        // descent + gap from the previous line's bottom.
+        let titleSubtitleGap = iconSize * 0.10
+        let subtitleStarsGap = iconSize * 0.06
 
         let nameTopY = stackTopY
-        let subtitleTopY = nameTopY + nameLineHeight + lineGap
-        let starsTopY = subtitleTopY + subtitleLineHeight + lineGap * 0.6
+        let subtitleTopY = nameTopY + nameLineHeight + titleSubtitleGap
+        let starsTopY = subtitleTopY + subtitleLineHeight + subtitleStarsGap
 
         let nameTracking = -CGFloat(CTFontGetSize(nameFont)) * 0.018
         let subtitleTracking = -CGFloat(CTFontGetSize(subtitleFont)) * 0.012
