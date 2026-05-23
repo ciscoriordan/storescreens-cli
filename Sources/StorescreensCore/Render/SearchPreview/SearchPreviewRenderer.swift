@@ -195,23 +195,12 @@ package struct SearchPreviewRenderer {
             color: theme.actionText,
             weight: .semibold
         )
-        // Share + ellipsis cluster on the right (small inactive icons).
-        // `ellipsis.circle.fill` renders as a fully-filled blue blob in
-        // palette mode; the plain `ellipsis` glyph reads correctly.
-        drawSymbol(
-            "ellipsis", into: ctx,
-            rect: CGRect(
-                x: canvas.width * 0.905 - iconSize,
-                y: navMidY - iconSize / 2,
-                width: iconSize, height: iconSize
-            ),
-            color: theme.actionText,
-            weight: .semibold
-        )
+        // Share button on the right (no ellipsis menu — iOS App Store
+        // detail page just shows the share icon next to the back chevron).
         drawSymbol(
             "square.and.arrow.up", into: ctx,
             rect: CGRect(
-                x: canvas.width * 0.905 - iconSize * 2.4,
+                x: canvas.width * 0.905 - iconSize,
                 y: navMidY - iconSize / 2,
                 width: iconSize, height: iconSize
             ),
@@ -263,25 +252,42 @@ package struct SearchPreviewRenderer {
         ctx.strokePath()
         ctx.restoreGState()
 
-        // Right of icon: name + subtitle + developer line.
-        let textLeftX = iconRect.maxX + contentRect.width * 0.035
+        // Right of icon: title (1-2 lines) + subtitle + action button.
+        // Matches the iOS App Store detail-page hero. No developer line
+        // here — that lives in the stats strip below.
+        let textLeftX = iconRect.maxX + contentRect.width * 0.045
         let textWidth = contentRect.maxX - textLeftX
-        let nameFont = systemFont(size: iconSize * 0.30, weight: .semibold)
+        let nameFont = systemFont(size: iconSize * 0.28, weight: .semibold)
         let subFont = systemFont(size: iconSize * 0.20, weight: .regular)
-        let devFont = systemFont(size: iconSize * 0.19, weight: .regular)
-        let nameLine = CGFloat(CTFontGetAscent(nameFont)) + CGFloat(CTFontGetDescent(nameFont))
-        let subLine = CGFloat(CTFontGetAscent(subFont)) + CGFloat(CTFontGetDescent(subFont))
-        let nameTopY = topY + iconSize * 0.05
-        let subTopY = nameTopY + nameLine + iconSize * 0.04
-        let devTopY = subTopY + subLine + iconSize * 0.04
+        let nameLineHeight = CGFloat(CTFontGetAscent(nameFont)) + CGFloat(CTFontGetDescent(nameFont))
+        let subLineHeight = CGFloat(CTFontGetAscent(subFont)) + CGFloat(CTFontGetDescent(subFont))
 
-        drawText(
-            into: ctx, text: truncateToFit(input.name, font: nameFont, maxWidth: textWidth),
-            font: nameFont, color: theme.primaryText,
-            topLeft: CGPoint(x: textLeftX, y: nameTopY),
-            maxWidth: textWidth,
-            tracking: -CGFloat(CTFontGetSize(nameFont)) * 0.018
+        // Lay the title out at the available width and let it wrap to up
+        // to 2 lines. Truncates the 2nd line with an ellipsis if even
+        // that's not enough.
+        let nameLines = layoutLines(
+            text: input.name,
+            font: nameFont,
+            color: theme.primaryText,
+            tracking: -CGFloat(CTFontGetSize(nameFont)) * 0.018,
+            width: textWidth,
+            maxLines: 2
         )
+
+        let nameTopY = topY + iconSize * 0.03
+        var cursorY = nameTopY
+        for line in nameLines {
+            drawText(
+                into: ctx, text: line,
+                font: nameFont, color: theme.primaryText,
+                topLeft: CGPoint(x: textLeftX, y: cursorY),
+                maxWidth: textWidth,
+                tracking: -CGFloat(CTFontGetSize(nameFont)) * 0.018
+            )
+            cursorY += nameLineHeight * 1.05
+        }
+
+        let subTopY = cursorY + iconSize * 0.02
         if !input.subtitle.isEmpty {
             drawText(
                 into: ctx, text: truncateToFit(input.subtitle, font: subFont, maxWidth: textWidth),
@@ -290,30 +296,19 @@ package struct SearchPreviewRenderer {
                 maxWidth: textWidth
             )
         }
-        if !input.developer.isEmpty {
-            let symW = subLine
-            drawSymbol(
-                "person.crop.square", into: ctx,
-                rect: CGRect(x: textLeftX, y: devTopY, width: symW, height: symW),
-                color: theme.actionText, weight: .regular
-            )
-            drawText(
-                into: ctx, text: input.developer,
-                font: devFont, color: theme.actionText,
-                topLeft: CGPoint(x: textLeftX + symW + iconSize * 0.04, y: devTopY)
-            )
-        }
 
-        // Action row beneath the icon: GET pill on the left + share buttons.
-        let actionTopY = iconRect.maxY + iconSize * 0.18
+        // Action button below the subtitle, left-aligned with the title
+        // column. Matches iOS App Store layout (GET pill or cloud download
+        // icon sits below the subtitle).
         let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
-        let actionFont = systemFont(size: iconSize * 0.22, weight: .semibold)
+        let actionFont = systemFont(size: iconSize * 0.20, weight: .semibold)
         let actionTextWidth = measureText(actionLabel, font: actionFont)
-        let actionPadX = iconSize * 0.45
-        let actionWidth = max(iconSize * 1.8, actionTextWidth + 2 * actionPadX)
-        let actionHeight = iconSize * 0.42
+        let actionPadX = iconSize * 0.40
+        let actionWidth = max(iconSize * 1.4, actionTextWidth + 2 * actionPadX)
+        let actionHeight = iconSize * 0.36
+        let actionTopY = subTopY + subLineHeight + iconSize * 0.08
         let actionRect = CGRect(
-            x: contentRect.minX, y: actionTopY,
+            x: textLeftX, y: actionTopY,
             width: actionWidth, height: actionHeight
         )
         ctx.saveGState()
@@ -330,19 +325,8 @@ package struct SearchPreviewRenderer {
             center: CGPoint(x: actionRect.midX, y: actionRect.midY)
         )
         ctx.restoreGState()
-        // Share button on the right.
-        let shareSize = actionHeight * 0.85
-        drawSymbol(
-            "square.and.arrow.up", into: ctx,
-            rect: CGRect(
-                x: contentRect.maxX - shareSize,
-                y: actionTopY + (actionHeight - shareSize) / 2,
-                width: shareSize, height: shareSize
-            ),
-            color: theme.actionText, weight: .regular
-        )
 
-        return actionTopY + actionHeight + iconSize * 0.20
+        return max(iconRect.maxY, actionRect.maxY) + iconSize * 0.25
     }
 
     private func drawDetailStats(
@@ -486,18 +470,25 @@ package struct SearchPreviewRenderer {
         let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
         let linkFont = bodyFont
 
+        // Header: "What's New" + gray chevron > inline (like iOS detail page).
         drawText(
             into: ctx, text: "What's New",
             font: headerFont, color: theme.primaryText,
             topLeft: CGPoint(x: contentRect.minX, y: topY)
         )
-        let versionHistoryWidth = measureText("Version History", font: metaFont)
-        drawText(
-            into: ctx, text: "Version History",
-            font: metaFont, color: theme.actionText,
-            topLeft: CGPoint(x: contentRect.maxX - versionHistoryWidth, y: topY + canvas.height * 0.005)
-        )
         let headerLine = CGFloat(CTFontGetAscent(headerFont)) + CGFloat(CTFontGetDescent(headerFont))
+        let headerWidth = measureText("What's New", font: headerFont)
+        let chevronSize = headerLine * 0.55
+        drawSymbol(
+            "chevron.right", into: ctx,
+            rect: CGRect(
+                x: contentRect.minX + headerWidth + canvas.width * 0.012,
+                y: topY + (headerLine - chevronSize) * 0.55,
+                width: chevronSize, height: chevronSize
+            ),
+            color: theme.secondaryText,
+            weight: .semibold
+        )
 
         // Version row (left) — "Version X.Y.Z"
         if let version = input.version, !version.isEmpty {
@@ -517,6 +508,7 @@ package struct SearchPreviewRenderer {
             linkColor: theme.actionText,
             linkFont: linkFont,
             moreLabel: "more",
+            backgroundColor: theme.bezelBackground,
             topLeft: CGPoint(x: contentRect.minX, y: bodyTopY),
             width: contentRect.width,
             maxLines: 3
@@ -606,6 +598,7 @@ package struct SearchPreviewRenderer {
             linkColor: theme.actionText,
             linkFont: bodyFont,
             moreLabel: "more",
+            backgroundColor: theme.bezelBackground,
             topLeft: CGPoint(x: contentRect.minX, y: bodyTopY),
             width: contentRect.width,
             maxLines: 3
@@ -613,8 +606,10 @@ package struct SearchPreviewRenderer {
     }
 
     /// Lays out `text` as wrapped lines at `width`. Up to `maxLines` are
-    /// drawn. If the text overflows, the last visible line is truncated to
-    /// make room for "…more" (with the literal `moreLabel` in `linkColor`).
+    /// drawn verbatim. If the text overflows, the last visible line keeps
+    /// its natural wrapping but its rightmost edge fades to
+    /// `backgroundColor` and a blue "more" link sits at the right edge —
+    /// matches the App Store detail-page truncation effect.
     /// Returns the visual bottom y of the rendered block.
     private func drawTruncatedParagraph(
         into ctx: CGContext,
@@ -624,6 +619,7 @@ package struct SearchPreviewRenderer {
         linkColor: NSColor,
         linkFont: CTFont,
         moreLabel: String,
+        backgroundColor: NSColor,
         topLeft: CGPoint,
         width: CGFloat,
         maxLines: Int,
@@ -642,11 +638,9 @@ package struct SearchPreviewRenderer {
         let descent = CGFloat(CTFontGetDescent(font))
         let leading = CGFloat(CTFontGetLeading(font))
         let lineHeight = ascent + descent + leading + lineSpacing
-        let ellipsisAndMore = "…\u{00A0}\(moreLabel)"
-        let moreWidth = measureText(ellipsisAndMore, font: linkFont)
 
         // Helper to draw one line of plain text at the given visual y.
-        func draw(line: CTLine, font: CTFont, color: NSColor, atTopLeft tl: CGPoint) {
+        func draw(line: CTLine, atTopLeft tl: CGPoint) {
             ctx.saveGState()
             ctx.translateBy(x: tl.x, y: tl.y + ascent)
             ctx.scaleBy(x: 1, y: -1)
@@ -654,99 +648,137 @@ package struct SearchPreviewRenderer {
             CTLineDraw(line, ctx)
             ctx.restoreGState()
         }
+        func makeLine(_ string: String, font: CTFont, color: NSColor) -> CTLine {
+            CTLineCreateWithAttributedString(attributedString(string, font: font, color: color))
+        }
 
         if ctLines.count <= maxLines {
             for (i, line) in ctLines.enumerated() {
-                let lineColored = CTLineCreateWithAttributedString(
-                    attributedString(
-                        substring(of: text, range: CTLineGetStringRange(line)),
-                        font: font, color: textColor
-                    )
-                )
+                let s = substring(of: text, range: CTLineGetStringRange(line))
                 draw(
-                    line: lineColored,
-                    font: font, color: textColor,
-                    atTopLeft: CGPoint(
-                        x: topLeft.x,
-                        y: topLeft.y + CGFloat(i) * lineHeight
-                    )
+                    line: makeLine(s, font: font, color: textColor),
+                    atTopLeft: CGPoint(x: topLeft.x, y: topLeft.y + CGFloat(i) * lineHeight)
                 )
             }
             return topLeft.y + CGFloat(ctLines.count) * lineHeight
         }
 
-        // Overflow: draw first maxLines-1 verbatim, then truncate the last
-        // visible line so "…more" fits at the right edge.
+        // Overflow: draw first maxLines-1 verbatim, then handle the last
+        // visible line with the fade-into-background + "more" effect.
         for i in 0..<(maxLines - 1) {
-            let line = ctLines[i]
-            let lineColored = CTLineCreateWithAttributedString(
-                attributedString(
-                    substring(of: text, range: CTLineGetStringRange(line)),
-                    font: font, color: textColor
-                )
-            )
+            let s = substring(of: text, range: CTLineGetStringRange(ctLines[i]))
             draw(
-                line: lineColored,
-                font: font, color: textColor,
+                line: makeLine(s, font: font, color: textColor),
                 atTopLeft: CGPoint(x: topLeft.x, y: topLeft.y + CGFloat(i) * lineHeight)
             )
         }
 
-        // Last visible line: take everything that landed on line `maxLines-1`
-        // (the line that would overflow), then trim from the end until
-        // `(trimmed) + "…\u{00A0}more"` fits.
-        let lastLineRange = CTLineGetStringRange(ctLines[maxLines - 1])
-        let lastLineEnd = lastLineRange.location + lastLineRange.length
-        var truncatedText = substring(of: text, range: CFRange(location: 0, length: lastLineEnd))
-        // Strip trailing whitespace/newline so the ellipsis hugs the text.
-        truncatedText = truncatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        while !truncatedText.isEmpty {
-            let lineCandidate = CTLineCreateWithAttributedString(
-                attributedString(truncatedText, font: font, color: textColor)
-            )
-            let candidateWidth = CGFloat(CTLineGetTypographicBounds(lineCandidate, nil, nil, nil))
-            if candidateWidth + moreWidth <= width { break }
-            // Drop the last character (word would be cleaner; this is the
-            // safe minimum).
-            truncatedText = String(truncatedText.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        // Trim back to a word boundary so the "…" doesn't sit mid-word.
-        if let lastSpace = truncatedText.lastIndex(where: { $0 == " " || $0 == "\n" }) {
-            truncatedText = String(truncatedText[..<lastSpace])
-                .trimmingCharacters(in: .whitespaces)
-        }
-
+        // Build the "extended" last visible line: take what naturally
+        // wrapped onto line maxLines-1 and append everything that would
+        // have wrapped onto subsequent lines, joined by spaces. Drawing
+        // this as a CTLine produces a single horizontal run longer than
+        // `width`; we'll clip it and fade the right edge.
+        let lastLineStart = CTLineGetStringRange(ctLines[maxLines - 1]).location
+        let remaining = substring(of: text, range: CFRange(
+            location: lastLineStart,
+            length: (text.utf16.count) - lastLineStart
+        ))
+        let flattened = remaining
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        let lastLineText = flattened
+        let lastLineRendered = makeLine(lastLineText, font: font, color: textColor)
         let truncatedY = topLeft.y + CGFloat(maxLines - 1) * lineHeight
-        let truncatedLine = CTLineCreateWithAttributedString(
-            attributedString(truncatedText, font: font, color: textColor)
-        )
-        draw(
-            line: truncatedLine,
-            font: font, color: textColor,
-            atTopLeft: CGPoint(x: topLeft.x, y: truncatedY)
-        )
-        let truncatedDrawnWidth = CGFloat(CTLineGetTypographicBounds(truncatedLine, nil, nil, nil))
 
-        // Append "…" in textColor and " more" in linkColor.
-        let ellipsisLine = CTLineCreateWithAttributedString(
-            attributedString("…\u{00A0}", font: font, color: textColor)
+        let moreLine = makeLine(moreLabel, font: linkFont, color: linkColor)
+        let moreWidth = CGFloat(CTLineGetTypographicBounds(moreLine, nil, nil, nil))
+        // Reserve room for the "more" link at the right + a small space
+        // before it, plus a fade region where the text gradually fades
+        // into the background.
+        let morePad: CGFloat = lineHeight * 0.30
+        let fadeWidth: CGFloat = moreWidth * 1.6
+        let textRightLimit = topLeft.x + width - moreWidth - morePad
+        let fadeLeftX = textRightLimit - fadeWidth
+        let lineClipRect = CGRect(
+            x: topLeft.x,
+            y: truncatedY,
+            width: width - moreWidth - morePad,
+            height: lineHeight
         )
-        draw(
-            line: ellipsisLine,
-            font: font, color: textColor,
-            atTopLeft: CGPoint(x: topLeft.x + truncatedDrawnWidth, y: truncatedY)
-        )
-        let ellipsisWidth = CGFloat(CTLineGetTypographicBounds(ellipsisLine, nil, nil, nil))
-        let moreLine = CTLineCreateWithAttributedString(
-            attributedString(moreLabel, font: linkFont, color: linkColor)
-        )
+
+        // Draw the extended line, clipped to the area before "more".
+        ctx.saveGState()
+        ctx.clip(to: lineClipRect)
+        draw(line: lastLineRendered, atTopLeft: CGPoint(x: topLeft.x, y: truncatedY))
+        ctx.restoreGState()
+
+        // Fade overlay: horizontal gradient from transparent to opaque
+        // `backgroundColor`, drawn on top of the right portion of the
+        // text. This visually fades the text into the background.
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let fadeColors = [
+            backgroundColor.withAlphaComponent(0).cgColor,
+            backgroundColor.cgColor,
+        ] as CFArray
+        if let gradient = CGGradient(colorsSpace: cs, colors: fadeColors, locations: [0, 1]) {
+            ctx.saveGState()
+            ctx.clip(to: CGRect(
+                x: fadeLeftX, y: truncatedY,
+                width: fadeWidth, height: lineHeight
+            ))
+            ctx.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: fadeLeftX, y: 0),
+                end: CGPoint(x: fadeLeftX + fadeWidth, y: 0),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+            ctx.restoreGState()
+        }
+
+        // Draw "more" in linkColor at the right edge.
         draw(
             line: moreLine,
-            font: linkFont, color: linkColor,
-            atTopLeft: CGPoint(x: topLeft.x + truncatedDrawnWidth + ellipsisWidth, y: truncatedY)
+            atTopLeft: CGPoint(x: topLeft.x + width - moreWidth, y: truncatedY)
         )
 
         return topLeft.y + CGFloat(maxLines) * lineHeight
+    }
+
+    /// Wrap `text` at `width` into at most `maxLines` lines, truncating
+    /// the last visible line with an ellipsis if the full text doesn't
+    /// fit. Returns the visible strings; empty if `text` is empty.
+    private func layoutLines(
+        text: String,
+        font: CTFont,
+        color: NSColor,
+        tracking: CGFloat = 0,
+        width: CGFloat,
+        maxLines: Int
+    ) -> [String] {
+        guard !text.isEmpty else { return [] }
+        let attr = attributedString(text, font: font, color: color, tracking: tracking)
+        let framesetter = CTFramesetterCreateWithAttributedString(attr)
+        let path = CGPath(
+            rect: CGRect(x: 0, y: 0, width: width, height: 100_000),
+            transform: nil
+        )
+        let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), path, nil)
+        let ctLines = CTFrameGetLines(frame) as! [CTLine]
+        if ctLines.isEmpty { return [text] }
+
+        if ctLines.count <= maxLines {
+            return ctLines.map { substring(of: text, range: CTLineGetStringRange($0)) }
+        }
+
+        // Overflow — keep the first maxLines-1 lines verbatim, then
+        // truncate the next line with ellipsis to fit `width`.
+        var visible: [String] = []
+        for i in 0..<(maxLines - 1) {
+            visible.append(substring(of: text, range: CTLineGetStringRange(ctLines[i])))
+        }
+        let overflowLineText = substring(of: text, range: CTLineGetStringRange(ctLines[maxLines - 1]))
+        visible.append(truncateToFit(overflowLineText, font: font, maxWidth: width))
+        return visible
     }
 
     /// Extract a substring from `text` given a CFRange of UTF-16 offsets.
@@ -1138,16 +1170,20 @@ package struct SearchPreviewRenderer {
         let textLeftX = iconRect.maxX + cardW * 0.035
         let nameBandWidth = actionRect.minX - textLeftX - cardW * 0.02
 
-        let nameFont = systemFont(size: iconSize * 0.36, weight: .semibold)
-        let subtitleFont = systemFont(size: iconSize * 0.28, weight: .regular)
-        let starsScale = iconSize * 0.24
+        // Sizing is tuned so the three-line stack (name + subtitle +
+        // stars) fits within the icon's vertical extent — App Store row
+        // stars are noticeably smaller than the subtitle text, so the
+        // stars scale is smaller than the subtitle font size.
+        let nameFont = systemFont(size: iconSize * 0.30, weight: .semibold)
+        let subtitleFont = systemFont(size: iconSize * 0.23, weight: .regular)
+        let starsScale = iconSize * 0.14
 
         let nameAscent = CGFloat(CTFontGetAscent(nameFont))
         let subtitleAscent = CGFloat(CTFontGetAscent(subtitleFont))
         let nameLineHeight = nameAscent + CGFloat(CTFontGetDescent(nameFont))
         let subtitleLineHeight = subtitleAscent + CGFloat(CTFontGetDescent(subtitleFont))
-        // Stars row height is dominated by the star glyph, drawn at ~1.4× scale.
-        let starsLineHeight = starsScale * 1.45
+        // Stars row height = the star glyph height (drawn at ~1.2× scale).
+        let starsLineHeight = starsScale * 1.2
 
         // Slight top inset so the three lines visually nest inside the
         // icon's vertical extent.
@@ -1239,11 +1275,11 @@ package struct SearchPreviewRenderer {
         theme: Theme
     ) {
         let filledCount = Int(rating.rounded().clamped(to: 0...5))
-        let starFont = systemFont(size: scale * 1.4, weight: .regular)
-        let starWidth = scale * 1.4
-        let starGap = scale * 0.10
+        let starFont = systemFont(size: scale * 1.2, weight: .regular)
+        let starWidth = scale * 1.05
+        let starGap = scale * 0.08
         var cursorX = leftX
-        let centerY = topY + starWidth / 2
+        let centerY = topY + scale * 0.6
         for i in 0..<5 {
             let glyph = i < filledCount ? "★" : "☆"
             drawTextCentered(
@@ -1255,12 +1291,14 @@ package struct SearchPreviewRenderer {
         }
         if !reviews.isEmpty {
             cursorX += scale * 0.5
+            let reviewsFont = systemFont(size: scale * 1.0, weight: .regular)
+            let reviewsAscent = CGFloat(CTFontGetAscent(reviewsFont))
             drawText(
                 into: ctx,
                 text: reviews,
-                font: systemFont(size: scale * 1.05, weight: .regular),
+                font: reviewsFont,
                 color: theme.secondaryText,
-                topLeft: CGPoint(x: cursorX, y: topY + scale * 0.20)
+                topLeft: CGPoint(x: cursorX, y: centerY - reviewsAscent * 0.5)
             )
         }
     }
