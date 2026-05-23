@@ -759,7 +759,7 @@ test_class: ScreenshotTests
 # search_preview:
 #   enabled: true
 #   output_dir: ./storescreens-search-preview
-#   appearances: [light, dark]
+#   appearances: [light]
 #   developer: "Acme Co"
 #   rating: 4.8
 #   reviews: "1.2K"
@@ -1125,18 +1125,11 @@ When the current render's locale matches a key, that entry replaces the slide's 
 
 ## App Store search preview
 
-`storescreens search-preview` renders a faithful iPhone App Store search-result row — icon (squircle), name, subtitle, stars + review count, GET button, "category | category | developer" meta row, and a 3-up screenshot strip — wrapped in an iPhone bezel + status bar + Dynamic Island. Light and dark.
+`storescreens search-preview` renders a faithful iPhone App Store search-result row — icon (squircle), name, subtitle, stars + review count, GET button, "category | category | developer" meta row, and a 3-up screenshot strip — wrapped in an iPhone bezel + status bar + Dynamic Island. SF Pro throughout, sized so the row matches what App Store renders at @3x.
 
-<table>
-  <tr>
-    <td align="center"><img src="assets/search-preview-light.png" width="320" alt="Tonos light search preview"></td>
-    <td align="center"><img src="assets/search-preview-dark.png" width="320" alt="Tonos dark search preview"></td>
-  </tr>
-  <tr>
-    <td align="center">Light</td>
-    <td align="center">Dark</td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/search-preview-light.png" width="360" alt="Tonos App Store search preview">
+</p>
 
 Honest preview of how the app will look when surfaced in App Store search, before you ship. Sources every input from config and metadata you already have — no new copy to maintain.
 
@@ -1144,7 +1137,7 @@ Honest preview of how the app will look when surfaced in App Store search, befor
 search_preview:
   enabled: true
   output_dir: ./storescreens-search-preview
-  appearances: [light, dark]
+  appearances: [light]
   developer: "Acme Co"
   rating: 4.8
   reviews: "1.2K"
@@ -1154,10 +1147,10 @@ search_preview:
   # screenshots falls back to the first 3 entries in screenshots: (or the manifest)
 ```
 
-With `enabled: true`, the preview runs automatically after `storescreens capture`. Skip with `--no-search-preview`. Standalone usage:
+With `enabled: true`, the preview runs automatically after `storescreens capture`. Skip with `--no-search-preview`. Add `dark` to `appearances` for an App Store dark-mode render. Standalone usage:
 
 ```bash
-storescreens search-preview --appearance light --appearance dark --locale en-US
+storescreens search-preview --appearance light --locale en-US
 ```
 
 ## Device bezels

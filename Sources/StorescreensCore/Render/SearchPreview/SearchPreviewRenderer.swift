@@ -425,7 +425,8 @@ package struct SearchPreviewRenderer {
 
         // Action button (right side, vertically centered against the icon).
         let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
-        let actionFont = systemFont(size: iconSize * 0.34, weight: .bold)
+        // App Store action pill ("GET") uses SF Pro Semibold, not Bold.
+        let actionFont = systemFont(size: iconSize * 0.34, weight: .semibold)
         let actionTextWidth = measureText(actionLabel, font: actionFont)
         let actionPaddingX = iconSize * 0.32
         let actionWidth = max(iconSize * 1.4, actionTextWidth + 2 * actionPaddingX)
@@ -462,11 +463,17 @@ package struct SearchPreviewRenderer {
         let subtitleLineHeight = subtitleAscent + CGFloat(CTFontGetDescent(subtitleFont))
 
         let truncatedName = truncateToFit(input.name, font: nameFont, maxWidth: nameBandWidth)
+        // iOS App Store row uses subtle negative tracking on the name +
+        // subtitle to mimic SF Pro Text optical proportions at body sizes.
+        let nameTracking = -CGFloat(CTFontGetSize(nameFont)) * 0.018
+        let subtitleTracking = -CGFloat(CTFontGetSize(subtitleFont)) * 0.012
+
         drawText(
             into: ctx, text: truncatedName,
             font: nameFont, color: theme.primaryText,
             topLeft: CGPoint(x: textLeftX, y: iconRect.minY + iconSize * 0.05),
-            maxWidth: nameBandWidth
+            maxWidth: nameBandWidth,
+            tracking: nameTracking
         )
 
         let truncatedSubtitle = truncateToFit(input.subtitle, font: subtitleFont, maxWidth: nameBandWidth)
@@ -478,7 +485,8 @@ package struct SearchPreviewRenderer {
                     x: textLeftX,
                     y: iconRect.minY + iconSize * 0.05 + nameLineHeight * 1.10
                 ),
-                maxWidth: nameBandWidth
+                maxWidth: nameBandWidth,
+                tracking: subtitleTracking
             )
         }
 
@@ -734,13 +742,18 @@ package struct SearchPreviewRenderer {
         return NSFont.systemFont(ofSize: size, weight: weight) as CTFont
     }
 
-    private func attributedString(_ text: String, font: CTFont, color: NSColor) -> NSAttributedString {
+    private func attributedString(
+        _ text: String,
+        font: CTFont,
+        color: NSColor,
+        tracking: CGFloat = 0
+    ) -> NSAttributedString {
         return NSAttributedString(
             string: text,
             attributes: [
                 .font: font,
                 .foregroundColor: color,
-                .kern: 0.0,
+                .kern: tracking,
             ]
         )
     }
@@ -768,16 +781,21 @@ package struct SearchPreviewRenderer {
     /// The context is assumed to be flipped (translateBy + scaleBy(1,-1));
     /// we wrap each draw call in a local un-flip so glyphs land right-side-
     /// up regardless of the outer transform.
+    ///
+    /// `tracking` adjusts inter-glyph spacing. iOS App Store rows use a slight
+    /// negative tracking on the name + subtitle (display-style optical
+    /// adjustment). Default 0 leaves the system kerning unchanged.
     private func drawText(
         into ctx: CGContext,
         text: String,
         font: CTFont,
         color: NSColor,
         topLeft: CGPoint,
-        maxWidth: CGFloat? = nil
+        maxWidth: CGFloat? = nil,
+        tracking: CGFloat = 0
     ) {
         guard !text.isEmpty else { return }
-        let attr = attributedString(text, font: font, color: color)
+        let attr = attributedString(text, font: font, color: color, tracking: tracking)
         let line = CTLineCreateWithAttributedString(attr)
         let ascent = CGFloat(CTFontGetAscent(font))
 
