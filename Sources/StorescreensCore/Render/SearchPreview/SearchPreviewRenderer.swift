@@ -57,8 +57,9 @@ package struct SearchPreviewRenderer {
     }
 
     func renderOne(_ input: SearchPreviewInput) throws {
-        let width = Int(Self.canvasWidth)
-        let height = Int(Self.canvasHeight)
+        let canvas = CGRect(origin: .zero, size: input.canvasSize)
+        let width = Int(canvas.width)
+        let height = Int(canvas.height)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
             data: nil,
@@ -77,17 +78,694 @@ package struct SearchPreviewRenderer {
         ctx.interpolationQuality = .high
 
         // Flip to visual-top-down coords. From here on, y=0 is the top.
-        ctx.translateBy(x: 0, y: Self.canvasHeight)
+        ctx.translateBy(x: 0, y: canvas.height)
         ctx.scaleBy(x: 1, y: -1)
 
         let theme = Theme.resolve(appearance: input.appearance)
 
         // 1. Canvas background.
         ctx.setFillColor(theme.canvasBackground.cgColor)
-        ctx.fill(CGRect(x: 0, y: 0, width: Self.canvasWidth, height: Self.canvasHeight))
+        ctx.fill(canvas)
 
-        let canvas = CGRect(x: 0, y: 0, width: Self.canvasWidth, height: Self.canvasHeight)
+        switch input.mode {
+        case .searchRow:
+            renderSearchRow(into: ctx, canvas: canvas, theme: theme, input: input)
+        case .detailPage:
+            renderDetailPage(into: ctx, canvas: canvas, theme: theme, input: input)
+        case .both:
+            // Resolver expands `.both` into [.searchRow, .detailPage] inputs,
+            // so individual renderOne calls only ever see one mode at a time.
+            renderSearchRow(into: ctx, canvas: canvas, theme: theme, input: input)
+        }
 
+        try writePNG(ctx: ctx, url: input.outputURL)
+    }
+
+    // MARK: - Detail page mode
+
+    private func renderDetailPage(
+        into ctx: CGContext,
+        canvas: CGRect,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) {
+        drawBezel(into: ctx, canvas: canvas, theme: theme)
+        let navBottom = drawDetailNavBar(into: ctx, canvas: canvas, theme: theme)
+
+        let contentPad = canvas.width * 0.05
+        let contentRect = CGRect(
+            x: contentPad,
+            y: navBottom + canvas.height * 0.012,
+            width: canvas.width - 2 * contentPad,
+            height: canvas.height - navBottom - canvas.height * 0.02
+        )
+
+        var cursorY = contentRect.minY
+        cursorY = drawDetailHero(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
+        cursorY = drawDetailStats(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
+        cursorY = drawDetailWhatsNew(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
+        cursorY = drawDetailPreview(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
+        _ = drawDetailAbout(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
+    }
+
+    private func drawDetailNavBar(
+        into ctx: CGContext,
+        canvas: CGRect,
+        theme: Theme
+    ) -> CGFloat {
+        // Status bar pieces (time, Dynamic Island, signal cluster).
+        let statusTopY: CGFloat = canvas.height * 0.018
+        let statusHeight: CGFloat = canvas.height * 0.040
+
+        drawText(
+            into: ctx, text: "9:41",
+            font: systemFont(size: canvas.height * 0.018, weight: .semibold),
+            color: theme.statusBarText,
+            topLeft: CGPoint(x: canvas.width * 0.095, y: statusTopY + statusHeight * 0.10)
+        )
+        let islandWidth = canvas.width * 0.32
+        let islandHeight = canvas.height * 0.034
+        let islandRect = CGRect(
+            x: (canvas.width - islandWidth) / 2,
+            y: statusTopY + (statusHeight - islandHeight) / 2,
+            width: islandWidth, height: islandHeight
+        )
+        ctx.setFillColor(NSColor.black.cgColor)
+        ctx.addPath(CGPath(
+            roundedRect: islandRect,
+            cornerWidth: islandHeight / 2, cornerHeight: islandHeight / 2,
+            transform: nil
+        ))
+        ctx.fillPath()
+        drawStatusRightCluster(
+            into: ctx,
+            rightX: canvas.width * 0.905,
+            centerY: statusTopY + statusHeight / 2,
+            scale: canvas.height * 0.015,
+            theme: theme
+        )
+
+        // Nav row: back chevron on left, share + ellipsis on right.
+        let navTopY = statusTopY + statusHeight + canvas.height * 0.010
+        let navHeight = canvas.height * 0.045
+        let navMidY = navTopY + navHeight / 2
+        let iconSize = canvas.height * 0.030
+        drawSymbol(
+            "chevron.left", into: ctx,
+            rect: CGRect(
+                x: canvas.width * 0.060,
+                y: navMidY - iconSize / 2,
+                width: iconSize, height: iconSize
+            ),
+            color: theme.actionText,
+            weight: .semibold
+        )
+        // Share + ellipsis cluster on the right (small inactive icons).
+        // `ellipsis.circle.fill` renders as a fully-filled blue blob in
+        // palette mode; the plain `ellipsis` glyph reads correctly.
+        drawSymbol(
+            "ellipsis", into: ctx,
+            rect: CGRect(
+                x: canvas.width * 0.905 - iconSize,
+                y: navMidY - iconSize / 2,
+                width: iconSize, height: iconSize
+            ),
+            color: theme.actionText,
+            weight: .semibold
+        )
+        drawSymbol(
+            "square.and.arrow.up", into: ctx,
+            rect: CGRect(
+                x: canvas.width * 0.905 - iconSize * 2.4,
+                y: navMidY - iconSize / 2,
+                width: iconSize, height: iconSize
+            ),
+            color: theme.actionText,
+            weight: .regular
+        )
+
+        return navTopY + navHeight
+    }
+
+    private func drawDetailHero(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        let iconSize: CGFloat = canvas.height * 0.085
+        let iconCorner = iconSize * 0.2237
+        let iconRect = CGRect(
+            x: contentRect.minX,
+            y: topY,
+            width: iconSize, height: iconSize
+        )
+        let iconPath = CGPath(
+            roundedRect: iconRect,
+            cornerWidth: iconCorner, cornerHeight: iconCorner,
+            transform: nil
+        )
+        ctx.saveGState()
+        ctx.addPath(iconPath)
+        ctx.setFillColor(theme.iconPlaceholderBackground.cgColor)
+        ctx.fillPath()
+        if let iconURL = input.iconPath, let image = loadImage(iconURL) {
+            ctx.saveGState()
+            ctx.addPath(iconPath)
+            ctx.clip()
+            ctx.saveGState()
+            ctx.translateBy(x: iconRect.minX, y: iconRect.minY + iconRect.height)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: iconRect.width, height: iconRect.height))
+            ctx.restoreGState()
+            ctx.restoreGState()
+        }
+        ctx.setStrokeColor(theme.iconStroke.cgColor)
+        ctx.setLineWidth(iconSize * 0.005)
+        ctx.addPath(iconPath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // Right of icon: name + subtitle + developer line.
+        let textLeftX = iconRect.maxX + contentRect.width * 0.035
+        let textWidth = contentRect.maxX - textLeftX
+        let nameFont = systemFont(size: iconSize * 0.30, weight: .semibold)
+        let subFont = systemFont(size: iconSize * 0.20, weight: .regular)
+        let devFont = systemFont(size: iconSize * 0.19, weight: .regular)
+        let nameLine = CGFloat(CTFontGetAscent(nameFont)) + CGFloat(CTFontGetDescent(nameFont))
+        let subLine = CGFloat(CTFontGetAscent(subFont)) + CGFloat(CTFontGetDescent(subFont))
+        let nameTopY = topY + iconSize * 0.05
+        let subTopY = nameTopY + nameLine + iconSize * 0.04
+        let devTopY = subTopY + subLine + iconSize * 0.04
+
+        drawText(
+            into: ctx, text: truncateToFit(input.name, font: nameFont, maxWidth: textWidth),
+            font: nameFont, color: theme.primaryText,
+            topLeft: CGPoint(x: textLeftX, y: nameTopY),
+            maxWidth: textWidth,
+            tracking: -CGFloat(CTFontGetSize(nameFont)) * 0.018
+        )
+        if !input.subtitle.isEmpty {
+            drawText(
+                into: ctx, text: truncateToFit(input.subtitle, font: subFont, maxWidth: textWidth),
+                font: subFont, color: theme.secondaryText,
+                topLeft: CGPoint(x: textLeftX, y: subTopY),
+                maxWidth: textWidth
+            )
+        }
+        if !input.developer.isEmpty {
+            let symW = subLine
+            drawSymbol(
+                "person.crop.square", into: ctx,
+                rect: CGRect(x: textLeftX, y: devTopY, width: symW, height: symW),
+                color: theme.actionText, weight: .regular
+            )
+            drawText(
+                into: ctx, text: input.developer,
+                font: devFont, color: theme.actionText,
+                topLeft: CGPoint(x: textLeftX + symW + iconSize * 0.04, y: devTopY)
+            )
+        }
+
+        // Action row beneath the icon: GET pill on the left + share buttons.
+        let actionTopY = iconRect.maxY + iconSize * 0.18
+        let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
+        let actionFont = systemFont(size: iconSize * 0.22, weight: .semibold)
+        let actionTextWidth = measureText(actionLabel, font: actionFont)
+        let actionPadX = iconSize * 0.45
+        let actionWidth = max(iconSize * 1.8, actionTextWidth + 2 * actionPadX)
+        let actionHeight = iconSize * 0.42
+        let actionRect = CGRect(
+            x: contentRect.minX, y: actionTopY,
+            width: actionWidth, height: actionHeight
+        )
+        ctx.saveGState()
+        ctx.setFillColor(theme.actionBackground.cgColor)
+        ctx.addPath(CGPath(
+            roundedRect: actionRect,
+            cornerWidth: actionHeight / 2, cornerHeight: actionHeight / 2,
+            transform: nil
+        ))
+        ctx.fillPath()
+        drawTextCentered(
+            into: ctx, text: actionLabel,
+            font: actionFont, color: theme.actionText,
+            center: CGPoint(x: actionRect.midX, y: actionRect.midY)
+        )
+        ctx.restoreGState()
+        // Share button on the right.
+        let shareSize = actionHeight * 0.85
+        drawSymbol(
+            "square.and.arrow.up", into: ctx,
+            rect: CGRect(
+                x: contentRect.maxX - shareSize,
+                y: actionTopY + (actionHeight - shareSize) / 2,
+                width: shareSize, height: shareSize
+            ),
+            color: theme.actionText, weight: .regular
+        )
+
+        return actionTopY + actionHeight + iconSize * 0.20
+    }
+
+    private func drawDetailStats(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        // Horizontal divider line above the stats strip.
+        ctx.saveGState()
+        ctx.setStrokeColor(theme.iconStroke.cgColor)
+        ctx.setLineWidth(canvas.height * 0.0008)
+        ctx.move(to: CGPoint(x: contentRect.minX, y: topY))
+        ctx.addLine(to: CGPoint(x: contentRect.maxX, y: topY))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        let stripHeight = canvas.height * 0.080
+        let stripTopY = topY + canvas.height * 0.010
+        let cellWidth = contentRect.width / 4
+
+        struct StatCell {
+            let topLabel: String
+            let bigLabel: String?
+            let bigSymbol: String?
+            let bottomLabel: String?
+        }
+        var cells: [StatCell] = []
+        cells.append(StatCell(
+            topLabel: "\(input.reviews) RATINGS",
+            bigLabel: String(format: "%.1f", input.rating),
+            bigSymbol: nil,
+            bottomLabel: "★★★★★"
+        ))
+        if let age = input.ageRating, !age.isEmpty {
+            cells.append(StatCell(
+                topLabel: "AGE",
+                bigLabel: age,
+                bigSymbol: nil,
+                bottomLabel: "Years Old"
+            ))
+        }
+        if let firstCategory = input.categories.first {
+            cells.append(StatCell(
+                topLabel: "CATEGORY",
+                bigLabel: nil,
+                bigSymbol: Self.categorySymbol[firstCategory] ?? "tag.fill",
+                bottomLabel: firstCategory
+            ))
+        }
+        if !input.developer.isEmpty {
+            cells.append(StatCell(
+                topLabel: "DEVELOPER",
+                bigLabel: nil,
+                bigSymbol: "person.crop.square",
+                bottomLabel: input.developer
+            ))
+        }
+
+        let labelFont = systemFont(size: canvas.height * 0.011, weight: .semibold)
+        let bigFont = systemFont(size: canvas.height * 0.024, weight: .semibold)
+        let bottomFont = systemFont(size: canvas.height * 0.011, weight: .regular)
+        let visible = min(cells.count, 4)
+        for i in 0..<visible {
+            let cell = cells[i]
+            let cellX = contentRect.minX + CGFloat(i) * cellWidth
+            let cellCenterX = cellX + cellWidth / 2
+            // Top label (uppercase)
+            drawTextCentered(
+                into: ctx, text: cell.topLabel,
+                font: labelFont, color: theme.secondaryText,
+                center: CGPoint(x: cellCenterX, y: stripTopY + canvas.height * 0.008)
+            )
+            // Big content (label or symbol)
+            if let big = cell.bigLabel {
+                drawTextCentered(
+                    into: ctx, text: big,
+                    font: bigFont, color: theme.primaryText,
+                    center: CGPoint(x: cellCenterX, y: stripTopY + stripHeight * 0.45)
+                )
+            } else if let sym = cell.bigSymbol {
+                let size = canvas.height * 0.030
+                drawSymbol(
+                    sym, into: ctx,
+                    rect: CGRect(
+                        x: cellCenterX - size / 2,
+                        y: stripTopY + stripHeight * 0.30,
+                        width: size, height: size
+                    ),
+                    color: theme.secondaryText, weight: .regular
+                )
+            }
+            // Bottom label
+            if let bottom = cell.bottomLabel {
+                drawTextCentered(
+                    into: ctx, text: bottom,
+                    font: bottomFont, color: theme.secondaryText,
+                    center: CGPoint(x: cellCenterX, y: stripTopY + stripHeight * 0.85)
+                )
+            }
+            // Right divider line (except for last cell)
+            if i < visible - 1 {
+                ctx.saveGState()
+                ctx.setStrokeColor(theme.iconStroke.cgColor)
+                ctx.setLineWidth(canvas.height * 0.0006)
+                let dx = cellX + cellWidth
+                ctx.move(to: CGPoint(x: dx, y: stripTopY + stripHeight * 0.20))
+                ctx.addLine(to: CGPoint(x: dx, y: stripTopY + stripHeight * 0.80))
+                ctx.strokePath()
+                ctx.restoreGState()
+            }
+        }
+
+        // Bottom divider.
+        let stripBottomY = stripTopY + stripHeight + canvas.height * 0.010
+        ctx.saveGState()
+        ctx.setStrokeColor(theme.iconStroke.cgColor)
+        ctx.setLineWidth(canvas.height * 0.0008)
+        ctx.move(to: CGPoint(x: contentRect.minX, y: stripBottomY))
+        ctx.addLine(to: CGPoint(x: contentRect.maxX, y: stripBottomY))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        return stripBottomY + canvas.height * 0.015
+    }
+
+    private func drawDetailWhatsNew(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        guard let whatsNew = input.whatsNew, !whatsNew.isEmpty else { return topY }
+
+        let headerFont = systemFont(size: canvas.height * 0.020, weight: .bold)
+        let metaFont = systemFont(size: canvas.height * 0.013, weight: .regular)
+        let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
+        let linkFont = bodyFont
+
+        drawText(
+            into: ctx, text: "What's New",
+            font: headerFont, color: theme.primaryText,
+            topLeft: CGPoint(x: contentRect.minX, y: topY)
+        )
+        let versionHistoryWidth = measureText("Version History", font: metaFont)
+        drawText(
+            into: ctx, text: "Version History",
+            font: metaFont, color: theme.actionText,
+            topLeft: CGPoint(x: contentRect.maxX - versionHistoryWidth, y: topY + canvas.height * 0.005)
+        )
+        let headerLine = CGFloat(CTFontGetAscent(headerFont)) + CGFloat(CTFontGetDescent(headerFont))
+
+        // Version row (left) — "Version X.Y.Z"
+        if let version = input.version, !version.isEmpty {
+            drawText(
+                into: ctx, text: "Version \(version)",
+                font: metaFont, color: theme.secondaryText,
+                topLeft: CGPoint(x: contentRect.minX, y: topY + headerLine + canvas.height * 0.005)
+            )
+        }
+
+        let bodyTopY = topY + headerLine + canvas.height * 0.025
+        let bottomY = drawTruncatedParagraph(
+            into: ctx,
+            text: whatsNew,
+            font: bodyFont,
+            textColor: theme.primaryText,
+            linkColor: theme.actionText,
+            linkFont: linkFont,
+            moreLabel: "more",
+            topLeft: CGPoint(x: contentRect.minX, y: bodyTopY),
+            width: contentRect.width,
+            maxLines: 3
+        )
+
+        return bottomY + canvas.height * 0.025
+    }
+
+    private func drawDetailPreview(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        let headerFont = systemFont(size: canvas.height * 0.020, weight: .bold)
+        drawText(
+            into: ctx, text: "Preview",
+            font: headerFont, color: theme.primaryText,
+            topLeft: CGPoint(x: contentRect.minX, y: topY)
+        )
+        let headerLine = CGFloat(CTFontGetAscent(headerFont)) + CGFloat(CTFontGetDescent(headerFont))
+        let stripTopY = topY + headerLine + canvas.height * 0.015
+
+        let count = 3
+        let gap = contentRect.width * 0.020
+        let tileWidth = (contentRect.width - gap * CGFloat(count - 1)) / CGFloat(count)
+        let tileHeight = tileWidth * (19.5 / 9.0)
+        for i in 0..<count {
+            let tileX = contentRect.minX + CGFloat(i) * (tileWidth + gap)
+            let tileRect = CGRect(x: tileX, y: stripTopY, width: tileWidth, height: tileHeight)
+            let cornerRadius = tileWidth * 0.05
+            let tilePath = CGPath(
+                roundedRect: tileRect,
+                cornerWidth: cornerRadius, cornerHeight: cornerRadius,
+                transform: nil
+            )
+            ctx.saveGState()
+            ctx.addPath(tilePath)
+            ctx.setFillColor(theme.screenshotPlaceholder.cgColor)
+            ctx.fillPath()
+            if i < input.screenshotPaths.count,
+               let img = loadImage(input.screenshotPaths[i]) {
+                ctx.saveGState()
+                ctx.addPath(tilePath)
+                ctx.clip()
+                let fit = aspectFill(
+                    imageSize: CGSize(width: img.width, height: img.height),
+                    in: tileRect
+                )
+                ctx.saveGState()
+                ctx.translateBy(x: fit.minX, y: fit.minY + fit.height)
+                ctx.scaleBy(x: 1, y: -1)
+                ctx.draw(img, in: CGRect(x: 0, y: 0, width: fit.width, height: fit.height))
+                ctx.restoreGState()
+                ctx.restoreGState()
+            }
+            ctx.restoreGState()
+        }
+        return stripTopY + tileHeight + canvas.height * 0.025
+    }
+
+    private func drawDetailAbout(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        guard let body = input.descriptionText, !body.isEmpty else { return topY }
+        let headerFont = systemFont(size: canvas.height * 0.020, weight: .bold)
+        drawText(
+            into: ctx, text: "About This App",
+            font: headerFont, color: theme.primaryText,
+            topLeft: CGPoint(x: contentRect.minX, y: topY)
+        )
+        let headerLine = CGFloat(CTFontGetAscent(headerFont)) + CGFloat(CTFontGetDescent(headerFont))
+        let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
+        let bodyTopY = topY + headerLine + canvas.height * 0.012
+        return drawTruncatedParagraph(
+            into: ctx,
+            text: body,
+            font: bodyFont,
+            textColor: theme.primaryText,
+            linkColor: theme.actionText,
+            linkFont: bodyFont,
+            moreLabel: "more",
+            topLeft: CGPoint(x: contentRect.minX, y: bodyTopY),
+            width: contentRect.width,
+            maxLines: 3
+        )
+    }
+
+    /// Lays out `text` as wrapped lines at `width`. Up to `maxLines` are
+    /// drawn. If the text overflows, the last visible line is truncated to
+    /// make room for "…more" (with the literal `moreLabel` in `linkColor`).
+    /// Returns the visual bottom y of the rendered block.
+    private func drawTruncatedParagraph(
+        into ctx: CGContext,
+        text: String,
+        font: CTFont,
+        textColor: NSColor,
+        linkColor: NSColor,
+        linkFont: CTFont,
+        moreLabel: String,
+        topLeft: CGPoint,
+        width: CGFloat,
+        maxLines: Int,
+        lineSpacing: CGFloat = 0
+    ) -> CGFloat {
+        let attr = attributedString(text, font: font, color: textColor)
+        let framesetter = CTFramesetterCreateWithAttributedString(attr)
+        let path = CGPath(
+            rect: CGRect(x: 0, y: 0, width: width, height: 100_000),
+            transform: nil
+        )
+        let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(0, 0), path, nil)
+        let ctLines = CTFrameGetLines(frame) as! [CTLine]
+
+        let ascent = CGFloat(CTFontGetAscent(font))
+        let descent = CGFloat(CTFontGetDescent(font))
+        let leading = CGFloat(CTFontGetLeading(font))
+        let lineHeight = ascent + descent + leading + lineSpacing
+        let ellipsisAndMore = "…\u{00A0}\(moreLabel)"
+        let moreWidth = measureText(ellipsisAndMore, font: linkFont)
+
+        // Helper to draw one line of plain text at the given visual y.
+        func draw(line: CTLine, font: CTFont, color: NSColor, atTopLeft tl: CGPoint) {
+            ctx.saveGState()
+            ctx.translateBy(x: tl.x, y: tl.y + ascent)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.textPosition = .zero
+            CTLineDraw(line, ctx)
+            ctx.restoreGState()
+        }
+
+        if ctLines.count <= maxLines {
+            for (i, line) in ctLines.enumerated() {
+                let lineColored = CTLineCreateWithAttributedString(
+                    attributedString(
+                        substring(of: text, range: CTLineGetStringRange(line)),
+                        font: font, color: textColor
+                    )
+                )
+                draw(
+                    line: lineColored,
+                    font: font, color: textColor,
+                    atTopLeft: CGPoint(
+                        x: topLeft.x,
+                        y: topLeft.y + CGFloat(i) * lineHeight
+                    )
+                )
+            }
+            return topLeft.y + CGFloat(ctLines.count) * lineHeight
+        }
+
+        // Overflow: draw first maxLines-1 verbatim, then truncate the last
+        // visible line so "…more" fits at the right edge.
+        for i in 0..<(maxLines - 1) {
+            let line = ctLines[i]
+            let lineColored = CTLineCreateWithAttributedString(
+                attributedString(
+                    substring(of: text, range: CTLineGetStringRange(line)),
+                    font: font, color: textColor
+                )
+            )
+            draw(
+                line: lineColored,
+                font: font, color: textColor,
+                atTopLeft: CGPoint(x: topLeft.x, y: topLeft.y + CGFloat(i) * lineHeight)
+            )
+        }
+
+        // Last visible line: take everything that landed on line `maxLines-1`
+        // (the line that would overflow), then trim from the end until
+        // `(trimmed) + "…\u{00A0}more"` fits.
+        let lastLineRange = CTLineGetStringRange(ctLines[maxLines - 1])
+        let lastLineEnd = lastLineRange.location + lastLineRange.length
+        var truncatedText = substring(of: text, range: CFRange(location: 0, length: lastLineEnd))
+        // Strip trailing whitespace/newline so the ellipsis hugs the text.
+        truncatedText = truncatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        while !truncatedText.isEmpty {
+            let lineCandidate = CTLineCreateWithAttributedString(
+                attributedString(truncatedText, font: font, color: textColor)
+            )
+            let candidateWidth = CGFloat(CTLineGetTypographicBounds(lineCandidate, nil, nil, nil))
+            if candidateWidth + moreWidth <= width { break }
+            // Drop the last character (word would be cleaner; this is the
+            // safe minimum).
+            truncatedText = String(truncatedText.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // Trim back to a word boundary so the "…" doesn't sit mid-word.
+        if let lastSpace = truncatedText.lastIndex(where: { $0 == " " || $0 == "\n" }) {
+            truncatedText = String(truncatedText[..<lastSpace])
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        let truncatedY = topLeft.y + CGFloat(maxLines - 1) * lineHeight
+        let truncatedLine = CTLineCreateWithAttributedString(
+            attributedString(truncatedText, font: font, color: textColor)
+        )
+        draw(
+            line: truncatedLine,
+            font: font, color: textColor,
+            atTopLeft: CGPoint(x: topLeft.x, y: truncatedY)
+        )
+        let truncatedDrawnWidth = CGFloat(CTLineGetTypographicBounds(truncatedLine, nil, nil, nil))
+
+        // Append "…" in textColor and " more" in linkColor.
+        let ellipsisLine = CTLineCreateWithAttributedString(
+            attributedString("…\u{00A0}", font: font, color: textColor)
+        )
+        draw(
+            line: ellipsisLine,
+            font: font, color: textColor,
+            atTopLeft: CGPoint(x: topLeft.x + truncatedDrawnWidth, y: truncatedY)
+        )
+        let ellipsisWidth = CGFloat(CTLineGetTypographicBounds(ellipsisLine, nil, nil, nil))
+        let moreLine = CTLineCreateWithAttributedString(
+            attributedString(moreLabel, font: linkFont, color: linkColor)
+        )
+        draw(
+            line: moreLine,
+            font: linkFont, color: linkColor,
+            atTopLeft: CGPoint(x: topLeft.x + truncatedDrawnWidth + ellipsisWidth, y: truncatedY)
+        )
+
+        return topLeft.y + CGFloat(maxLines) * lineHeight
+    }
+
+    /// Extract a substring from `text` given a CFRange of UTF-16 offsets.
+    /// Used to pull the visible text of each CTLine for re-drawing.
+    private func substring(of text: String, range: CFRange) -> String {
+        let utf16 = Array(text.utf16)
+        guard range.location >= 0, range.location + range.length <= utf16.count else { return "" }
+        let slice = utf16[range.location..<(range.location + range.length)]
+        return String(utf16CodeUnits: Array(slice), count: Int(range.length))
+    }
+
+    // MARK: - Search row mode
+
+    private func renderSearchRow(
+        into ctx: CGContext,
+        canvas: CGRect,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) {
         switch input.bezel {
         case .iphone:
             drawBezel(into: ctx, canvas: canvas, theme: theme)
@@ -105,7 +783,7 @@ package struct SearchPreviewRenderer {
                 width: canvas.width - 2 * cardPad,
                 height: canvas.height - bezelPad - (searchBottom + canvas.height * 0.025)
             )
-            drawCard(into: ctx, cardRect: cardRect, theme: theme, input: input)
+            drawCard(into: ctx, cardRect: cardRect, canvas: canvas, theme: theme, input: input)
         case .none:
             let padding: CGFloat = canvas.width * 0.04
             let cardRect = CGRect(
@@ -114,10 +792,8 @@ package struct SearchPreviewRenderer {
                 width: canvas.width - 2 * padding,
                 height: canvas.height * 0.55
             )
-            drawCard(into: ctx, cardRect: cardRect, theme: theme, input: input)
+            drawCard(into: ctx, cardRect: cardRect, canvas: canvas, theme: theme, input: input)
         }
-
-        try writePNG(ctx: ctx, url: input.outputURL)
     }
 
     // MARK: - PNG write
@@ -379,11 +1055,12 @@ package struct SearchPreviewRenderer {
     private func drawCard(
         into ctx: CGContext,
         cardRect: CGRect,
+        canvas: CGRect,
         theme: Theme,
         input: SearchPreviewInput
     ) {
         let cardW = cardRect.width
-        let canvasH = Self.canvasHeight
+        let canvasH = canvas.height
         let iconSize: CGFloat = canvasH * 0.062
         let iconCornerRadius = iconSize * 0.2237   // Apple squircle approximation
 
@@ -451,27 +1128,44 @@ package struct SearchPreviewRenderer {
         )
         ctx.restoreGState()
 
-        // Name + subtitle text band, right of the icon.
+        // Right of icon: three-line stack matching the actual App Store
+        // search row.
+        //   line 1: name (semibold)
+        //   line 2: subtitle (regular, secondary)
+        //   line 3: stars + review count (regular, secondary)
+        // The lines are vertically distributed within the icon's height so
+        // the stack baseline-aligns with the squircle.
         let textLeftX = iconRect.maxX + cardW * 0.035
         let nameBandWidth = actionRect.minX - textLeftX - cardW * 0.02
 
-        let nameFont = systemFont(size: iconSize * 0.40, weight: .semibold)
-        let subtitleFont = systemFont(size: iconSize * 0.30, weight: .regular)
+        let nameFont = systemFont(size: iconSize * 0.36, weight: .semibold)
+        let subtitleFont = systemFont(size: iconSize * 0.28, weight: .regular)
+        let starsScale = iconSize * 0.24
+
         let nameAscent = CGFloat(CTFontGetAscent(nameFont))
         let subtitleAscent = CGFloat(CTFontGetAscent(subtitleFont))
         let nameLineHeight = nameAscent + CGFloat(CTFontGetDescent(nameFont))
         let subtitleLineHeight = subtitleAscent + CGFloat(CTFontGetDescent(subtitleFont))
+        // Stars row height is dominated by the star glyph, drawn at ~1.4× scale.
+        let starsLineHeight = starsScale * 1.45
 
-        let truncatedName = truncateToFit(input.name, font: nameFont, maxWidth: nameBandWidth)
-        // iOS App Store row uses subtle negative tracking on the name +
-        // subtitle to mimic SF Pro Text optical proportions at body sizes.
+        // Slight top inset so the three lines visually nest inside the
+        // icon's vertical extent.
+        let stackTopY = iconRect.minY + iconSize * 0.03
+        let lineGap = iconSize * 0.04
+
+        let nameTopY = stackTopY
+        let subtitleTopY = nameTopY + nameLineHeight + lineGap
+        let starsTopY = subtitleTopY + subtitleLineHeight + lineGap * 0.6
+
         let nameTracking = -CGFloat(CTFontGetSize(nameFont)) * 0.018
         let subtitleTracking = -CGFloat(CTFontGetSize(subtitleFont)) * 0.012
 
+        let truncatedName = truncateToFit(input.name, font: nameFont, maxWidth: nameBandWidth)
         drawText(
             into: ctx, text: truncatedName,
             font: nameFont, color: theme.primaryText,
-            topLeft: CGPoint(x: textLeftX, y: iconRect.minY + iconSize * 0.05),
+            topLeft: CGPoint(x: textLeftX, y: nameTopY),
             maxWidth: nameBandWidth,
             tracking: nameTracking
         )
@@ -481,35 +1175,30 @@ package struct SearchPreviewRenderer {
             drawText(
                 into: ctx, text: truncatedSubtitle,
                 font: subtitleFont, color: theme.secondaryText,
-                topLeft: CGPoint(
-                    x: textLeftX,
-                    y: iconRect.minY + iconSize * 0.05 + nameLineHeight * 1.10
-                ),
+                topLeft: CGPoint(x: textLeftX, y: subtitleTopY),
                 maxWidth: nameBandWidth,
                 tracking: subtitleTracking
             )
         }
 
-        // Stars + reviews row, directly below the icon.
-        let starsTopY = iconRect.maxY + iconSize * 0.18
         drawStarsRow(
             into: ctx,
-            leftX: cardRect.minX,
+            leftX: textLeftX,
             topY: starsTopY,
-            scale: iconSize * 0.30,
+            scale: starsScale,
             rating: input.rating,
             reviews: input.reviews,
             theme: theme
         )
 
-        // Meta row: categories | developer.
-        let starGlyphSize = iconSize * 0.30 * 1.2
-        let metaTopY = starsTopY + starGlyphSize + iconSize * 0.10
-        let metaScale = iconSize * 0.28
+        // Meta row: categories | developer. Lives BELOW the icon, spanning
+        // the full card width.
+        let belowIconY = max(iconRect.maxY, starsTopY + starsLineHeight) + iconSize * 0.20
+        let metaScale = iconSize * 0.26
         drawMetaRow(
             into: ctx,
             leftX: cardRect.minX,
-            topY: metaTopY,
+            topY: belowIconY,
             cardRect: cardRect,
             categories: input.categories,
             developer: input.developer,
@@ -519,7 +1208,7 @@ package struct SearchPreviewRenderer {
 
         // Screenshot strip: 3-up grid below the meta row.
         let metaLineHeight = metaScale + iconSize * 0.06
-        let stripTopY = metaTopY + metaLineHeight + iconSize * 0.20
+        let stripTopY = belowIconY + metaLineHeight + iconSize * 0.20
         drawScreenshotStrip(
             into: ctx,
             cardRect: cardRect,
@@ -527,8 +1216,6 @@ package struct SearchPreviewRenderer {
             screenshots: input.screenshotPaths,
             theme: theme
         )
-
-        _ = subtitleLineHeight  // silence unused-let if linter complains
     }
 
     private static func actionLabel(_ action: SearchPreviewAction, price: String?) -> String {
@@ -580,6 +1267,13 @@ package struct SearchPreviewRenderer {
 
     // MARK: - Meta row
 
+    /// Draws the search-row meta line, App Store style:
+    ///   `[icon] Cat1 | [icon] Cat2   [person.crop.square] Developer`
+    ///
+    /// Pipes separate consecutive categories only — the developer chunk is
+    /// preceded by whitespace and a `person.crop.square` glyph, never a pipe.
+    /// Category SF Symbols come from `SearchPreviewRenderer.categorySymbol`;
+    /// categories without an icon mapping render with text only.
     private func drawMetaRow(
         into ctx: CGContext,
         leftX: CGFloat,
@@ -590,16 +1284,17 @@ package struct SearchPreviewRenderer {
         theme: Theme,
         scale: CGFloat
     ) {
-        var chunks: [String] = categories.filter { !$0.isEmpty }
-        let developerMarker = "\u{F8FF}"   // private-use Unicode as a chunk marker
-        if !developer.isEmpty { chunks.append(developerMarker + developer) }
-        guard !chunks.isEmpty else { return }
+        let cats = categories.filter { !$0.isEmpty }
+        guard !cats.isEmpty || !developer.isEmpty else { return }
 
         let font = systemFont(size: scale, weight: .regular)
         var cursorX = leftX
         let pipeColor = theme.secondaryText.withAlphaComponent(0.5)
+        let iconSize = scale * 1.0
+        let iconGap = scale * 0.18
 
-        for (idx, chunk) in chunks.enumerated() {
+        // Categories with optional leading SF Symbol icon, pipe-separated.
+        for (idx, cat) in cats.enumerated() {
             if idx > 0 {
                 let pipeWidth = measureText("|", font: font)
                 let gap = scale * 0.4
@@ -610,69 +1305,52 @@ package struct SearchPreviewRenderer {
                 )
                 cursorX += pipeWidth + gap
             }
-            if chunk.hasPrefix(developerMarker) {
-                let dev = String(chunk.dropFirst())
-                drawPersonGlyph(
-                    into: ctx,
-                    topLeft: CGPoint(x: cursorX, y: topY),
-                    scale: scale,
-                    color: theme.secondaryText
+            if let symbolName = Self.categorySymbol[cat] {
+                drawSymbol(
+                    symbolName, into: ctx,
+                    rect: CGRect(
+                        x: cursorX,
+                        y: topY,
+                        width: iconSize, height: iconSize
+                    ),
+                    color: theme.secondaryText,
+                    weight: .regular
                 )
-                cursorX += scale * 1.1
-                let devWidth = measureText(dev, font: font)
-                if cursorX + devWidth > cardRect.maxX { return }
-                drawText(
-                    into: ctx, text: dev,
-                    font: font, color: theme.secondaryText,
-                    topLeft: CGPoint(x: cursorX, y: topY)
-                )
-                cursorX += devWidth + scale * 0.3
-            } else {
-                let width = measureText(chunk, font: font)
-                if cursorX + width > cardRect.maxX { return }
-                drawText(
-                    into: ctx, text: chunk,
-                    font: font, color: theme.secondaryText,
-                    topLeft: CGPoint(x: cursorX, y: topY)
-                )
-                cursorX += width + scale * 0.3
+                cursorX += iconSize + iconGap
             }
+            let width = measureText(cat, font: font)
+            if cursorX + width > cardRect.maxX { return }
+            drawText(
+                into: ctx, text: cat,
+                font: font, color: theme.secondaryText,
+                topLeft: CGPoint(x: cursorX, y: topY)
+            )
+            cursorX += width + scale * 0.3
         }
-    }
 
-    /// Tiny "person" silhouette: filled circle head + rounded shoulders.
-    private func drawPersonGlyph(
-        into ctx: CGContext,
-        topLeft: CGPoint,
-        scale: CGFloat,
-        color: NSColor
-    ) {
-        ctx.saveGState()
-        ctx.setFillColor(color.cgColor)
-        let headRadius = scale * 0.26
-        let headRect = CGRect(
-            x: topLeft.x + scale * 0.20,
-            y: topLeft.y + scale * 0.06,
-            width: headRadius * 2,
-            height: headRadius * 2
+        // Developer chunk: whitespace separator (no pipe), then person.crop.square + name.
+        guard !developer.isEmpty else { return }
+        if !cats.isEmpty {
+            cursorX += scale * 0.5
+        }
+        drawSymbol(
+            "person.crop.square", into: ctx,
+            rect: CGRect(
+                x: cursorX,
+                y: topY,
+                width: iconSize, height: iconSize
+            ),
+            color: theme.secondaryText,
+            weight: .regular
         )
-        ctx.fillEllipse(in: headRect)
-        let bodyW = scale * 0.95
-        let bodyH = scale * 0.42
-        let bodyRect = CGRect(
-            x: topLeft.x + (scale - bodyW) / 2,
-            y: topLeft.y + scale * 0.55,
-            width: bodyW,
-            height: bodyH
+        cursorX += iconSize + iconGap
+        let devWidth = measureText(developer, font: font)
+        if cursorX + devWidth > cardRect.maxX { return }
+        drawText(
+            into: ctx, text: developer,
+            font: font, color: theme.secondaryText,
+            topLeft: CGPoint(x: cursorX, y: topY)
         )
-        ctx.addPath(CGPath(
-            roundedRect: bodyRect,
-            cornerWidth: bodyH * 0.8,
-            cornerHeight: bodyH * 0.8,
-            transform: nil
-        ))
-        ctx.fillPath()
-        ctx.restoreGState()
     }
 
     // MARK: - Screenshot strip
@@ -845,6 +1523,91 @@ package struct SearchPreviewRenderer {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(src, 0, nil)
     }
+
+    // MARK: - SF Symbol drawing
+
+    /// Render the named SF Symbol into the flipped CGContext at `rect`,
+    /// tinted to `color`. Falls back to a no-op if the symbol is unavailable
+    /// on the current macOS (e.g. running against an older SDK).
+    ///
+    /// The symbol's intrinsic bounding box is centered inside `rect`, scaled
+    /// so the larger of (width, height) matches the corresponding side of
+    /// the target rect — i.e. fit-into-rect, never crop.
+    func drawSymbol(
+        _ name: String,
+        into ctx: CGContext,
+        rect: CGRect,
+        color: NSColor,
+        weight: NSFont.Weight = .regular
+    ) {
+        let pointSize = max(rect.height, rect.width)
+        var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        if #available(macOS 13, *) {
+            config = config.applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        }
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return }
+
+        var nsRect = NSRect(origin: .zero, size: symbol.size)
+        guard let cgImg = symbol.cgImage(forProposedRect: &nsRect, context: nil, hints: nil) else { return }
+
+        // Fit the symbol's natural bbox inside `rect` preserving aspect ratio.
+        let symW = CGFloat(cgImg.width)
+        let symH = CGFloat(cgImg.height)
+        guard symW > 0, symH > 0 else { return }
+        let scale = min(rect.width / symW, rect.height / symH)
+        let drawW = symW * scale
+        let drawH = symH * scale
+        let drawRect = CGRect(
+            x: rect.midX - drawW / 2,
+            y: rect.midY - drawH / 2,
+            width: drawW, height: drawH
+        )
+
+        ctx.saveGState()
+        // The outer context is flipped (translate + scale -1). Un-flip the
+        // symbol locally so it lands right-side-up.
+        ctx.translateBy(x: drawRect.minX, y: drawRect.minY + drawRect.height)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: drawRect.width, height: drawRect.height))
+        ctx.restoreGState()
+    }
+}
+
+// MARK: - Category icons
+
+extension SearchPreviewRenderer {
+    /// SF Symbol mapping for App Store categories. Keys are the friendly
+    /// display strings produced by `SearchPreviewResolver.friendlyCategory(_:)`;
+    /// values are SF Symbol names that ship with macOS 14. Categories that
+    /// aren't in this map render with no leading icon (legacy behavior).
+    static let categorySymbol: [String: String] = [
+        "Books":                  "book",
+        "Business":               "briefcase",
+        "Developer Tools":        "hammer",
+        "Education":              "graduationcap",
+        "Entertainment":          "tv",
+        "Finance":                "dollarsign.circle",
+        "Food & Drink":           "fork.knife",
+        "Games":                  "gamecontroller",
+        "Graphics & Design":      "paintbrush.pointed",
+        "Health & Fitness":       "heart",
+        "Lifestyle":              "figure.stand",
+        "Magazines & Newspapers": "newspaper",
+        "Medical":                "stethoscope",
+        "Music":                  "music.note",
+        "Navigation":             "location.circle",
+        "News":                   "newspaper",
+        "Photo & Video":          "camera",
+        "Productivity":           "square.and.pencil",
+        "Reference":              "text.book.closed",
+        "Shopping":               "cart",
+        "Social Networking":      "bubble.left.and.bubble.right",
+        "Sports":                 "sportscourt",
+        "Travel":                 "airplane",
+        "Utilities":              "wrench.and.screwdriver",
+        "Weather":                "cloud.sun",
+    ]
 }
 
 // MARK: - Theme

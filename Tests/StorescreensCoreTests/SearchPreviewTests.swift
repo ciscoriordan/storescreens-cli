@@ -209,6 +209,9 @@ final class SearchPreviewTests: XCTestCase {
         let input = SearchPreviewInput(
             locale: "en-US",
             appearance: "light",
+            mode: .searchRow,
+            canvasSize: CGSize(width: 1290, height: 2796),
+            deviceLabel: "iPhone 6.9\"",
             name: "Test App",
             subtitle: "A great tagline",
             developer: "Acme Co",
@@ -254,6 +257,9 @@ final class SearchPreviewTests: XCTestCase {
             SearchPreviewInput(
                 locale: nil,
                 appearance: appearance,
+                mode: .searchRow,
+                canvasSize: CGSize(width: 1290, height: 2796),
+                deviceLabel: "iPhone 6.9\"",
                 name: "App",
                 subtitle: "Sub",
                 developer: "",

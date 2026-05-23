@@ -1125,33 +1125,51 @@ When the current render's locale matches a key, that entry replaces the slide's 
 
 ## App Store search preview
 
-`storescreens search-preview` renders a faithful iPhone App Store search-result row — icon (squircle), name, subtitle, stars + review count, GET button, "category | category | developer" meta row, and a 3-up screenshot strip — wrapped in an iPhone bezel + status bar + Dynamic Island. SF Pro throughout, sized so the row matches what App Store renders at @3x.
+`storescreens search-preview` renders faithful iPhone App Store mockups so you can see how the app will read in search results — and on its detail page — before you ship. SF Pro throughout, drawn natively in Swift Core Graphics. Two modes:
 
-<p align="center">
-  <img src="assets/search-preview-light.png" width="360" alt="Tonos App Store search preview">
-</p>
+- **Search row** — icon, three-line name/subtitle/stars stack next to the icon, category icons + developer in the meta row, 3-up screenshot strip.
+- **Detail page** — what users see after tapping a search result. Hero row + GET, stats strip (ratings · age · category · developer), What's New (version + release notes with `more` link), Preview screenshots, About This App (description with `more` link).
 
-Honest preview of how the app will look when surfaced in App Store search, before you ship. Sources every input from config and metadata you already have — no new copy to maintain.
+<table>
+  <tr>
+    <td align="center"><img src="assets/search-preview-light.png" width="320" alt="Tonos search-row preview"></td>
+    <td align="center"><img src="assets/search-preview-detail-light.png" width="320" alt="Tonos detail-page preview"></td>
+  </tr>
+  <tr>
+    <td align="center"><code>mode: search_row</code></td>
+    <td align="center"><code>mode: detail_page</code></td>
+  </tr>
+</table>
+
+Every input is sourced from elsewhere in the pipeline — no copy to maintain twice:
 
 ```yaml
 search_preview:
   enabled: true
   output_dir: ./storescreens-search-preview
-  appearances: [light]
+  appearances: [light]                  # add `dark` for App Store dark mode
+  devices: ["iPhone 6.9\""]             # or "iPhone 6.3\""; default is Pro Max
+  mode: both                            # search_row | detail_page | both
   developer: "Acme Co"
   rating: 4.8
   reviews: "1.2K"
-  # categories falls back to app_store_connect.categories.primary/secondary
-  # name + subtitle fall back to metadata/<locale>/{name,subtitle}.txt
-  # icon falls back to the extracted AppIcon.png from your last capture
-  # screenshots falls back to the first 3 entries in screenshots: (or the manifest)
+  age_rating: "4+"                      # detail-page stats strip
+  version: "2.1.0"                      # detail-page "What's New" header
+  # categories ← app_store_connect.categories.primary + .secondary
+  # name + subtitle ← metadata/<locale>/{name,subtitle}.txt
+  # whats_new ← metadata/<locale>/release_notes.txt
+  # description ← metadata/<locale>/description.txt
+  # icon ← <captureDir>/AppIcon.png from your last capture
+  # screenshots ← first 3 entries from `screenshots:` or the manifest
 ```
 
-With `enabled: true`, the preview runs automatically after `storescreens capture`. Skip with `--no-search-preview`. Add `dark` to `appearances` for an App Store dark-mode render. Standalone usage:
+With `enabled: true`, the preview runs automatically after `storescreens capture` (skip with `--no-search-preview`). Standalone:
 
 ```bash
 storescreens search-preview --appearance light --locale en-US
 ```
+
+Output mirrors the rest of the pipeline: `<output_dir>/<locale>/<appearance>/iPhone_6.9_search-row.png` and `iPhone_6.9_detail-page.png`.
 
 ## Device bezels
 

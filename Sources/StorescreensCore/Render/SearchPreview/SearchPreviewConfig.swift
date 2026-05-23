@@ -26,6 +26,43 @@ package struct SearchPreviewConfig: Codable, Sendable {
     /// falling back to a single un-localized PNG when no locales are configured.
     package var locales: [String]?
 
+    /// Which iPhone size(s) to render at. Default: `["iPhone 6.9\""]`
+    /// (Pro Max, 1290×2796). Other accepted names: `iPhone 6.7"`, `iPhone 6.3"`,
+    /// `iPhone 6.1"`, plus device-name aliases like `iPhone 17 Pro Max`,
+    /// `iPhone 17 Pro`. Unknown names fall back to the Pro Max canvas with
+    /// a warning.
+    package var devices: [String]?
+
+    /// Which previews to render: `search_row` (default, the search-result
+    /// row in the App Store search tab), `detail_page` (the app's detail
+    /// page after tapping a result — hero row, stats, What's New,
+    /// screenshots, description), or `both`.
+    package var mode: SearchPreviewMode?
+
+    // MARK: - Detail-page text overrides
+
+    /// Marketing version label drawn in the What's New header. Default:
+    /// pulls from `app_store_connect.submit.create_version`. Set explicitly
+    /// when rendering a preview for a version that isn't the current submit
+    /// target.
+    package var version: String?
+
+    /// Multi-line release notes used by the detail page's What's New section.
+    /// Default: reads `metadata/<locale>/release_notes.txt`. Plain text;
+    /// newlines preserved. The renderer truncates to fit and appends a blue
+    /// "more" link when truncated.
+    package var whatsNew: String?
+
+    /// Long-form description used by the detail page's About-this-app section.
+    /// Default: reads `metadata/<locale>/description.txt`. Same truncation
+    /// behavior as `whats_new`.
+    package var descriptionText: String?
+
+    /// Age rating label shown in the detail page's stats strip (e.g. `4+`,
+    /// `12+`, `17+`). Default: derived from `app_store_connect.age_rating`
+    /// when possible, otherwise omitted from the stats strip.
+    package var ageRating: String?
+
     // MARK: - Text + identity overrides
 
     /// App name shown in the search row. When unset, falls back to
@@ -98,6 +135,8 @@ package struct SearchPreviewConfig: Codable, Sendable {
         outputDir: String? = nil,
         appearances: [String]? = nil,
         locales: [String]? = nil,
+        devices: [String]? = nil,
+        mode: SearchPreviewMode? = nil,
         name: String? = nil,
         subtitle: String? = nil,
         developer: String? = nil,
@@ -110,12 +149,18 @@ package struct SearchPreviewConfig: Codable, Sendable {
         action: SearchPreviewAction? = nil,
         price: String? = nil,
         searchTerm: String? = nil,
-        bezel: SearchPreviewBezel? = nil
+        bezel: SearchPreviewBezel? = nil,
+        version: String? = nil,
+        whatsNew: String? = nil,
+        descriptionText: String? = nil,
+        ageRating: String? = nil
     ) {
         self.enabled = enabled
         self.outputDir = outputDir
         self.appearances = appearances
         self.locales = locales
+        self.devices = devices
+        self.mode = mode
         self.name = name
         self.subtitle = subtitle
         self.developer = developer
@@ -129,6 +174,10 @@ package struct SearchPreviewConfig: Codable, Sendable {
         self.price = price
         self.searchTerm = searchTerm
         self.bezel = bezel
+        self.version = version
+        self.whatsNew = whatsNew
+        self.descriptionText = descriptionText
+        self.ageRating = ageRating
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -136,12 +185,29 @@ package struct SearchPreviewConfig: Codable, Sendable {
         case outputDir = "output_dir"
         case appearances
         case locales
+        case devices
+        case mode
         case name, subtitle, developer, rating, reviews, categories, icon
         case screenshotsDir = "screenshots_dir"
         case screenshots, action, price
         case searchTerm = "search_term"
         case bezel
+        case version
+        case whatsNew = "whats_new"
+        case descriptionText = "description"
+        case ageRating = "age_rating"
     }
+}
+
+/// Which previews `storescreens search-preview` renders.
+package enum SearchPreviewMode: String, Codable, Sendable {
+    /// Search-result row in the App Store search tab (default).
+    case searchRow = "search_row"
+    /// Detail page after tapping a result — hero row, stats strip,
+    /// What's New section, screenshots, description with "more" link.
+    case detailPage = "detail_page"
+    /// Both modes, written side-by-side in the output directory.
+    case both
 }
 
 /// Which call-to-action pill is drawn on the right of the search row.

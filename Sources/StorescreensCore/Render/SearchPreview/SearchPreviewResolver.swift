@@ -8,6 +8,9 @@ import Foundation
 package struct SearchPreviewInput: Sendable {
     package let locale: String?
     package let appearance: String
+    package let mode: SearchPreviewMode
+    package let canvasSize: CGSize
+    package let deviceLabel: String?
     package let name: String
     package let subtitle: String
     package let developer: String
@@ -20,11 +23,25 @@ package struct SearchPreviewInput: Sendable {
     package let priceLabel: String?
     package let searchTerm: String
     package let bezel: SearchPreviewBezel
+    /// Detail-page only. Marketing version label drawn in the "What's New"
+    /// header. nil suppresses the version line.
+    package let version: String?
+    /// Detail-page only. Multi-line release notes. nil suppresses the
+    /// "What's New" section entirely.
+    package let whatsNew: String?
+    /// Detail-page only. Long-form app description for the "About this app"
+    /// section. nil suppresses the section.
+    package let descriptionText: String?
+    /// Detail-page only. Age rating label for the stats strip (e.g. `4+`).
+    package let ageRating: String?
     package let outputURL: URL
 
     package init(
         locale: String?,
         appearance: String,
+        mode: SearchPreviewMode,
+        canvasSize: CGSize,
+        deviceLabel: String?,
         name: String,
         subtitle: String,
         developer: String,
@@ -37,10 +54,17 @@ package struct SearchPreviewInput: Sendable {
         priceLabel: String?,
         searchTerm: String,
         bezel: SearchPreviewBezel,
+        version: String? = nil,
+        whatsNew: String? = nil,
+        descriptionText: String? = nil,
+        ageRating: String? = nil,
         outputURL: URL
     ) {
         self.locale = locale
         self.appearance = appearance
+        self.mode = mode
+        self.canvasSize = canvasSize
+        self.deviceLabel = deviceLabel
         self.name = name
         self.subtitle = subtitle
         self.developer = developer
@@ -53,6 +77,10 @@ package struct SearchPreviewInput: Sendable {
         self.priceLabel = priceLabel
         self.searchTerm = searchTerm
         self.bezel = bezel
+        self.version = version
+        self.whatsNew = whatsNew
+        self.descriptionText = descriptionText
+        self.ageRating = ageRating
         self.outputURL = outputURL
     }
 }
@@ -156,6 +184,23 @@ package struct SearchPreviewResolver {
         let resolvedAction = sp.action ?? .get
         let bezel = sp.bezel ?? .iphone
 
+        let configuredDevices: [String] = {
+            if let explicit = sp.devices, !explicit.isEmpty { return explicit }
+            return ["iPhone 6.9\""]
+        }()
+
+        let configuredModes: [SearchPreviewMode] = {
+            switch sp.mode ?? .searchRow {
+            case .searchRow:   return [.searchRow]
+            case .detailPage:  return [.detailPage]
+            case .both:        return [.searchRow, .detailPage]
+            }
+        }()
+
+        // App-level fallbacks for detail-page text. Per-locale whatsNew /
+        // descriptionText overrides come from `metadata/<locale>/*.txt`.
+        let resolvedVersion = sp.version ?? captureConfig.appStoreConnect?.submit?.createVersion
+
         var inputs: [SearchPreviewInput] = []
         for locale in configuredLocales {
             let localized = locale.flatMap { metadata[$0] }
@@ -164,6 +209,9 @@ package struct SearchPreviewResolver {
                 ?? manifest?.displayName
                 ?? captureConfig.scheme
             let subtitle = sp.subtitle ?? localized?.subtitle ?? ""
+
+            let resolvedWhatsNew = sp.whatsNew ?? localized?.whatsNew
+            let resolvedDescription = sp.descriptionText ?? localized?.description
 
             let screenshotURLs = resolveScreenshotPaths(
                 explicit: sp.screenshots,
@@ -176,26 +224,44 @@ package struct SearchPreviewResolver {
 
             let searchTerm = sp.searchTerm ?? Self.defaultSearchTerm(from: name)
 
-            for appearance in appearances {
-                let filename = Self.outputFilename(locale: locale, appearance: appearance)
-                let outputURL = outputRoot.appendingPathComponent(filename)
-                inputs.append(SearchPreviewInput(
-                    locale: locale,
-                    appearance: appearance,
-                    name: name,
-                    subtitle: subtitle,
-                    developer: resolvedDeveloper,
-                    rating: resolvedRating,
-                    reviews: resolvedReviews,
-                    categories: configuredCategories,
-                    iconPath: iconURL,
-                    screenshotPaths: screenshotURLs,
-                    action: resolvedAction,
-                    priceLabel: sp.price,
-                    searchTerm: searchTerm,
-                    bezel: bezel,
-                    outputURL: outputURL
-                ))
+            for deviceName in configuredDevices {
+                let device = Self.canvasFor(deviceName: deviceName, warnings: &warnings)
+                for appearance in appearances {
+                    for mode in configuredModes {
+                        let outputURL = outputRoot.appendingPathComponent(
+                            Self.outputRelativePath(
+                                locale: locale,
+                                appearance: appearance,
+                                devicePrefix: device.filenamePrefix,
+                                mode: mode
+                            )
+                        )
+                        inputs.append(SearchPreviewInput(
+                            locale: locale,
+                            appearance: appearance,
+                            mode: mode,
+                            canvasSize: device.canvasSize,
+                            deviceLabel: device.label,
+                            name: name,
+                            subtitle: subtitle,
+                            developer: resolvedDeveloper,
+                            rating: resolvedRating,
+                            reviews: resolvedReviews,
+                            categories: configuredCategories,
+                            iconPath: iconURL,
+                            screenshotPaths: screenshotURLs,
+                            action: resolvedAction,
+                            priceLabel: sp.price,
+                            searchTerm: searchTerm,
+                            bezel: bezel,
+                            version: resolvedVersion,
+                            whatsNew: resolvedWhatsNew,
+                            descriptionText: resolvedDescription,
+                            ageRating: sp.ageRating,
+                            outputURL: outputURL
+                        ))
+                    }
+                }
             }
         }
 
@@ -243,15 +309,103 @@ package struct SearchPreviewResolver {
         return out
     }
 
-    /// `search-preview-<locale>-<appearance>.png` — keeps everything in a
-    /// flat dir so users can find every variant at a glance. Drops the
-    /// locale segment when no locale is configured.
-    static func outputFilename(locale: String?, appearance: String) -> String {
-        if let locale {
-            return "search-preview-\(locale)-\(appearance).png"
+    /// Output path relative to `output_dir`, matching the rest of the
+    /// pipeline:
+    ///   `<locale>/<appearance>/<device-prefix>_<mode>.png`
+    /// Locale segment drops when no locale is configured.
+    static func outputRelativePath(
+        locale: String?,
+        appearance: String,
+        devicePrefix: String,
+        mode: SearchPreviewMode
+    ) -> String {
+        let modeSuffix: String = switch mode {
+            case .searchRow:  "search-row"
+            case .detailPage: "detail-page"
+            case .both:       "search-row"   // unreachable — caller expands `both`
         }
-        return "search-preview-\(appearance).png"
+        let basename = "\(devicePrefix)_\(modeSuffix).png"
+        if let locale {
+            return "\(locale)/\(appearance)/\(basename)"
+        }
+        return "\(appearance)/\(basename)"
     }
+
+    /// Maps a YAML device name to its canvas size + filesystem-safe prefix.
+    /// Unknown names fall back to the Pro Max canvas with a warning so a
+    /// typo doesn't abort the whole pass.
+    package struct DeviceCanvas {
+        package let canvasSize: CGSize
+        package let filenamePrefix: String
+        package let label: String
+    }
+
+    static func canvasFor(deviceName: String, warnings: inout [String]) -> DeviceCanvas {
+        let normalized = deviceName.trimmingCharacters(in: .whitespaces)
+        if let entry = deviceCanvases[normalized] {
+            return entry
+        }
+        // Try a relaxed match: drop the inch-mark quote so both `iPhone 6.9"`
+        // and `iPhone 6.9` resolve the same way.
+        let withoutQuote = normalized.replacingOccurrences(of: "\"", with: "")
+        if let entry = deviceCanvases[withoutQuote] {
+            return entry
+        }
+        warnings.append("unknown search-preview device '\(deviceName)'; falling back to iPhone 6.9\" (Pro Max)")
+        return deviceCanvases["iPhone 6.9\""]!
+    }
+
+    /// Curated mapping. Friendly App Store size names map to the canonical
+    /// pixel dimensions Apple expects in screenshots; common product names
+    /// alias to the same canvas so YAML can read naturally.
+    private static let deviceCanvases: [String: DeviceCanvas] = {
+        let proMaxBig = DeviceCanvas(
+            canvasSize: CGSize(width: 1290, height: 2796),
+            filenamePrefix: "iPhone_6.9",
+            label: "iPhone 6.9\""
+        )
+        let proMaxAlt = DeviceCanvas(
+            canvasSize: CGSize(width: 1320, height: 2868),
+            filenamePrefix: "iPhone_6.9_alt",
+            label: "iPhone 6.9\" (alt)"
+        )
+        let plus = DeviceCanvas(
+            canvasSize: CGSize(width: 1290, height: 2796),
+            filenamePrefix: "iPhone_6.7",
+            label: "iPhone 6.7\""
+        )
+        let pro = DeviceCanvas(
+            canvasSize: CGSize(width: 1206, height: 2622),
+            filenamePrefix: "iPhone_6.3",
+            label: "iPhone 6.3\""
+        )
+        let standard = DeviceCanvas(
+            canvasSize: CGSize(width: 1179, height: 2556),
+            filenamePrefix: "iPhone_6.1",
+            label: "iPhone 6.1\""
+        )
+        return [
+            "iPhone 6.9\"":       proMaxBig,
+            "iPhone 6.9":         proMaxBig,
+            "iPhone 17 Pro Max":  proMaxBig,
+            "iPhone 16 Pro Max":  proMaxBig,
+            "iPhone 15 Pro Max":  proMaxBig,
+            "iPhone Pro Max":     proMaxBig,
+            "iPhone 6.7\"":       plus,
+            "iPhone 6.7":         plus,
+            "iPhone 15 Plus":     plus,
+            "iPhone 6.3\"":       pro,
+            "iPhone 6.3":         pro,
+            "iPhone 17 Pro":      pro,
+            "iPhone 16 Pro":      pro,
+            "iPhone 6.1\"":       standard,
+            "iPhone 6.1":         standard,
+            "iPhone 15 Pro":      standard,
+            "iPhone 15":          standard,
+            // Alt-resolution Pro Max (some users may want 1320x2868)
+            "iPhone 1320x2868":   proMaxAlt,
+        ]
+    }()
 
     private func resolveOutputDir(_ raw: String?, baseDirectory: URL) -> URL {
         guard let raw, !raw.isEmpty else {
