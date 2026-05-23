@@ -32,7 +32,7 @@ package enum GameCenterAssetUpload {
         }
     }
 
-    /// Phase 2 — push every chunk to its pre-signed URL.
+    /// Phase 2 - push every chunk to its pre-signed URL.
     package static func uploadChunks(
         client: ASCClient,
         operations: [UploadOperation],
@@ -110,7 +110,7 @@ package struct GameCenterAPI {
         self.client = client
     }
 
-    // Nested namespaces — each maps to one Apple resource family.
+    // Nested namespaces - each maps to one Apple resource family.
     package var details: Details { Details(client: client) }
     package var appVersions: AppVersions { AppVersions(client: client) }
     package var groups: Groups { Groups(client: client) }
@@ -996,7 +996,7 @@ package struct GameCenterAPI {
             }
         }
 
-        /// Phase 1 — reserve. Returns the image record with
+        /// Phase 1 - reserve. Returns the image record with
         /// `uploadOperations` populated.
         @discardableResult
         package func reserve(
@@ -1034,7 +1034,7 @@ package struct GameCenterAPI {
             return resp.data
         }
 
-        /// Phase 3 — finalize.
+        /// Phase 3 - finalize.
         @discardableResult
         package func confirmUpload(id: String, md5Checksum: String) async throws -> Image {
             struct Body: Encodable {
@@ -2409,7 +2409,7 @@ package struct GameCenterAPI {
             try await client.delete(path: "gameCenterLeaderboardSetMembers/\(id)")
         }
 
-        /// Special op — Apple exposes a relationship PATCH that rewrites the
+        /// Special op - Apple exposes a relationship PATCH that rewrites the
         /// `gameCenterLeaderboards` relationship of a set in one shot.
         /// `leaderboardIDs` is the new ordered list; the relationship body
         /// sends the array verbatim so the resulting `order` on each member
@@ -2848,7 +2848,7 @@ package struct GameCenterAPI {
         }
 
         /// Lists rule sets attached to a queue. The relationship is
-        /// `gameCenterMatchmakingQueues/{id}/relationships/ruleSets` — Apple
+        /// `gameCenterMatchmakingQueues/{id}/relationships/ruleSets` - Apple
         /// surfaces them per-queue rather than per-app.
         package func listForQueue(
             queueID: String,

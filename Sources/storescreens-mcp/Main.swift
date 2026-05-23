@@ -358,14 +358,14 @@ struct StorescreensMCP {
     static func handle(_ params: CallTool.Parameters, server: Server) async -> CallTool.Result {
         do {
             // ASC API families. Two routing strategies coexist here:
-            //   1. tools.contains(...) checks — most specific, used for any
+            //   1. tools.contains(...) checks - most specific, used for any
             //      family that shares a prefix with another (Wave 4 GC
             //      Activities reuses `gc_*`; Wave 4 IAP Offer Codes reuses
             //      `iap_*`; etc.). These must come BEFORE the prefix checks
             //      so the more-specific family wins.
-            //   2. hasPrefix(...) — fallback for namespaces with a single
+            //   2. hasPrefix(...) - fallback for namespaces with a single
             //      owner (`testflight_*`, `subs_*`, `reports_*`, …).
-            //   3. Result? — a couple of early Wave 1 families returned
+            //   3. Result? - a couple of early Wave 1 families returned
             //      nil for unknown names; left as-is.
             if let r = try await CustomerReviewsMCPTools.handle(params) { return r }
             if let r = try await UsersAndDevPortalMCPTools.handle(params) { return r }
@@ -513,7 +513,7 @@ struct StorescreensMCP {
                 // progress lines flow through the logger closure into
                 // AsyncTaskStore so callers polling `get_capture_status`
                 // see them alongside capture events. Failures inside
-                // the runner are already non-fatal — nothing throws here.
+                // the runner are already non-fatal - nothing throws here.
                 let baseDirectory = URL(fileURLWithPath: configPath)
                     .deletingLastPathComponent()
                     .standardized

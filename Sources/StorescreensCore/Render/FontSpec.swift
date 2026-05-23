@@ -32,7 +32,7 @@ package enum FontSpec: Codable, Sendable, Equatable {
             return
         }
 
-        // Object form — inspect keys
+        // Object form - inspect keys
         let c = try decoder.container(keyedBy: ObjectKey.self)
 
         if let family = try c.decodeIfPresent(String.self, forKey: .google) {

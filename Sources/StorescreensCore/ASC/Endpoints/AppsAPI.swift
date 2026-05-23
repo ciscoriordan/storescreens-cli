@@ -174,7 +174,7 @@ package struct AppsAPI {
     }
 
     /// PATCH `/v1/appStoreVersions/{id}` to attach a processed build
-    /// to the version. Required for review submission — ASC rejects a
+    /// to the version. Required for review submission - ASC rejects a
     /// reviewSubmission whose version has no build associated with it.
     /// The build must be in `processingState: "VALID"` (Apple's
     /// binary processing finished without issues) or the PATCH

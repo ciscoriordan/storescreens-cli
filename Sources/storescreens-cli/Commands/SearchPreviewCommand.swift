@@ -14,11 +14,11 @@ struct SearchPreviewCommand: AsyncParsableCommand {
             (icon + name + subtitle + stars + 3 screenshots) wrapped in an \
             iPhone bezel + status bar.
 
-            Inspired by ezscreenshots' Search Preview tool — gives you an \
+            Inspired by ezscreenshots' Search Preview tool - gives you an \
             honest preview of how the app will look when surfaced in App \
             Store search before you ship.
 
-            The command does not need `enabled: true` in the YAML — that flag \
+            The command does not need `enabled: true` in the YAML - that flag \
             only governs the auto-trigger during `storescreens capture`. When \
             invoked directly, it always runs.
             """

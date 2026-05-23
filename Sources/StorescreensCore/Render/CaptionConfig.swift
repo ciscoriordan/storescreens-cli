@@ -215,7 +215,7 @@ package struct SlideCaption: Codable, Sendable {
     }
 }
 
-/// Caption text — single string (word-wraps) or array (one item per line).
+/// Caption text - single string (word-wraps) or array (one item per line).
 package enum CaptionText: Codable, Sendable {
     case string(String)
     case array([String])

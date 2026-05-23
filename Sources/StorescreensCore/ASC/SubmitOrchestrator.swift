@@ -5,9 +5,9 @@ import Foundation
 ///
 ///   1. Resolve the app by ID or bundle ID
 ///   2. Find-or-create the target App Store Version
-///   3. For every locale in `metadata/` — find-or-create localization and
+///   3. For every locale in `metadata/` - find-or-create localization and
 ///      PATCH any fields present
-///   4. For every (locale, device) in the manifest — find-or-create a
+///   4. For every (locale, device) in the manifest - find-or-create a
 ///      screenshot set, wipe its existing screenshots, upload fresh PNGs
 ///      in manifest order, confirm each with MD5
 package struct SubmitOrchestrator {
@@ -176,7 +176,7 @@ package struct SubmitOrchestrator {
     /// Executes the submit flow. `renderRoot` is the directory holding
     /// rendered/framed PNGs (usually `storescreens-framed/`). `metadataRoot`
     /// is the `metadata/<locale>/` directory. `capturedManifest` gives us
-    /// the (device, locale, screenshots-in-order) structure — we re-use the
+    /// the (device, locale, screenshots-in-order) structure - we re-use the
     /// same manifest from the capture step so ordering is preserved.
     package func submit(
         manifest: CaptureManifest,
@@ -229,7 +229,7 @@ package struct SubmitOrchestrator {
         // 2b. Pricing & Availability. These live at the app level, not the
         // version level, so they run once per submit and are gated on
         // their own config blocks (nil config = skip). Errors here are
-        // non-fatal — append to the report and keep going so the rest of
+        // non-fatal - append to the report and keep going so the rest of
         // the submit flow still makes progress.
         if config.pricing != nil || config.availability != nil {
             await applyPricingAndAvailability(
@@ -263,7 +263,7 @@ package struct SubmitOrchestrator {
         } else if let yamlReview = config.reviewInfo?.asReviewDetailFields,
                   yamlReview.hasAnyField {
             // No metadata dir, but the user supplied `review_info:` in
-            // YAML — still apply it. `appStoreReviewDetails` is
+            // YAML - still apply it. `appStoreReviewDetails` is
             // version-scoped, not locale-scoped, so the metadata dir is
             // irrelevant here.
             await applyReviewDetail(
@@ -786,7 +786,7 @@ package struct SubmitOrchestrator {
             )
         }
 
-        // whatsNew (release notes) is only valid on an update — ASC rejects
+        // whatsNew (release notes) is only valid on an update - ASC rejects
         // it on the first version of a brand-new app. Detect that case by
         // listing the app's versions and checking whether any *other* version
         // has reached a released or pending-release state. If none has, this
@@ -804,9 +804,9 @@ package struct SubmitOrchestrator {
                 )
             } catch {
                 // If the check itself fails, don't silently drop release
-                // notes — let the PATCH go through and surface any ASC
+                // notes - let the PATCH go through and surface any ASC
                 // rejection through the normal error path.
-                progress?("whatsNew prior-version check failed: \(error) — sending release notes as-is")
+                progress?("whatsNew prior-version check failed: \(error) - sending release notes as-is")
                 hasPrior = true
             }
             if !hasPrior {
@@ -818,13 +818,13 @@ package struct SubmitOrchestrator {
         }
 
         // appInfoLocalizations carry name, subtitle, privacyPolicyUrl, and
-        // privacyChoicesUrl — all four live at the app level, not on the
+        // privacyChoicesUrl - all four live at the app level, not on the
         // version localization. Resolve the editable AppInfo lazily and
         // only when at least one locale has any of those fields set, so
         // submits that only touch description/keywords don't pay the
         // appInfos GET. When no editable AppInfo exists (e.g. the live
         // version is READY_FOR_SALE and no new editable version has been
-        // created yet) ASC won't accept these PATCHes — we log a clear
+        // created yet) ASC won't accept these PATCHes - we log a clear
         // skip reason and continue with the version-level fields rather
         // than failing the whole submit.
         var editableAppInfo: AppsAPI.AppInfo?
@@ -842,7 +842,7 @@ package struct SubmitOrchestrator {
                     let names = appInfoFieldsSummary(byLocale: byLocale)
                     report.appInfoSkipped = .noEditableAppInfo
                     progress?(
-                        "Skipped \(names) update — no editable appInfo (create a new editable version first)"
+                        "Skipped \(names) update - no editable appInfo (create a new editable version first)"
                     )
                 }
             } catch {
@@ -854,12 +854,12 @@ package struct SubmitOrchestrator {
         for (locale, fields) in byLocale.sorted(by: { $0.key < $1.key }) {
             guard fields.hasAnyField else { continue }
 
-            // Version localization PATCH — covers description / keywords /
+            // Version localization PATCH - covers description / keywords /
             // whatsNew / support / marketing / promotional. Diff against the
             // current ASC values so unchanged fields don't re-PATCH; if
             // nothing differs we skip the PATCH entirely. Skip the
             // find-or-create entirely when the locale only has appInfo
-            // fields — no need to reach the version localization endpoint.
+            // fields - no need to reach the version localization endpoint.
             if MetadataReader.hasVersionLocalizationFields(fields) {
                 do {
                     let localization = try await appsAPI.findOrCreateLocalization(
@@ -881,7 +881,7 @@ package struct SubmitOrchestrator {
                 }
             }
 
-            // AppInfoLocalization PATCH — covers name, subtitle,
+            // AppInfoLocalization PATCH - covers name, subtitle,
             // privacyPolicyUrl, privacyChoicesUrl. Skip when no editable
             // AppInfo was located (warning already logged above) or when
             // the locale carries no appInfo-level fields.
@@ -1074,7 +1074,7 @@ package struct SubmitOrchestrator {
     /// Returns a LocalizationFields carrying only the version-level fields
     /// that actually differ from ASC's current state. Fields that don't
     /// belong on the version localization endpoint (name, subtitle,
-    /// privacyPolicyURL) are always nil here — they're handled elsewhere or
+    /// privacyPolicyURL) are always nil here - they're handled elsewhere or
     /// not sent at all.
     private func changedVersionLocalizationFields(
         desired: LocalizationFields,
@@ -1112,7 +1112,7 @@ package struct SubmitOrchestrator {
     // MARK: - Pricing & Availability
 
     /// Runs the Pricing and Availability API calls for the app. Both are
-    /// independent of the version localization flow — they sit at the app
+    /// independent of the version localization flow - they sit at the app
     /// level in ASC and are required-before-first-submit. The method reads
     /// `config.pricing` and `config.availability` and applies whichever is
     /// set, leaving a status line on the report for each. Errors are
@@ -1158,7 +1158,7 @@ package struct SubmitOrchestrator {
         }
 
         // Idempotent: if the app already has a price schedule, don't
-        // replace it — creating a new schedule is destructive to whatever
+        // replace it - creating a new schedule is destructive to whatever
         // the developer set up in the ASC web UI.
         if try await api.hasExistingPriceSchedule(appID: appID) {
             report.pricingStatus = "unchanged"
@@ -1237,7 +1237,7 @@ package struct SubmitOrchestrator {
     /// own config block, but they all need the same `findEditableAppInfo`
     /// result, so we resolve it once and pass it through.
     ///
-    /// Errors here are non-fatal — they land on `report.errors` and the
+    /// Errors here are non-fatal - they land on `report.errors` and the
     /// submit flow continues. A missing-editable-appInfo case is logged
     /// once with a clear "skip reason" and surfaces in
     /// `report.categoriesStatus` / `report.ageRatingStatus`.
@@ -1265,11 +1265,11 @@ package struct SubmitOrchestrator {
             // name/subtitle when no editable AppInfo exists.
             if config.categories != nil {
                 report.categoriesStatus = "skipped: no editable appInfo"
-                progress?("categories: skipped — no editable appInfo")
+                progress?("categories: skipped - no editable appInfo")
             }
             if config.ageRating != nil {
                 report.ageRatingStatus = "skipped: no editable appInfo"
-                progress?("age rating: skipped — no editable appInfo")
+                progress?("age rating: skipped - no editable appInfo")
             }
             return
         }

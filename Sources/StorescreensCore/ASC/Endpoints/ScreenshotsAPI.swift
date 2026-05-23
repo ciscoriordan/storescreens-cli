@@ -146,7 +146,7 @@ package struct ScreenshotsAPI {
         }
     }
 
-    /// Step 1 — reserve an upload slot. Returns the newly created screenshot
+    /// Step 1 - reserve an upload slot. Returns the newly created screenshot
     /// with `uploadOperations` populated.
     package func reserveScreenshot(
         setID: String,
@@ -185,7 +185,7 @@ package struct ScreenshotsAPI {
         return resp.data
     }
 
-    /// Step 2 — upload each chunk to the pre-signed URL Apple returned.
+    /// Step 2 - upload each chunk to the pre-signed URL Apple returned.
     /// `fileData` is the whole file; we slice by offset/length per operation.
     package func uploadChunks(
         operations: [UploadOperation],
@@ -208,7 +208,7 @@ package struct ScreenshotsAPI {
         }
     }
 
-    /// Step 3 — PATCH uploaded=true + checksum. Apple validates the checksum
+    /// Step 3 - PATCH uploaded=true + checksum. Apple validates the checksum
     /// against what it received and rejects mismatched uploads.
     @discardableResult
     package func confirmUpload(
@@ -240,7 +240,7 @@ package struct ScreenshotsAPI {
         return resp.data
     }
 
-    /// Convenience — runs the full 3-step upload for a file URL.
+    /// Convenience - runs the full 3-step upload for a file URL.
     @discardableResult
     package func uploadScreenshot(
         setID: String,
@@ -266,7 +266,7 @@ package struct ScreenshotsAPI {
 
     /// Apple's sourceFileChecksum is hex-encoded MD5 of the file bytes.
     /// MD5 is cryptographically weak but Apple uses it as an integrity
-    /// check, not a security primitive — we just have to match what they
+    /// check, not a security primitive - we just have to match what they
     /// expect.
     package static func md5Hex(data: Data) -> String {
         let digest = Insecure.MD5.hash(data: data)

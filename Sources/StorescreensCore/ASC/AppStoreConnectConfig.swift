@@ -6,7 +6,7 @@ import Foundation
 /// One of `appID` or `bundleID` is required. `appID` is the numeric ID Apple
 /// assigns each app (visible in App Store Connect URLs as `/apps/<id>/`).
 /// `bundleID` is resolved via `GET /v1/apps?filter[bundleId]=...` at submit
-/// time — more convenient when the app already exists in App Store Connect.
+/// time - more convenient when the app already exists in App Store Connect.
 package struct AppStoreConnectConfig: Codable, Sendable {
     package var appID: String?
     package var bundleID: String?
@@ -18,7 +18,7 @@ package struct AppStoreConnectConfig: Codable, Sendable {
     /// a fresh `.ipa` via `xcrun altool`.
     package var uploadBuild: UploadBuildConfig?
     /// Pricing (free vs paid tier). Unset leaves the app's existing schedule
-    /// untouched — set it only on first-version submissions or when the
+    /// untouched - set it only on first-version submissions or when the
     /// price tier changes.
     package var pricing: PricingConfig?
     /// Territory availability (which countries the app is available in).
@@ -293,11 +293,11 @@ package struct ReviewInfoConfig: Codable, Sendable {
 
 /// App-level pricing. Currently supports the "free" case (most common for a
 /// first submission). Setting a specific paid tier is doable via the same
-/// `createPriceSchedule` path but isn't exposed here yet — add a `price_tier`
+/// `createPriceSchedule` path but isn't exposed here yet - add a `price_tier`
 /// or `base_price` field when a real paid-app use case comes up.
 package struct PricingConfig: Codable, Sendable {
     /// `true` sets the app to free in the base territory; Apple auto-computes
-    /// free prices for every other territory. `false` is currently rejected —
+    /// free prices for every other territory. `false` is currently rejected -
     /// paid pricing needs more fields than this config exposes today.
     package var free: Bool?
 
@@ -316,7 +316,7 @@ package struct PricingConfig: Codable, Sendable {
     }
 }
 
-/// Territory availability — which countries the app shows up in on the
+/// Territory availability - which countries the app shows up in on the
 /// App Store. For a worldwide launch use `territories: .all`; for a limited
 /// rollout use `.list(["USA", "CAN", ...])`.
 package struct AvailabilityConfig: Codable, Sendable {
@@ -324,7 +324,7 @@ package struct AvailabilityConfig: Codable, Sendable {
     /// ISO 3166-1 alpha-3 codes. When unset, current availability stays as-is.
     package var territories: TerritorySelection?
     /// When Apple adds a new territory to the App Store, should the app auto-
-    /// enroll? Defaults to true — matches ASC's own default.
+    /// enroll? Defaults to true - matches ASC's own default.
     package var availableInNewTerritories: Bool?
 
     package init(
@@ -477,7 +477,7 @@ package enum ExportCompliance: String, Codable, Sendable {
     case skip
 
     /// Mapping to the boolean `usesNonExemptEncryption` attribute on
-    /// the build. Nil means "skip — don't PATCH the build".
+    /// the build. Nil means "skip - don't PATCH the build".
     package var usesNonExemptEncryption: Bool? {
         switch self {
         case .none, .exemptAlgorithms: return false

@@ -424,7 +424,7 @@ package struct SubscriptionsAPI {
                 /// "IN_REVIEW", "APPROVED", "DEVELOPER_REMOVED_FROM_SALE",
                 /// "REJECTED", etc.
                 package let state: String?
-                /// "AUTO_RENEWABLE" — included so callers don't have to
+                /// "AUTO_RENEWABLE" - included so callers don't have to
                 /// guess at the family.
                 package let familyId: String?
             }
@@ -1571,7 +1571,7 @@ package struct SubscriptionsAPI {
     // Review-only screenshots Apple requires for subscription approval
     // (visual proof of the subscription paywall, value prop, etc).
     // CRUD per resource; the binary upload follows the same three-step
-    // dance as appScreenshots — POST creates the slot and returns
+    // dance as appScreenshots - POST creates the slot and returns
     // `uploadOperations`, the caller PUTs the chunks, then a PATCH
     // marks it uploaded.
 

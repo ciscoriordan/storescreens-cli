@@ -536,7 +536,7 @@ package enum ReportsMCPTools {
 
         // Resolve the signed segment URL. Either the caller gives it to us
         // directly (cheap) or hands us a segment id (one extra GET to look
-        // up the current signed URL — useful when the prior URL has expired).
+        // up the current signed URL - useful when the prior URL has expired).
         let url: String
         let api = try makeReports()
         if let direct = args["segment_url"]?.stringValue, !direct.isEmpty {

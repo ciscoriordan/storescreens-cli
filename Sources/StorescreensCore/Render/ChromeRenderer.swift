@@ -5,9 +5,9 @@ import ImageIO
 
 /// Composites the captured screenshot onto the canvas with the configured
 /// chrome style. Three dispatched paths:
-///   none      — screenshot drawn as-is at padding-inset rect
-///   stroke    — screenshot clipped to rounded rect with optional border/shadow
-///   bezel  — screenshot placed inside a device bezel PNG from BezelStore
+///   none      - screenshot drawn as-is at padding-inset rect
+///   stroke    - screenshot clipped to rounded rect with optional border/shadow
+///   bezel  - screenshot placed inside a device bezel PNG from BezelStore
 package struct ChromeRenderer {
 
     package let bezelStore: BezelStore
@@ -23,7 +23,7 @@ package struct ChromeRenderer {
         package var description: String {
             switch self {
             case .missingBezel(let k):
-                return "bezel chrome requires a bezel for '\(k)' — run `storescreens bezels import` or switch to chrome.style: stroke"
+                return "bezel chrome requires a bezel for '\(k)' - run `storescreens bezels import` or switch to chrome.style: stroke"
             case .screenshotLoadFailed(let u):
                 return "failed to load screenshot: \(u.path)"
             }
@@ -171,7 +171,7 @@ package struct ChromeRenderer {
 
         // Fit the bezel canvas inside the chrome rect per the configured
         // fit mode. `width` (default) lets the device bleed past the bottom
-        // when its aspect is taller than the padded rect — standard App
+        // when its aspect is taller than the padded rect - standard App
         // Store style.
         let bezelTargetRect = fitRect(
             imageSize: CGSize(width: canvasW, height: canvasH),
@@ -231,7 +231,7 @@ package struct ChromeRenderer {
 
     /// Returns a black silhouette of `bezel` (all opaque pixels → black, all
     /// transparent pixels stay transparent). Used to cast a device-shaped
-    /// drop shadow — a rectangle silhouette would leak past the bezel's
+    /// drop shadow - a rectangle silhouette would leak past the bezel's
     /// rounded device body.
     private func makeSilhouette(from bezel: CGImage) -> CGImage? {
         let w = bezel.width
@@ -285,7 +285,7 @@ package struct ChromeRenderer {
         let h = imageSize.height * scale
         // Horizontally centered. Vertically anchored to the TOP of the bounds
         // so overflow (when mode=width and device is taller than bounds)
-        // bleeds off the bottom — standard marketing-screenshot style.
+        // bleeds off the bottom - standard marketing-screenshot style.
         let x = bounds.midX - w / 2
         let y: CGFloat
         switch mode {

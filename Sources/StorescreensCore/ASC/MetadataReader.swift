@@ -209,7 +209,7 @@ package enum MetadataReader {
 /// - `appInfoLocalizations` (per app × locale):
 ///   name, subtitle, privacyPolicyURL, privacyChoicesURL.
 ///
-/// Any field left nil means "don't touch" — only non-nil fields are sent in
+/// Any field left nil means "don't touch" - only non-nil fields are sent in
 /// the PATCH that owns that field.
 package struct LocalizationFields: Sendable, Equatable {
     /// App name. Lives on `appInfoLocalizations.name`. Read from `name.txt`.

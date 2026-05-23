@@ -231,7 +231,7 @@ struct AuthStatusCommand: AsyncParsableCommand {
         print("  key_id:    \(creds.keyID)")
         print("  issuer_id: \(creds.issuerID)")
 
-        // Live smoke test — mint a token and hit /v1/users. If the key is
+        // Live smoke test - mint a token and hit /v1/users. If the key is
         // bad or the team has revoked it, this will 401.
         let client = ASCClient(credentials: creds)
         print("")

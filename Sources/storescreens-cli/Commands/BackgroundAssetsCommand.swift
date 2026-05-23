@@ -220,7 +220,7 @@ struct BgAssetsGetCommand: AsyncParsableCommand {
 struct BgAssetsCreateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "create",
-        abstract: "POST /backgroundAssets — create the parent record on an app."
+        abstract: "POST /backgroundAssets - create the parent record on an app."
     )
     @Option(name: .long, help: "Numeric ASC app id.") var appId: String
     @Flag(name: .long, help: "Emit JSON.") var json: Bool = false
@@ -361,7 +361,7 @@ struct BgAssetVersionsGetCommand: AsyncParsableCommand {
 struct BgAssetVersionsCreateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "versions-create",
-        abstract: "POST /backgroundAssetVersions — create a new version on an existing backgroundAsset."
+        abstract: "POST /backgroundAssetVersions - create a new version on an existing backgroundAsset."
     )
     @Option(name: .long, help: "Parent backgroundAsset id.") var backgroundAssetId: String
     @Option(name: .long, help: "Optional version label.") var version: String?
@@ -449,7 +449,7 @@ struct BgAssetFilesGetCommand: AsyncParsableCommand {
 struct BgAssetFilesCreateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "files-create",
-        abstract: "POST /backgroundAssetUploadFiles — reserve a chunked-upload target inside a backgroundAssetVersion."
+        abstract: "POST /backgroundAssetUploadFiles - reserve a chunked-upload target inside a backgroundAssetVersion."
     )
     @Option(name: .long, help: "Parent backgroundAssetVersion id.") var versionId: String
     @Option(name: .long, help: "File name (e.g. pack-01.bin).") var fileName: String

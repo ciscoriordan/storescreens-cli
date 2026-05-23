@@ -56,7 +56,7 @@ package struct RenderPipeline {
     /// `screenshots:` config key drive render order (hero slide first,
     /// panoramic background left-edge pinned to the first entry,
     /// `logo.placement: first_only` landing where the user expects),
-    /// matching the capture-time filter behavior — a single list is the
+    /// matching the capture-time filter behavior - a single list is the
     /// canonical source for slide order across the whole pipeline.
     /// When nil, manifest order is preserved as before.
     package func render(
@@ -258,7 +258,7 @@ package struct RenderPipeline {
                 let availableForBands = canvasSize.height * (100 - CGFloat(dhp)) / 100.0
                 let leftover = availableForBands - aboveTitleBandH - middleSlotH - belowSubtitleBandH
                 if leftover < 0 {
-                    warnings.append("[\(slideName)] chrome.device_height_pct (\(dhp)%) leaves no room for caption — overlay bands (~\(Int((aboveTitleBandH + middleSlotH + belowSubtitleBandH) / canvasSize.height * 100))%) already exceed the available space (~\(Int((100 - dhp)))%)")
+                    warnings.append("[\(slideName)] chrome.device_height_pct (\(dhp)%) leaves no room for caption - overlay bands (~\(Int((aboveTitleBandH + middleSlotH + belowSubtitleBandH) / canvasSize.height * 100))%) already exceed the available space (~\(Int((100 - dhp)))%)")
                 }
                 return max(0, leftover)
             }
@@ -331,7 +331,7 @@ package struct RenderPipeline {
             if let topPct = chromeConfig?.topPct {
                 let pinned = canvasSize.height * CGFloat(topPct) / 100.0
                 if pinned < reservedTop {
-                    warnings.append("[\(slideName)] chrome.top_pct (\(topPct)%) is above the natural top of the bands (~\(Int(reservedTop / canvasSize.height * 100))% of canvas) — overlays/caption may overflow the device anchor")
+                    warnings.append("[\(slideName)] chrome.top_pct (\(topPct)%) is above the natural top of the bands (~\(Int(reservedTop / canvasSize.height * 100))% of canvas) - overlays/caption may overflow the device anchor")
                 }
                 return pinned
             }
@@ -345,7 +345,7 @@ package struct RenderPipeline {
         // Visual device top: where the bezel is *actually drawn* after the
         // `chrome.padding_pct` inset (default 4%) shrinks the bezel away from
         // the chromeRect top edge. Caption centering must target this y, not
-        // the bare chromeRect top — otherwise short captions float above the
+        // the bare chromeRect top - otherwise short captions float above the
         // bezel with a fat gap below them. Cached as `deviceTopY` so the
         // existing layout / centering names keep their meaning.
         let deviceTopY = chromeRectTopY + chromeInsetDy
@@ -372,7 +372,7 @@ package struct RenderPipeline {
                     // Center the block between the top of the caption area
                     // (canvas top, or logo band's bottom edge if an
                     // above_title overlay is present) and the next physical
-                    // boundary below the caption — either the top of the
+                    // boundary below the caption - either the top of the
                     // below_subtitle overlay band, or, when no such overlay
                     // exists, the visible top of the device. Including the
                     // chrome inset in the centering range when no overlay

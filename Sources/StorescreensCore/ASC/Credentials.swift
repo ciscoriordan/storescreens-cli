@@ -66,7 +66,7 @@ package enum ASCCredentialResolver {
             return try resolveFromFile(path: path)
         }
         throw ASCCredentialError.notConfigured(
-            hint: "Set ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH — or run `storescreens auth login`."
+            hint: "Set ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH - or run `storescreens auth login`."
         )
     }
 

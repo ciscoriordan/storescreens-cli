@@ -29,7 +29,7 @@ package struct HTMLPreviewGenerator {
     /// reordered in the gallery to match the list (same semantics as
     /// `RenderPipeline.render`'s `screenshotOrder`). Without this, the
     /// manifest-on-disk order (alphabetical by filename) wins and the
-    /// gallery disagrees with the render's slide sequence — the user
+    /// gallery disagrees with the render's slide sequence - the user
     /// sees their hero slide in some other spot.
     package func generate(
         manifest: CaptureManifest,
@@ -106,7 +106,7 @@ package struct HTMLPreviewGenerator {
             // the final App Store look rather than the bare capture.
             // Falls back to the raw capture when no framed PNG exists
             // for the first slide (render hasn't run, or only ran for
-            // some slides) — same graceful-degrade behaviour as the
+            // some slides) - same graceful-degrade behaviour as the
             // per-device figures.
             let rawThumb = captures.first?.screenshots.first?.filename
             let thumb: String? = {

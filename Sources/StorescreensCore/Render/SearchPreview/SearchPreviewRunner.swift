@@ -9,7 +9,7 @@ package struct SearchPreviewRunner {
     package init() {}
 
     /// Returns the number of rendered PNGs plus any warnings collected
-    /// along the way. The caller decides how loud to be about warnings —
+    /// along the way. The caller decides how loud to be about warnings -
     /// the CLI prints them, the MCP server stuffs them in the response.
     package struct Result: Sendable {
         package let renderedCount: Int
@@ -52,7 +52,7 @@ package struct SearchPreviewRunner {
             return Result(renderedCount: 0, outputs: [], warnings: warnings)
         }
 
-        // We don't try to detect partial failures per input here — the
+        // We don't try to detect partial failures per input here - the
         // renderer's per-input failures are already in `warnings`. Treat
         // any output URL that actually exists on disk as a success.
         let outputs = resolved.inputs.map { $0.outputURL }

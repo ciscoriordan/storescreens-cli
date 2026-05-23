@@ -256,7 +256,7 @@ package struct CaptionLayouter {
             }
 
             // Hit floor? `scaled()` clamps fontSize at minFontSize, so compare
-            // ratio-derived target against the floor — once the pre-clamp value
+            // ratio-derived target against the floor - once the pre-clamp value
             // is at/below the floor, we've stopped actually shrinking.
             let titleTargetSize = titleResolved.fontSize * ratio
             let subtitleTargetSize = subtitleResolved.fontSize * ratio
@@ -463,7 +463,7 @@ package struct CaptionLayouter {
 
     private func measure(attr: NSAttributedString, strict: Bool, width: CGFloat) -> Measurement {
         // For strict: measure at near-infinite width so CTFramesetter won't
-        // wrap a line within an item — we want the natural width. If it
+        // wrap a line within an item - we want the natural width. If it
         // exceeds `width`, the caller's shrink loop will reduce size.
         let measureWidth = strict ? CGFloat.greatestFiniteMagnitude : width
         let framesetter = AttributedFramesetter(attributed: attr)

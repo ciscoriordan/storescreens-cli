@@ -6,7 +6,7 @@ import CoreGraphics
 /// the layer stack between the solid/gradient color fill and the image layer;
 /// `BackgroundRenderer` owns the call ordering.
 ///
-/// All patterns are deterministic — given the same canvas size they produce
+/// All patterns are deterministic - given the same canvas size they produce
 /// the same pixels, so re-renders diff cleanly. Seeded with
 /// `PatternRenderer.seed(slideIndex:slidesInCombo:)` to stay aligned across
 /// adjacent slides when used as a panorama.
@@ -278,7 +278,7 @@ package struct PatternRenderer {
     ) {
         let baseSize = min(size.width, size.height) / 8
 
-        // Derive a small palette around the accent. No color parsing needed —
+        // Derive a small palette around the accent. No color parsing needed -
         // operate on HSV traits of the accent itself for a consistent family.
         let palette: [NSColor] = [
             accent,

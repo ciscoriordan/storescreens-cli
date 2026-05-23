@@ -3,7 +3,7 @@ import Foundation
 import StorescreensCore
 
 /// `storescreens wall ...`: submit your app to the Wall of Apps on
-/// storescreens.app — a public showcase of apps shipping with StoreScreens.
+/// storescreens.app - a public showcase of apps shipping with StoreScreens.
 struct WallCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wall",
@@ -72,7 +72,7 @@ struct WallSubmitCommand: AsyncParsableCommand {
 
         logger.log("Found: \(meta.name) by \(meta.dev)", level: .success)
 
-        // 3. POST to the submit endpoint. The backend may not exist yet —
+        // 3. POST to the submit endpoint. The backend may not exist yet -
         //    if the request fails, tell the user where to file an issue
         //    instead of throwing a raw network error.
         logger.log("Submitting to \(endpoint)…", level: .info)
@@ -104,7 +104,7 @@ struct WallSubmitCommand: AsyncParsableCommand {
         // Look for "id" followed by one-or-more digits (App Store URL form,
         // e.g. .../app/foo/id1234567890?mt=8).
         if let range = trimmed.range(of: #"id(\d+)"#, options: .regularExpression) {
-            // Strip the leading "id" — the digits are everything after the
+            // Strip the leading "id" - the digits are everything after the
             // 2-char prefix in the matched substring.
             let match = trimmed[range]
             return String(match.dropFirst(2))

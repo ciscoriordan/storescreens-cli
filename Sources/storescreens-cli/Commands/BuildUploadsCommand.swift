@@ -196,7 +196,7 @@ struct BuildUploadsGetCommand: AsyncParsableCommand {
 struct BuildUploadsCreateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "create",
-        abstract: "POST /buildUploads — reserve a chunked upload for an app. Returns the buildUpload."
+        abstract: "POST /buildUploads - reserve a chunked upload for an app. Returns the buildUpload."
     )
     @Option(name: .long, help: "Numeric ASC app id.") var appId: String
     @Option(name: .long, help: ".ipa file name (e.g. MyApp.ipa).") var fileName: String
@@ -305,7 +305,7 @@ struct BuildUploadsFilesGetCommand: AsyncParsableCommand {
 struct BuildUploadsFilesCreateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "files-create",
-        abstract: "POST /buildUploadFiles — reserve a chunked-upload target inside a buildUpload."
+        abstract: "POST /buildUploadFiles - reserve a chunked-upload target inside a buildUpload."
     )
     @Option(name: .long, help: "Parent buildUpload id.") var buildUploadId: String
     @Option(name: .long, help: "File name (e.g. MyApp.ipa).") var fileName: String
@@ -420,7 +420,7 @@ struct BuildUploadsUploadIpaCommand: AsyncParsableCommand {
                 print("  build:       \(build.id) (\(build.attributes?.processingState ?? "?"))")
                 print("  version:     \(build.attributes?.version ?? "?")")
             } else {
-                print("  build:       (still processing — re-run `get` later or check with `storescreens testflight builds`)")
+                print("  build:       (still processing - re-run `get` later or check with `storescreens testflight builds`)")
             }
             if let errs = result.upload.attributes?.errorMessages, !errs.isEmpty {
                 print("  errors:")

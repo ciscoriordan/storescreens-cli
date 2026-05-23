@@ -121,7 +121,7 @@ struct GCDetailsGetForAppCommand: AsyncParsableCommand {
         let detail = try await gcSurface({ try await api.details.getForApp(appID: appId) }, logger: logger)
         if json { try gcEmitOptionalJSON(detail); return }
         guard let detail else {
-            logger.log("no gameCenterDetail for app \(appId) — Game Center is likely not enabled", level: .warning)
+            logger.log("no gameCenterDetail for app \(appId) - Game Center is likely not enabled", level: .warning)
             return
         }
         logger.header("gameCenterDetail \(detail.id)")

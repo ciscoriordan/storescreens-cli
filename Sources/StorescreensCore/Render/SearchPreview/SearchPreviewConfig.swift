@@ -3,7 +3,7 @@ import Foundation
 /// Root Codable shape for the `search_preview:` block in `storescreens.yml`.
 /// Every field is optional; the resolver fills gaps from `metadata/<locale>/*.txt`,
 /// the extracted `AppIcon.png`, the configured `app_store_connect.categories`,
-/// and `captureConfig.scheme`. Inspired by ezscreenshots' Search Preview tool —
+/// and `captureConfig.scheme`. Inspired by ezscreenshots' Search Preview tool -
 /// renders an iPhone App Store search result row (icon, name, subtitle, stars,
 /// 3 screenshots) wrapped in an iPhone bezel + status bar.
 package struct SearchPreviewConfig: Codable, Sendable {
@@ -17,7 +17,7 @@ package struct SearchPreviewConfig: Codable, Sendable {
     package var outputDir: String?
 
     /// Which appearances to render. Default: `[light]`. The "dark" appearance
-    /// recreates the App Store's dark mode (black bezel + chrome) — it's not
+    /// recreates the App Store's dark mode (black bezel + chrome) - it's not
     /// tied to the app's own light/dark screenshots, so users opt in
     /// independently of the capture-time `appearances:` list.
     package var appearances: [String]?
@@ -35,7 +35,7 @@ package struct SearchPreviewConfig: Codable, Sendable {
 
     /// Which previews to render: `search_row` (default, the search-result
     /// row in the App Store search tab), `detail_page` (the app's detail
-    /// page after tapping a result — hero row, stats, What's New,
+    /// page after tapping a result - hero row, stats, What's New,
     /// screenshots, description), or `both`.
     package var mode: SearchPreviewMode?
 
@@ -103,7 +103,7 @@ package struct SearchPreviewConfig: Codable, Sendable {
     /// Subset of screenshot names to show in the 3-up strip, in order.
     /// When unset, the first three entries from `captureConfig.screenshots`
     /// (or the manifest, in order) are used. Names without "@deviceType"
-    /// match the basename — the resolver picks the iPhone-sized variant
+    /// match the basename - the resolver picks the iPhone-sized variant
     /// when multiple devices captured the same name.
     package var screenshots: [String]?
 
@@ -203,7 +203,7 @@ package struct SearchPreviewConfig: Codable, Sendable {
 package enum SearchPreviewMode: String, Codable, Sendable {
     /// Search-result row in the App Store search tab (default).
     case searchRow = "search_row"
-    /// Detail page after tapping a result — hero row, stats strip,
+    /// Detail page after tapping a result - hero row, stats strip,
     /// What's New section, screenshots, description with "more" link.
     case detailPage = "detail_page"
     /// Both modes, written side-by-side in the output directory.

@@ -36,7 +36,7 @@ struct MetadataInitCommand: AsyncParsableCommand {
         let root = URL(fileURLWithPath: dir)
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
 
-        // Create locale directories (empty — user creates only the files they want).
+        // Create locale directories (empty - user creates only the files they want).
         var createdLocales: [String] = []
         for locale in locales {
             let localeDir = root.appendingPathComponent(locale, isDirectory: true)

@@ -144,7 +144,7 @@ struct CaptureCommand: AsyncParsableCommand {
             result = try await captureSimple(config: captureConfig, logger: logger)
         }
 
-        // Render pass — composites captioned screenshots when enabled.
+        // Render pass - composites captioned screenshots when enabled.
         // Runs after capture succeeds; render failures don't destroy the raw captures.
         // Shared with the MCP server so both entry points produce
         // identical framed PNGs + raw/framed preview toggle.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Fully resolved render input for one `(locale, appearance)` combo of the
-/// search-preview pass. Every field is concrete — fallbacks have already
+/// search-preview pass. Every field is concrete - fallbacks have already
 /// been chased through `metadata/<locale>/*.txt`, the captured `AppIcon.png`,
 /// the configured ASC categories, etc. The renderer never touches the
 /// filesystem to discover inputs; it just draws what it's given.
@@ -87,7 +87,7 @@ package struct SearchPreviewInput: Sendable {
 
 /// Walks the capture config + metadata files + capture dir to produce one
 /// `SearchPreviewInput` per `(locale, appearance)` combo. Designed to run
-/// after the regular render pass — `screenshotsSourceDir` should already
+/// after the regular render pass - `screenshotsSourceDir` should already
 /// point at the dir holding the PNGs the user actually plans to upload
 /// (framed or raw).
 package struct SearchPreviewResolver {
@@ -322,7 +322,7 @@ package struct SearchPreviewResolver {
         let modeSuffix: String = switch mode {
             case .searchRow:  "search-row"
             case .detailPage: "detail-page"
-            case .both:       "search-row"   // unreachable — caller expands `both`
+            case .both:       "search-row"   // unreachable - caller expands `both`
         }
         let basename = "\(devicePrefix)_\(modeSuffix).png"
         if let locale {
@@ -424,7 +424,7 @@ package struct SearchPreviewResolver {
     }
 
     /// Build the list of screenshot URLs. Priority:
-    ///   1. `searchPreview.screenshots` (explicit override) — must exist as files.
+    ///   1. `searchPreview.screenshots` (explicit override) - must exist as files.
     ///   2. First 3 entries of `captureConfig.screenshots` matched against the
     ///      preferred iPhone capture in the manifest.
     ///   3. First 3 screenshots from the preferred iPhone capture in the manifest.

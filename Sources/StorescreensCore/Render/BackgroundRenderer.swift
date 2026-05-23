@@ -75,7 +75,7 @@ package struct BackgroundRenderer {
 
         // Panorama sizing: the bg is laid out across the full combo width,
         // then only THIS slide's horizontal slice is drawn into its canvas.
-        // The canvas itself stays at canvasSize — we translate the bg left
+        // The canvas itself stays at canvasSize - we translate the bg left
         // by (slideIndex * canvasWidth) and clip to the canvas rect.
         let panoramaSize = CGSize(
             width: canvasSize.width * CGFloat(max(1, slidesInCombo)),
@@ -229,7 +229,7 @@ package struct BackgroundRenderer {
     /// Rectangle (in top-left coord space relative to canvas) where an image
     /// should be drawn given fit + vertical align. The background's LEFT edge
     /// is always pinned to the canvas's left edge (x=0) so the same pixel
-    /// column shows at x=0 on every slide — important for continuity across
+    /// column shows at x=0 on every slide - important for continuity across
     /// multi-screenshot App Store layouts. Vertical `align` is the only knob:
     /// top / center / bottom.
     private func computeRect(

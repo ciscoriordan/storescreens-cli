@@ -158,7 +158,7 @@ package struct BackgroundAssetsAPI {
         let fileName = path.lastPathComponent
         let md5 = try Self.fileMD5Hex(path: path)
 
-        // 2. Phase 1 — POST /backgroundAssetUploadFiles with the parent
+        // 2. Phase 1 - POST /backgroundAssetUploadFiles with the parent
         //    backgroundAssetVersion relationship + file metadata. Apple
         //    returns the per-chunk uploadOperations on the response.
         let reserved = try await assets.uploadFiles.create(
@@ -176,7 +176,7 @@ package struct BackgroundAssetsAPI {
             )
         }
 
-        // 3. Phase 2 — PUT each chunk to its signed URL. Streams from disk
+        // 3. Phase 2 - PUT each chunk to its signed URL. Streams from disk
         //    via FileHandle.
         try await Self.uploadChunks(
             client: client,
@@ -186,7 +186,7 @@ package struct BackgroundAssetsAPI {
             progress: progress
         )
 
-        // 4. Phase 3 — PATCH commit. ASC validates the checksum + transitions
+        // 4. Phase 3 - PATCH commit. ASC validates the checksum + transitions
         //    state to UPLOADED, or surfaces errorMessages on rejection.
         let committed = try await assets.uploadFiles.commit(
             id: reserved.id,
@@ -287,15 +287,15 @@ package struct BackgroundAssetsAPI {
         /// upload child of a backgroundAssetVersion.
         package var uploadFiles: UploadFiles { UploadFiles(client: client) }
 
-        /// backgroundAssetVersionAppStoreReleases — read-only release-state
+        /// backgroundAssetVersionAppStoreReleases - read-only release-state
         /// records for the App Store delivery channel (spec v4.1).
         package var appStoreReleases: AppStoreReleases { AppStoreReleases(client: client) }
 
-        /// backgroundAssetVersionExternalBetaReleases — read-only
+        /// backgroundAssetVersionExternalBetaReleases - read-only
         /// release-state records for the External Beta delivery channel.
         package var externalBetaReleases: ExternalBetaReleases { ExternalBetaReleases(client: client) }
 
-        /// backgroundAssetVersionInternalBetaReleases — read-only
+        /// backgroundAssetVersionInternalBetaReleases - read-only
         /// release-state records for the Internal Beta delivery channel.
         package var internalBetaReleases: InternalBetaReleases { InternalBetaReleases(client: client) }
 
@@ -481,7 +481,7 @@ package struct BackgroundAssetsAPI {
                 )
             }
 
-            /// GET `/apps/{id}/backgroundAssets` — relationship form, same
+            /// GET `/apps/{id}/backgroundAssets` - relationship form, same
             /// data as the filter[app] list. Kept separate so callers can
             /// mirror Apple's URL exactly.
             package func listForApp(
@@ -603,7 +603,7 @@ package struct BackgroundAssetsAPI {
                 self.client = client
             }
 
-            /// GET `/backgroundAssets/{id}/backgroundAssetVersions` —
+            /// GET `/backgroundAssets/{id}/backgroundAssetVersions` -
             /// paginated list of every version on the parent asset.
             package func list(
                 backgroundAssetID: String,
@@ -698,7 +698,7 @@ package struct BackgroundAssetsAPI {
             }
 
             /// GET `/backgroundAssetVersions/{id}/backgroundAssetUploadFiles`
-            /// — paginated list of every file on a version.
+            /// - paginated list of every file on a version.
             package func list(
                 versionID: String,
                 limit: Int = 200,
@@ -822,7 +822,7 @@ package struct BackgroundAssetsAPI {
 
         // MARK: - Read-only release-state records (App Store / External / Internal)
 
-        /// `backgroundAssetVersionAppStoreReleases` — read-only state for
+        /// `backgroundAssetVersionAppStoreReleases` - read-only state for
         /// the App Store delivery channel (spec v4.1).
         package struct AppStoreReleases {
             package let client: ASCClient
@@ -846,7 +846,7 @@ package struct BackgroundAssetsAPI {
             }
         }
 
-        /// `backgroundAssetVersionExternalBetaReleases` — read-only state
+        /// `backgroundAssetVersionExternalBetaReleases` - read-only state
         /// for the External Beta (TestFlight public-link) delivery channel.
         package struct ExternalBetaReleases {
             package let client: ASCClient
@@ -868,7 +868,7 @@ package struct BackgroundAssetsAPI {
             }
         }
 
-        /// `backgroundAssetVersionInternalBetaReleases` — read-only state
+        /// `backgroundAssetVersionInternalBetaReleases` - read-only state
         /// for the Internal Beta (internal-tester) delivery channel.
         package struct InternalBetaReleases {
             package let client: ASCClient
@@ -1004,7 +1004,7 @@ package struct BackgroundAssetsAPI {
                 self.client = client
             }
 
-            /// GET `/appStoreVersions/{id}/appStoreVersionPhasedRelease` —
+            /// GET `/appStoreVersions/{id}/appStoreVersionPhasedRelease` -
             /// the relationship form. Apple ships at most one phased-release
             /// record per version, so this returns a single optional value.
             package func getForVersion(versionID: String) async throws -> PhasedRelease? {

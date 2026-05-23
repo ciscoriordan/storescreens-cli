@@ -9,7 +9,7 @@ import Foundation
 /// (`capture` tool) call this after `CaptureOrchestrator.run()`
 /// succeeds, so both surfaces produce the same captioned PNGs and
 /// the same preview UX. Render failures are surfaced through the
-/// `logger` closure but never thrown — a bad render must not
+/// `logger` closure but never thrown - a bad render must not
 /// destroy a successful capture.
 package struct PostCaptureRunner {
 
@@ -24,7 +24,7 @@ package struct PostCaptureRunner {
     ///   - capturedRoot: directory holding the raw captured PNGs
     ///     (the same dir `preview.html` lives in).
     ///   - baseDirectory: directory used to resolve render asset
-    ///     paths — typically the directory containing the YML config.
+    ///     paths - typically the directory containing the YML config.
     ///   - logger: optional sink for user-facing progress/warnings.
     ///     When nil, messages are discarded. MCP callers wire this
     ///     up to the `AsyncTaskStore` so pollers see render progress.
@@ -99,7 +99,7 @@ package struct PostCaptureRunner {
         // Search-preview pass. Runs after the regular render so it can
         // prefer the framed PNGs (the same ones the user will upload to
         // App Store Connect) over the raw captures. Independent of the
-        // render block — a user can enable just search-preview and skip
+        // render block - a user can enable just search-preview and skip
         // the render pass entirely.
         if !skipSearchPreview, captureConfig.searchPreview?.enabled == true {
             logger?("● Rendering search preview")

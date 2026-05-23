@@ -45,7 +45,7 @@ struct ReviewsCommand: AsyncParsableCommand {
 
 // MARK: - Shared helpers
 
-/// Common option block for "which app are we operating on" — the app id is
+/// Common option block for "which app are we operating on" - the app id is
 /// the only required argument for every reviews command. Pulls from
 /// storescreens.yml when omitted on the command line.
 private struct AppIDResolver {
@@ -129,7 +129,7 @@ private func bodySnippet(_ body: String?, max: Int = 80) -> String {
     return String(collapsed[..<end]) + "..."
 }
 
-/// JSON output shapes — kept in sync with the MCP wire format so scripted
+/// JSON output shapes - kept in sync with the MCP wire format so scripted
 /// consumers see one stable schema across CLI + MCP.
 private struct ReviewJSONOut: Encodable {
     let id: String

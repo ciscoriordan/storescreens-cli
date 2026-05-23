@@ -17,7 +17,7 @@ package enum BezelImporter {
         package var description: String {
             switch self {
             case .noVolumesMounted:
-                return "no Apple Design Resource DMGs mounted under /Volumes — mount a DMG first"
+                return "no Apple Design Resource DMGs mounted under /Volumes - mount a DMG first"
             case .noScreenLayer(let src, let layers):
                 return "PSD \(src) has no 'Screen' layer (found: \(layers.joined(separator: ", ")))"
             case .unknownProductFamily(let f):
@@ -209,7 +209,7 @@ package enum FilenameParser {
 
         let family = try inferProductFamily(from: stem)
 
-        // Pattern A — space-dash-space separated (iPhone / iPad):
+        // Pattern A - space-dash-space separated (iPhone / iPad):
         //   "iPhone 17 Pro Max - Silver - Portrait"
         //   "iPad Pro (M5) 13\" - Silver - Landscape"
         if stem.contains(" - ") {
@@ -227,7 +227,7 @@ package enum FilenameParser {
             return Parsed(model: model, colorway: colorway, orientation: orientation, productFamily: family)
         }
 
-        // Pattern B — MacBook flat naming, no delimiters:
+        // Pattern B - MacBook flat naming, no delimiters:
         //   "MacBook Pro M5 14-inch Silver"
         //   "MacBook Pro M5 16-inch Space Black"
         if family == 6 {

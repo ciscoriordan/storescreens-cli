@@ -56,7 +56,7 @@ package enum ReportsError: Error, CustomStringConvertible {
 
 // MARK: - Sales reports
 
-/// `GET /v1/salesReports` — returns a gzipped TSV body. Apple groups its
+/// `GET /v1/salesReports` - returns a gzipped TSV body. Apple groups its
 /// reporting endpoints under "Sales and Trends Reports"; in their data model
 /// `vendorNumber` is the team identifier you can grab from the Payments and
 /// Financial Reports section in App Store Connect.
@@ -100,7 +100,7 @@ package struct SalesAPI {
 
     /// A single parsed row from the TSV body. Apple's reports use different
     /// column sets per (reportType, subType, version) tuple, so we model the
-    /// rows as `[header: value]` dictionaries — that lets the same call site
+    /// rows as `[header: value]` dictionaries - that lets the same call site
     /// handle sales, installs, subscription, etc. without bespoke models per
     /// shape.
     package struct SalesRow: Sendable, Codable {
@@ -167,7 +167,7 @@ package struct SalesAPI {
 
 // MARK: - Finance reports
 
-/// `GET /v1/financeReports` — returns a gzipped CSV body keyed by region.
+/// `GET /v1/financeReports` - returns a gzipped CSV body keyed by region.
 /// One report covers one calendar month per region; Apple aggregates revenue
 /// across all apps tied to that vendorNumber.
 package struct FinanceAPI {
@@ -363,7 +363,7 @@ package struct AnalyticsAPI {
         package let id: String
         package let attributes: Attributes?
         package struct Attributes: Codable, Sendable {
-            /// `DAILY`, `WEEKLY`, `MONTHLY` — Apple uses these to bucket
+            /// `DAILY`, `WEEKLY`, `MONTHLY` - Apple uses these to bucket
             /// instances by reporting granularity.
             package let granularity: String?
             /// `YYYY-MM-DD` boundary date for the window.
@@ -408,7 +408,7 @@ package struct AnalyticsAPI {
     }
 
     /// Lists segments for an instance. Each segment is a separate gzipped
-    /// CSV slice — Apple chunks large reports across multiple segments.
+    /// CSV slice - Apple chunks large reports across multiple segments.
     package func listSegments(instanceID: String) async throws -> [Segment] {
         struct Resp: Decodable { let data: [Segment] }
         let resp: Resp = try await client.get(
@@ -476,7 +476,7 @@ package struct AnalyticsAPI {
 
 /// Thin wrapper over the `perfPowerMetrics` and `diagnosticSignatures`
 /// resources. These come back as JSON so they go through ASCClient's normal
-/// path — no gunzip needed.
+/// path - no gunzip needed.
 package struct MetricsAPI {
     package let client: ASCClient
 
@@ -635,7 +635,7 @@ enum ReportsHTTP {
     /// gunzip-via-Process over the Compression framework here because Apple's
     /// reporting payloads are full gzip streams (10-byte header + 8-byte CRC
     /// trailer) and `compression_decode_buffer(..., COMPRESSION_ZLIB)` only
-    /// decodes raw deflate — getting it to consume Apple's gzip wrapper
+    /// decodes raw deflate - getting it to consume Apple's gzip wrapper
     /// requires stripping the header by hand and ignoring the trailer, which
     /// trades reliability for code volume. gunzip ships on every macOS host
     /// in /usr/bin and handles every variant Apple has emitted.

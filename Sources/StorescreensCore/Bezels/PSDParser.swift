@@ -5,7 +5,7 @@ import CoreGraphics
 ///
 /// Extracts only what storescreens needs for bezel import: canvas dimensions
 /// and each layer's name + pixel bbox. Rasterization stays with `NSImage` /
-/// Image I/O — this parser reads metadata only.
+/// Image I/O - this parser reads metadata only.
 ///
 /// Reference: Adobe Photoshop File Format Specification
 /// https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/
@@ -122,7 +122,7 @@ package enum PSDParser {
             try cursor.skip(padding)
             _ = pascalNameStart
 
-            // Additional layer info blocks — look for a Unicode name ('luni')
+            // Additional layer info blocks - look for a Unicode name ('luni')
             // which is preferred over the Pascal name when present.
             var unicodeName: String? = nil
             while cursor.offset + 12 <= extraEnd {
@@ -131,7 +131,7 @@ package enum PSDParser {
                 let is8BIM = sig == [0x38, 0x42, 0x49, 0x4D]
                 let is8B64 = sig == [0x38, 0x42, 0x36, 0x34]
                 guard is8BIM || is8B64 else {
-                    // Unknown signature — abandon additional info scan for this layer
+                    // Unknown signature - abandon additional info scan for this layer
                     break
                 }
                 let key = try cursor.readBytes(4)

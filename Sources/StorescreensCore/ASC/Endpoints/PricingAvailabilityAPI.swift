@@ -1,7 +1,7 @@
 import Foundation
 
 /// App Store Connect endpoints covering the "Pricing and Availability"
-/// screen of the ASC web UI — territory availability plus the app's price
+/// screen of the ASC web UI - territory availability plus the app's price
 /// schedule. Both must be set before a brand-new app can be submitted for
 /// review, and neither carries over automatically across submissions, so
 /// `storescreens submit` applies them when the config requests it.
@@ -31,7 +31,7 @@ package struct PricingAvailabilityAPI {
 
     /// Lists every territory App Store Connect supports. Used to resolve the
     /// "all territories" shorthand into an explicit list for the availability
-    /// PATCH — ASC needs the full set, not a wildcard.
+    /// PATCH - ASC needs the full set, not a wildcard.
     package func listTerritories() async throws -> [Territory] {
         struct Resp: Decodable { let data: [Territory] }
         let resp: Resp = try await client.get(
@@ -120,7 +120,7 @@ package struct PricingAvailabilityAPI {
 
     /// Returns the set of territory IDs that are currently available for the
     /// app. Used to diff against the desired list so we don't re-POST an
-    /// unchanged availability. Single-page fetch — 200 covers Apple's full
+    /// unchanged availability. Single-page fetch - 200 covers Apple's full
     /// territory count comfortably.
     package func listAvailableTerritories(availabilityID: String) async throws -> Set<String> {
         struct Ref: Decodable { let id: String }
@@ -170,7 +170,7 @@ package struct PricingAvailabilityAPI {
         return resp.data
     }
 
-    /// Finds the "free" price point for the given territory — the one whose
+    /// Finds the "free" price point for the given territory - the one whose
     /// customerPrice equals "0" / "0.00". Returns nil if no free tier exists
     /// (paid-only apps, unusual territories).
     package func findFreePricePoint(
@@ -191,7 +191,7 @@ package struct PricingAvailabilityAPI {
     /// Creates a new price schedule for the app, setting the base territory
     /// and a single manual price point. Apple auto-computes equivalent prices
     /// for all other territories from the base + price point. Use this for
-    /// both free and paid apps — for free, pass the free price point's ID.
+    /// both free and paid apps - for free, pass the free price point's ID.
     @discardableResult
     package func createPriceSchedule(
         appID: String,
@@ -239,7 +239,7 @@ package struct PricingAvailabilityAPI {
     }
 
     /// Returns true when the app already has a price schedule on file. Used
-    /// as an idempotency guard — creating a second schedule blindly would
+    /// as an idempotency guard - creating a second schedule blindly would
     /// replace the first, which is destructive if someone already set
     /// something by hand in the ASC web UI.
     package func hasExistingPriceSchedule(appID: String) async throws -> Bool {

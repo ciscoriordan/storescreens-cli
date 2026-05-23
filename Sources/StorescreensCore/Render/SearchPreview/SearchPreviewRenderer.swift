@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 /// Pure Core Graphics + Core Text drawing of an iPhone App Store search
 /// result row, wrapped in an iPhone bezel + status bar + Dynamic Island.
-/// One renderer per call — no shared mutable state.
+/// One renderer per call - no shared mutable state.
 ///
 /// Coordinate convention: the context is flipped at the start so (0,0) is
 /// the visual top-left and y grows downward. All layout math reads
@@ -195,7 +195,7 @@ package struct SearchPreviewRenderer {
             color: theme.actionText,
             weight: .semibold
         )
-        // Share button on the right (no ellipsis menu — iOS App Store
+        // Share button on the right (no ellipsis menu - iOS App Store
         // detail page just shows the share icon next to the back chevron).
         drawSymbol(
             "square.and.arrow.up", into: ctx,
@@ -254,7 +254,7 @@ package struct SearchPreviewRenderer {
 
         // Right of icon: title (1-2 lines) + subtitle + action button.
         // Matches the iOS App Store detail-page hero. No developer line
-        // here — that lives in the stats strip below.
+        // here - that lives in the stats strip below.
         let textLeftX = iconRect.maxX + contentRect.width * 0.045
         let textWidth = contentRect.maxX - textLeftX
         let nameFont = systemFont(size: iconSize * 0.28, weight: .semibold)
@@ -490,7 +490,7 @@ package struct SearchPreviewRenderer {
             weight: .semibold
         )
 
-        // Version row (left) — "Version X.Y.Z"
+        // Version row (left) - "Version X.Y.Z"
         if let version = input.version, !version.isEmpty {
             drawText(
                 into: ctx, text: "Version \(version)",
@@ -608,7 +608,7 @@ package struct SearchPreviewRenderer {
     /// Lays out `text` as wrapped lines at `width`. Up to `maxLines` are
     /// drawn verbatim. If the text overflows, the last visible line keeps
     /// its natural wrapping but its rightmost edge fades to
-    /// `backgroundColor` and a blue "more" link sits at the right edge —
+    /// `backgroundColor` and a blue "more" link sits at the right edge -
     /// matches the App Store detail-page truncation effect.
     /// Returns the visual bottom y of the rendered block.
     private func drawTruncatedParagraph(
@@ -770,7 +770,7 @@ package struct SearchPreviewRenderer {
             return ctLines.map { substring(of: text, range: CTLineGetStringRange($0)) }
         }
 
-        // Overflow — keep the first maxLines-1 lines verbatim, then
+        // Overflow - keep the first maxLines-1 lines verbatim, then
         // truncate the next line with ellipsis to fit `width`.
         var visible: [String] = []
         for i in 0..<(maxLines - 1) {
@@ -848,7 +848,7 @@ package struct SearchPreviewRenderer {
     // MARK: - Bezel
 
     private func drawBezel(into ctx: CGContext, canvas: CGRect, theme: Theme) {
-        // The bezel is the iPhone screen background — a rounded rect with
+        // The bezel is the iPhone screen background - a rounded rect with
         // an iPhone-like corner radius. We let the bezel bleed past the
         // bottom of the canvas to match ezscreenshots' fade-out look
         // (the phone "continues off-screen").
@@ -888,7 +888,7 @@ package struct SearchPreviewRenderer {
         let statusTopY: CGFloat = canvas.height * 0.018
         let statusHeight: CGFloat = canvas.height * 0.040
 
-        // Time (9:41) — left side of the status bar.
+        // Time (9:41) - left side of the status bar.
         drawText(
             into: ctx,
             text: "9:41",
@@ -897,7 +897,7 @@ package struct SearchPreviewRenderer {
             topLeft: CGPoint(x: canvas.width * 0.095, y: statusTopY + statusHeight * 0.10)
         )
 
-        // Dynamic Island — centered pill, always black.
+        // Dynamic Island - centered pill, always black.
         let islandWidth = canvas.width * 0.32
         let islandHeight = canvas.height * 0.034
         let islandRect = CGRect(
@@ -922,7 +922,7 @@ package struct SearchPreviewRenderer {
             theme: theme
         )
 
-        // Search bar — pill just below the status bar.
+        // Search bar - pill just below the status bar.
         let searchTopY = statusTopY + statusHeight + canvas.height * 0.015
         let searchHeight = canvas.height * 0.046
         let searchRect = CGRect(
@@ -1101,7 +1101,7 @@ package struct SearchPreviewRenderer {
             width: iconSize, height: iconSize
         )
 
-        // Icon — placeholder fill, then optional image clipped to the squircle.
+        // Icon - placeholder fill, then optional image clipped to the squircle.
         let iconPath = CGPath(
             roundedRect: iconRect,
             cornerWidth: iconCornerRadius, cornerHeight: iconCornerRadius,
@@ -1171,7 +1171,7 @@ package struct SearchPreviewRenderer {
         let nameBandWidth = actionRect.minX - textLeftX - cardW * 0.02
 
         // Sizing is tuned so the three-line stack (name + subtitle +
-        // stars) fits within the icon's vertical extent — App Store row
+        // stars) fits within the icon's vertical extent - App Store row
         // stars are noticeably smaller than the subtitle text, so the
         // stars scale is smaller than the subtitle font size.
         let nameFont = systemFont(size: iconSize * 0.30, weight: .semibold)
@@ -1308,7 +1308,7 @@ package struct SearchPreviewRenderer {
     /// Draws the search-row meta line, App Store style:
     ///   `[icon] Cat1 | [icon] Cat2   [person.crop.square] Developer`
     ///
-    /// Pipes separate consecutive categories only — the developer chunk is
+    /// Pipes separate consecutive categories only - the developer chunk is
     /// preceded by whitespace and a `person.crop.square` glyph, never a pipe.
     /// Category SF Symbols come from `SearchPreviewRenderer.categorySymbol`;
     /// categories without an icon mapping render with text only.
@@ -1570,7 +1570,7 @@ package struct SearchPreviewRenderer {
     ///
     /// The symbol's intrinsic bounding box is centered inside `rect`, scaled
     /// so the larger of (width, height) matches the corresponding side of
-    /// the target rect — i.e. fit-into-rect, never crop.
+    /// the target rect - i.e. fit-into-rect, never crop.
     func drawSymbol(
         _ name: String,
         into ctx: CGContext,

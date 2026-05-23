@@ -407,7 +407,7 @@ struct AscExtrasEulasUpdateCommand: AsyncParsableCommand {
     func run() async throws {
         let logger = Logger()
         let api = try await resolveAscExtras(logger: logger).eulas
-        // Empty list still means "don't touch the existing list" — we
+        // Empty list still means "don't touch the existing list" - we
         // only forward territoryIDs when the caller explicitly passed at
         // least one. Use --no-territories style if needed by passing one
         // dummy and explicitly excluding others.

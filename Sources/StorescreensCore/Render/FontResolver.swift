@@ -55,7 +55,7 @@ package final class FontResolver: @unchecked Sendable {
     }
 
     /// Resolve a `FontSpec` to a `CTFont` at a given point size, weight, and italic.
-    /// Weight/italic attributes from the config are passed in — markdown-derived
+    /// Weight/italic attributes from the config are passed in - markdown-derived
     /// bold/italic overrides the config's weight/italic for that run of text.
     package func resolve(
         _ spec: FontSpec,
@@ -261,7 +261,7 @@ package struct GoogleFontsDownloader: FontDownloading {
 
     /// Builds the Google Fonts CSS API URL for one weight+italic variant.
     /// Uses v1 `/css` (not v2 `/css2`) because v1 serves TTF URLs to every
-    /// User-Agent, while v2 returns woff2 only. Exposed for unit testing —
+    /// User-Agent, while v2 returns woff2 only. Exposed for unit testing -
     /// regressing this endpoint silently breaks offline TTF resolution.
     static func cssURL(family: String, weight: Int, italic: Bool) -> URL {
         let googleWeight = googleWeight(from: weight)
@@ -299,7 +299,7 @@ package struct GoogleFontsDownloader: FontDownloading {
         }
     }
 
-    /// Synchronous URLSession fetch — used in the resolver's sync API.
+    /// Synchronous URLSession fetch - used in the resolver's sync API.
     /// Acceptable here because font downloads happen once per cache miss and
     /// the CLI is already blocking on render.
     private func sync(request: URLRequest) throws -> Data {

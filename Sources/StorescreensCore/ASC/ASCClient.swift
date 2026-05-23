@@ -52,7 +52,7 @@ package final class ASCClient: @unchecked Sendable {
         }
 
         /// True when ASC rejected a PATCH because the value the
-        /// caller asked for is effectively already in place — either
+        /// caller asked for is effectively already in place - either
         /// because the attribute matches what's stored, or because
         /// the target resource has advanced into a state that no
         /// longer accepts this edit (version locked in review,
@@ -193,9 +193,9 @@ package final class ASCClient: @unchecked Sendable {
         try await send(method: "DELETE", path: path, body: Optional<EmptyBody>.none, as: EmptyBody.self)
     }
 
-    /// Raw binary PUT — used for screenshot chunk uploads to the URLs Apple
+    /// Raw binary PUT - used for screenshot chunk uploads to the URLs Apple
     /// hands back in `uploadOperations`. Note these URLs are NOT on our
-    /// baseURL — they're pre-signed S3-style URLs, so we use them verbatim
+    /// baseURL - they're pre-signed S3-style URLs, so we use them verbatim
     /// and apply only the headers Apple instructs.
     package func putBinary(
         absoluteURL: URL,
@@ -281,7 +281,7 @@ package final class ASCClient: @unchecked Sendable {
             throw NSError(domain: "ASCClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "no HTTPURLResponse"])
         }
 
-        // No content — synthesize an EmptyBody if caller asked for one.
+        // No content - synthesize an EmptyBody if caller asked for one.
         if http.statusCode == 204, type == EmptyBody.self, let empty = EmptyBody() as? Response {
             return empty
         }
@@ -304,7 +304,7 @@ package final class ASCClient: @unchecked Sendable {
         return try decoder.decode(Response.self, from: data)
     }
 
-    /// Matches a leading "vDIGITS/" in a path component — callers use this
+    /// Matches a leading "vDIGITS/" in a path component - callers use this
     /// to target a non-default API version (e.g. "v2/appAvailabilities") by
     /// prefixing the version explicitly. Without such a prefix we append to
     /// the baseURL's built-in /v1.

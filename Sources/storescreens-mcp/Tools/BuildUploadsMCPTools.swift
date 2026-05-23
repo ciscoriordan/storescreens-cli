@@ -146,7 +146,7 @@ package enum BuildUploadsMCPTools {
         ),
         makeTool(
             name: "build_uploads_create",
-            description: "POST /buildUploads — reserve a new chunked upload for an app. Returns the buildUpload with state=PENDING. Pair with build_uploads_files_create + the chunk PUTs + build_uploads_files_commit to push bytes. For one-shot use, prefer build_uploads_upload_ipa.",
+            description: "POST /buildUploads - reserve a new chunked upload for an app. Returns the buildUpload with state=PENDING. Pair with build_uploads_files_create + the chunk PUTs + build_uploads_files_commit to push bytes. For one-shot use, prefer build_uploads_upload_ipa.",
             properties: [
                 ("app_id", "string", "numeric ASC app id"),
                 ("file_name", "string", ".ipa file name (e.g. MyApp.ipa)"),
@@ -183,7 +183,7 @@ package enum BuildUploadsMCPTools {
         ),
         makeTool(
             name: "build_uploads_files_create",
-            description: "POST /buildUploadFiles — reserve a chunked-upload target inside an existing buildUpload. Response includes `uploadOperations` you PUT chunks to. Optionally include a precomputed sourceFileChecksum (hex MD5 of the file) so ASC validates against the expected value.",
+            description: "POST /buildUploadFiles - reserve a chunked-upload target inside an existing buildUpload. Response includes `uploadOperations` you PUT chunks to. Optionally include a precomputed sourceFileChecksum (hex MD5 of the file) so ASC validates against the expected value.",
             properties: [
                 ("build_upload_id", "string", "parent buildUpload id"),
                 ("file_name", "string", "file name (e.g. MyApp.ipa)"),

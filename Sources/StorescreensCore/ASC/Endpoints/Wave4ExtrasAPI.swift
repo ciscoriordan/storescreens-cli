@@ -552,7 +552,7 @@ package struct Wave4ExtrasAPI {
             package struct Attributes: Codable, Sendable {
                 /// True to opt the group into billing grace periods.
                 package let optIn: Bool?
-                /// "SIX_DAYS" | "SIXTEEN_DAYS" | "THIRTY_DAYS" — Apple's
+                /// "SIX_DAYS" | "SIXTEEN_DAYS" | "THIRTY_DAYS" - Apple's
                 /// fixed enum for grace-period length.
                 package let renewalType: String?
                 /// Duration in days, when Apple surfaces it.
@@ -611,7 +611,7 @@ package struct Wave4ExtrasAPI {
         /// One-shot review submission covering every pending change in a
         /// subscription group. Sibling of the per-subscription
         /// `subscriptionSubmissions` resource Wave 1 already wraps. Create
-        /// only — Apple manages the lifecycle internally; callers poll for
+        /// only - Apple manages the lifecycle internally; callers poll for
         /// state through the standard reviewSubmission feed.
         package struct GroupSubmission: Codable, Sendable {
             package let id: String
@@ -1190,7 +1190,7 @@ package struct Wave4ExtrasAPI {
         }
 
         /// PATCHes the app's tag list for a given territory. Pass the
-        /// full desired set of `tagIDs` — ASC replaces the existing tags
+        /// full desired set of `tagIDs` - ASC replaces the existing tags
         /// wholesale on each call.
         @discardableResult
         package func updateAppTags(
@@ -1641,7 +1641,7 @@ package struct Wave4ExtrasAPI {
             return resp.data
         }
 
-        /// Phase 1 — reserve a new image slot on the advanced experience.
+        /// Phase 1 - reserve a new image slot on the advanced experience.
         package func createImage(
             advancedExperienceID: String,
             fileName: String,
@@ -1677,7 +1677,7 @@ package struct Wave4ExtrasAPI {
             return resp.data
         }
 
-        /// Phase 3 — PATCH `uploaded: true` + sourceFileChecksum to
+        /// Phase 3 - PATCH `uploaded: true` + sourceFileChecksum to
         /// finalize. Apple ignores other attribute changes on this PATCH.
         @discardableResult
         package func updateImage(
@@ -1749,7 +1749,7 @@ package struct Wave4ExtrasAPI {
     //
     // Per-territory availability gate for one-time IAPs. Sibling of
     // `subscriptionAvailabilities` (already in SubscriptionsAPI). Create
-    // and get only — Apple replaces the territory list wholesale on each
+    // and get only - Apple replaces the territory list wholesale on each
     // create, the prior record stays accessible by id for audit.
 
     package struct IAPAvailabilities: Sendable {
@@ -1784,7 +1784,7 @@ package struct Wave4ExtrasAPI {
         }
 
         /// Creates a new availability record. Pass the full set of
-        /// allowed territory ids — Apple treats this as the new
+        /// allowed territory ids - Apple treats this as the new
         /// exhaustive list.
         @discardableResult
         package func createAvailability(
@@ -1834,7 +1834,7 @@ package struct Wave4ExtrasAPI {
     // downloadable payloads (rare in modern apps). InAppPurchasesAPI
     // already wraps the editable `ContentHostings` sub-resource on the
     // IAP itself; this `inAppPurchaseContent` standalone resource carries
-    // the per-content metadata. Read-only here — Apple has not surfaced a
+    // the per-content metadata. Read-only here - Apple has not surfaced a
     // public create or update path.
 
     package struct IAPContents: Sendable {
@@ -1871,7 +1871,7 @@ package struct Wave4ExtrasAPI {
     // One-shot update to an app's per-territory availability. Apple
     // expects callers to pass the full desired territory list every
     // time; the existing list is replaced wholesale. Apple does not
-    // surface a GET on this resource — use
+    // surface a GET on this resource - use
     // PricingAvailabilityAPI.getCurrentAvailability for read.
 
     package struct TerritoryAvailabilities: Sendable {

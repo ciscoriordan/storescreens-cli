@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import StorescreensCore
 
-/// `storescreens iap` — manages App Store Connect In-App Purchases (V2).
+/// `storescreens iap` - manages App Store Connect In-App Purchases (V2).
 ///
 /// Wraps the IAP V2 API surface so callers can manage IAPs without
 /// constructing raw HTTP requests. Each subcommand maps to one operation

@@ -151,7 +151,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "bg_assets_create",
-            description: "POST /backgroundAssets — create the parent record on an app. Apple permits one per app, so a 409 isAlreadySetConflict means the record already exists.",
+            description: "POST /backgroundAssets - create the parent record on an app. Apple permits one per app, so a 409 isAlreadySetConflict means the record already exists.",
             properties: [
                 ("app_id", "string", "numeric ASC app id"),
             ],
@@ -198,7 +198,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "bg_asset_versions_create",
-            description: "POST /backgroundAssetVersions — create a new version on an existing backgroundAsset. After creation, register one or more backgroundAssetUploadFiles and chunk-PUT bytes.",
+            description: "POST /backgroundAssetVersions - create a new version on an existing backgroundAsset. After creation, register one or more backgroundAssetUploadFiles and chunk-PUT bytes.",
             properties: [
                 ("background_asset_id", "string", "parent backgroundAsset id"),
                 ("version", "string", "optional free-form version label (independent of the app's marketing version)"),
@@ -227,7 +227,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "bg_asset_files_create",
-            description: "POST /backgroundAssetUploadFiles — reserve a chunked-upload target inside an existing backgroundAssetVersion. Response includes uploadOperations you PUT chunks to. Optionally include a precomputed sourceFileChecksum (hex MD5).",
+            description: "POST /backgroundAssetUploadFiles - reserve a chunked-upload target inside an existing backgroundAssetVersion. Response includes uploadOperations you PUT chunks to. Optionally include a precomputed sourceFileChecksum (hex MD5).",
             properties: [
                 ("version_id", "string", "parent backgroundAssetVersion id"),
                 ("file_name", "string", "file name (e.g. assets-pack-1.bin)"),
@@ -306,7 +306,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "phased_release_create",
-            description: "POST /appStoreVersionPhasedReleases — start a phased rollout on a version. The 7-day rollout begins once the version goes live; until then the record stays in INACTIVE.",
+            description: "POST /appStoreVersionPhasedReleases - start a phased rollout on a version. The 7-day rollout begins once the version goes live; until then the record stays in INACTIVE.",
             properties: [
                 ("version_id", "string", "appStoreVersion id"),
                 ("phased_release_state", "string", "optional initial state (default Apple-picked)"),
@@ -315,7 +315,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "phased_release_update",
-            description: "PATCH /appStoreVersionPhasedReleases/{id} — change rollout state. Use PAUSED to pause, ACTIVE to resume, COMPLETE to expedite the rollout to 100% immediately.",
+            description: "PATCH /appStoreVersionPhasedReleases/{id} - change rollout state. Use PAUSED to pause, ACTIVE to resume, COMPLETE to expedite the rollout to 100% immediately.",
             properties: [
                 ("id", "string", "appStoreVersionPhasedRelease id"),
                 ("phased_release_state", "string", "new state (PAUSED / ACTIVE / COMPLETE)"),
@@ -324,7 +324,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "phased_release_delete",
-            description: "DELETE /appStoreVersionPhasedReleases/{id} — revert the version to immediate release (no rollout). Safe before the version actually goes live.",
+            description: "DELETE /appStoreVersionPhasedReleases/{id} - revert the version to immediate release (no rollout). Safe before the version actually goes live.",
             properties: [
                 ("id", "string", "appStoreVersionPhasedRelease id"),
             ],
@@ -334,7 +334,7 @@ package enum BackgroundAssetsMCPTools {
         // promotions, releaseRequests, endPreOrders (create-only)
         makeTool(
             name: "version_promotion_create",
-            description: "POST /appStoreVersionPromotions — opt the parent version into App Store editorial promo carousels. One-shot; Apple decides whether the version actually appears.",
+            description: "POST /appStoreVersionPromotions - opt the parent version into App Store editorial promo carousels. One-shot; Apple decides whether the version actually appears.",
             properties: [
                 ("version_id", "string", "appStoreVersion id"),
             ],
@@ -342,7 +342,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "version_release_request_create",
-            description: "POST /appStoreVersionReleaseRequests — release a manually-released version now. The version must be in PENDING_DEVELOPER_RELEASE.",
+            description: "POST /appStoreVersionReleaseRequests - release a manually-released version now. The version must be in PENDING_DEVELOPER_RELEASE.",
             properties: [
                 ("version_id", "string", "appStoreVersion id"),
             ],
@@ -350,7 +350,7 @@ package enum BackgroundAssetsMCPTools {
         ),
         makeTool(
             name: "end_preorder_create",
-            description: "POST /endAppAvailabilityPreOrders — end an app's pre-order period early. Transitions customers from pre-order to live install.",
+            description: "POST /endAppAvailabilityPreOrders - end an app's pre-order period early. Transitions customers from pre-order to live install.",
             properties: [
                 ("app_id", "string", "numeric ASC app id"),
             ],

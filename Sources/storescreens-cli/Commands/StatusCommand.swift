@@ -198,7 +198,7 @@ struct StatusCommand: AsyncParsableCommand {
                 print("    \(stateColored(state))    \(s.id)    submitted \(dateStr)")
             }
         } else if !sortedSubs.isEmpty {
-            print("  Open review submissions: (none — last submission was \(sortedSubs.first?.state ?? "(unknown)"))")
+            print("  Open review submissions: (none - last submission was \(sortedSubs.first?.state ?? "(unknown)"))")
         } else {
             print("  Open review submissions: (none)")
         }
@@ -210,7 +210,7 @@ struct StatusCommand: AsyncParsableCommand {
         }
     }
 
-    /// Picks the most useful hint to show under the status table — answers
+    /// Picks the most useful hint to show under the status table - answers
     /// "what's happening with this app right now and what can I do about it".
     /// Returns nil when nothing actionable jumps out.
     private func nextActionHint(_ report: StatusReport) -> String? {

@@ -15,7 +15,7 @@ package struct BezelCandidate: Sendable {
     package let sourceURL: URL
     package let filename: String          // "iPhone 17 Pro Max - Silver - Portrait.psd"
     package let modelName: String         // "iPhone 17 Pro Max"
-    package let colorway: String?         // "Silver" — nil for MacBook (no separator)
+    package let colorway: String?         // "Silver" - nil for MacBook (no separator)
     package let orientation: BezelOrientation
     package let productFamily: Int        // 1=iPhone, 2=iPad, 6=Mac
     package let canvasSize: CGSize        // PSD canvas in pixels

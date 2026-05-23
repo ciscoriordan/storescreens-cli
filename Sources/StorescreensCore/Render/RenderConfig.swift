@@ -2,7 +2,7 @@ import Foundation
 
 /// Root Codable shape for the `render:` block in `storescreens.yml`. Every
 /// field is optional so the same type serves as both the top-level defaults
-/// and a per-slide override — resolution walks from slide-level → top-level
+/// and a per-slide override - resolution walks from slide-level → top-level
 /// at render time.
 package struct RenderConfig: Codable, Sendable {
     package var enabled: Bool?
@@ -190,14 +190,14 @@ package enum AppearanceVariant<T: Codable & Sendable>: Codable, Sendable {
 package struct BackgroundConfig: Codable, Sendable {
     /// Path to background image (may be variant per appearance).
     package var image: AppearanceVariant<String>?
-    /// Background fill — a single hex for a solid color, or an array of
+    /// Background fill - a single hex for a solid color, or an array of
     /// hexes for a vertical gradient (top → bottom). Supports appearance
     /// variants via `{ light, dark }`.
     package var color: AppearanceVariant<BackgroundColor>?
     package var align: BackgroundAlign?
     package var fit: BackgroundFit?
     /// Procedural pattern layer drawn on top of the color/gradient base.
-    /// Independent from `image:` — a background can have both a gradient
+    /// Independent from `image:` - a background can have both a gradient
     /// and a pattern, but if an image is also set the image wins.
     package var pattern: PatternConfig?
 
@@ -239,7 +239,7 @@ package struct PatternConfig: Codable, Sendable {
     }
 }
 
-/// Built-in procedural patterns. Extend carefully — the set is stable and
+/// Built-in procedural patterns. Extend carefully - the set is stable and
 /// templates reference them by lower_snake_case name in YAML.
 package enum BackgroundPattern: String, Codable, Sendable, CaseIterable {
     case topographic
@@ -680,7 +680,7 @@ package struct ChromeConfig: Codable, Sendable {
     package var paddingPct: Double?
     /// How much of the device/screenshot to show. `width` scales so the
     /// content fills the available width (device may extend past the bottom
-    /// of the canvas — common App Store style). `height` fits fully
+    /// of the canvas - common App Store style). `height` fits fully
     /// vertically. `contain` fits both dimensions inside the padded rect.
     /// Default: `width`.
     package var fit: ChromeFit?
@@ -692,7 +692,7 @@ package struct ChromeConfig: Codable, Sendable {
     /// goes to the device. Use this to guarantee the device sits at the
     /// same y-position across slides regardless of how much content sits
     /// above it (e.g. when one slide has a table + title and another only
-    /// has a caption — they should both put the device at the same y).
+    /// has a caption - they should both put the device at the same y).
     /// Value is the percentage from canvas TOP (0–100).
     package var topPct: Double?
     /// Lock the device to occupy a fixed percentage of the canvas height.
@@ -701,7 +701,7 @@ package struct ChromeConfig: Codable, Sendable {
     /// remains after `above_title` + `middle_slot` + `below_subtitle`
     /// overlays are subtracted from `(100 - device_height_pct)%` of the
     /// canvas. Use this to enforce a uniform device size across slides
-    /// whose overlay bands differ — slides with bigger overlays get a
+    /// whose overlay bands differ - slides with bigger overlays get a
     /// smaller caption band, but the device remains the same size.
     /// Value is the percentage of the canvas height the device fills (0–100).
     /// Takes precedence over `top_pct` when both are set.
@@ -779,7 +779,7 @@ package enum ChromeCornerRadius: Codable, Sendable {
 
     package init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
-        // Try numeric first — YAML scalars can be read as String or Double,
+        // Try numeric first - YAML scalars can be read as String or Double,
         // so preferring Double avoids mis-routing numbers into the String branch.
         if let n = try? c.decode(Double.self) {
             self = .fixed(n)

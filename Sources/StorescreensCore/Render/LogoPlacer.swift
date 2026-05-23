@@ -4,9 +4,9 @@ import CoreGraphics
 import ImageIO
 
 /// Places a logo image at the top of a slide. Placement rules (from config):
-///   first_only — only render on the first slide per (device, locale, appearance) combo
-///   all        — render on every slide
-///   none       — skip entirely
+///   first_only - only render on the first slide per (device, locale, appearance) combo
+///   all        - render on every slide
+///   none       - skip entirely
 ///
 /// Sizing: `max_height_pct` of canvas height, aspect preserved.
 /// Position: horizontally centered, `top_padding_pct` from the top.
@@ -37,7 +37,7 @@ package struct LogoPlacer {
         return canvasSize.height * CGFloat(maxPct + topPct) / 100.0
     }
 
-    /// Draws the logo into `ctx`. Safe to call unconditionally — returns
+    /// Draws the logo into `ctx`. Safe to call unconditionally - returns
     /// without drawing when config / placement rules say no.
     ///
     /// `verticalCenterY` is the bottom-left-origin Y at which the logo
@@ -45,7 +45,7 @@ package struct LogoPlacer {
     /// computed an "equidistant from canvas top and device top" target
     /// Y (accounting for chrome padding below the caption reservation)
     /// and we honor it. When nil we fall back to centering the logo
-    /// inside its own reservation band — same behavior as before the
+    /// inside its own reservation band - same behavior as before the
     /// caller-controlled override existed.
     package func drawLogo(
         _ config: LogoConfig?,
@@ -80,7 +80,7 @@ package struct LogoPlacer {
         } else {
             // Center the logo vertically within its reservation band
             // (the top `maxHeightPct + topPaddingPct` percent of the
-            // canvas) — default behavior when the caller hasn't
+            // canvas) - default behavior when the caller hasn't
             // computed an equidistant target.
             let reservedHeight = canvasSize.height * (maxHeightPct + topPaddingPct) / 100.0
             centerY = canvasSize.height - reservedHeight / 2

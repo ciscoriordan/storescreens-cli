@@ -26,7 +26,7 @@ import CryptoKit
 ///   2. POST `/buildUploadFiles` with the buildUpload relationship + the
 ///      file metadata (`fileName`, `fileSize`, optional precomputed
 ///      `sourceFileChecksum`). Apple responds with the file resource
-///      and its `uploadOperations` array — same shape as screenshots/
+///      and its `uploadOperations` array - same shape as screenshots/
 ///      previews/encryption-docs.
 ///   3. PUT each chunk to its `uploadOperations[i].url` with the
 ///      headers Apple specified. These URLs are pre-signed; no ASC
@@ -97,7 +97,7 @@ package struct BuildUploadsAPI {
     /// buildUpload, every file that hung off it, and (when ASC processing
     /// finished within the caller's poll window) the resulting `Build`
     /// resource. The same `BuildsAPI.Build` type the rest of the SDK
-    /// already uses — buildUploads do not introduce a new build type;
+    /// already uses - buildUploads do not introduce a new build type;
     /// they're just a fresh upload pipeline for the existing one.
     package typealias Build = BuildsAPI.Build
 
@@ -110,7 +110,7 @@ package struct BuildUploadsAPI {
         /// The processed Build resource on the app, if ASC finished
         /// binary processing within the caller's poll window. Nil means
         /// the .ipa is uploaded successfully but ASC is still processing
-        /// (or processing failed — in which case `upload.attributes?.state`
+        /// (or processing failed - in which case `upload.attributes?.state`
         /// will be `FAILED` / `INVALID` and `errorMessages` populated).
         package let build: Build?
     }
@@ -146,7 +146,7 @@ package struct BuildUploadsAPI {
 
     /// Maximum total wait time when polling the buildUpload for a
     /// terminal `state` (VALID / INVALID / FAILED) inside `uploadIpa`.
-    /// Tuned for typical ASC processing — most builds reach VALID inside
+    /// Tuned for typical ASC processing - most builds reach VALID inside
     /// a couple of minutes, big binaries can take 10+. Callers can pass
     /// their own value via `processingTimeout`.
     package static let defaultProcessingTimeout: TimeInterval = 15 * 60
@@ -156,7 +156,7 @@ package struct BuildUploadsAPI {
     /// .ipa file. Returns the resulting `Build` resource once ASC
     /// finishes processing; if processing has not completed within
     /// `processingTimeout` (default 15 minutes), the helper returns
-    /// after the file is committed and ASC has accepted ownership — at
+    /// after the file is committed and ASC has accepted ownership - at
     /// that point the buildUpload is in a terminal "uploaded" state but
     /// the Build resource may not exist yet.
     ///
@@ -222,7 +222,7 @@ package struct BuildUploadsAPI {
         }
         let fileName = path.lastPathComponent
 
-        // 2. Phase 1 — POST /buildUploads with the file metadata + app
+        // 2. Phase 1 - POST /buildUploads with the file metadata + app
         //    relationship. Apple may return uploadOperations directly on
         //    the buildUpload (older spec) or require a follow-up
         //    POST /buildUploadFiles (newer spec). We handle both shapes.
@@ -232,7 +232,7 @@ package struct BuildUploadsAPI {
             fileSize: fileSize
         )
 
-        // 3. Phase 2 — POST /buildUploadFiles. ASC returns the file with
+        // 3. Phase 2 - POST /buildUploadFiles. ASC returns the file with
         //    the per-chunk uploadOperations populated.
         let md5 = try Self.fileMD5Hex(path: path)
         let uploadFile = try await files.create(
@@ -250,7 +250,7 @@ package struct BuildUploadsAPI {
             )
         }
 
-        // 4. Phase 3 — PUT each chunk. We stream from disk with
+        // 4. Phase 3 - PUT each chunk. We stream from disk with
         //    FileHandle so multi-GB .ipas don't have to live in memory.
         try await Self.uploadChunks(
             client: client,
@@ -260,13 +260,13 @@ package struct BuildUploadsAPI {
             progress: progress
         )
 
-        // 5. Phase 4 — PATCH commit on the file.
+        // 5. Phase 4 - PATCH commit on the file.
         let committedFile = try await files.commit(
             id: uploadFile.id,
             sourceFileChecksum: md5
         )
 
-        // 6. Phase 5 — poll the buildUpload for a terminal state, then
+        // 6. Phase 5 - poll the buildUpload for a terminal state, then
         //    look up the matching Build resource on the app.
         let terminalUpload = try await waitForBuildUploadTerminalState(
             id: buildUpload.id,
@@ -289,7 +289,7 @@ package struct BuildUploadsAPI {
     // MARK: - Polling helpers
 
     /// States Apple uses for the buildUpload's `state` attribute that
-    /// signal "client work is done — ASC has taken ownership of the
+    /// signal "client work is done - ASC has taken ownership of the
     /// bytes." After any of these, polling for further progress only
     /// makes sense via the resulting `Build` resource (BuildsAPI).
     package static let terminalBuildUploadStates: Set<String> = [
@@ -473,7 +473,7 @@ package struct BuildUploadsAPI {
                 /// (every file's bytes accepted), "PROCESSING" (ASC
                 /// validating the binary), "VALID" (a corresponding
                 /// Build resource now exists), "INVALID" / "FAILED"
-                /// (rejected — inspect `errorMessages`).
+                /// (rejected - inspect `errorMessages`).
                 package let state: String?
                 package let fileName: String?
                 package let fileSize: Int64?
@@ -523,7 +523,7 @@ package struct BuildUploadsAPI {
                 )
                 return resp.data
             } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
-                // 409 "already set" — ASC has an open buildUpload that
+                // 409 "already set" - ASC has an open buildUpload that
                 // matches. Re-throw so the caller can decide whether to
                 // recover by listing + reusing, or fail loudly.
                 throw e
@@ -545,7 +545,7 @@ package struct BuildUploadsAPI {
             }
         }
 
-        /// GET `/buildUploads` — global list, filtered by app id. Used
+        /// GET `/buildUploads` - global list, filtered by app id. Used
         /// by the relationship endpoint helper on `BuildUploadsAPI` and
         /// by CLI listing.
         package func list(appID: String, limit: Int = 50) async throws -> [BuildUpload] {

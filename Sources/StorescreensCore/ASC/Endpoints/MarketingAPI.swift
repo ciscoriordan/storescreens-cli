@@ -30,7 +30,7 @@ package enum MarketingAssetUpload {
         }
     }
 
-    /// Phase 2 — push each pre-signed chunk to its URL. `fileData` is the
+    /// Phase 2 - push each pre-signed chunk to its URL. `fileData` is the
     /// whole file; we slice by offset+length per operation. Order matters
     /// only insofar as Apple needs all chunks present before the PATCH;
     /// the chunks themselves are independent.
@@ -209,7 +209,7 @@ package struct AppPreviewsAPI {
         try await client.delete(path: "appPreviews/\(id)")
     }
 
-    /// Phase 1 — reserve. Returns the preview with `uploadOperations`.
+    /// Phase 1 - reserve. Returns the preview with `uploadOperations`.
     package func reservePreview(
         setID: String,
         fileName: String,
@@ -247,7 +247,7 @@ package struct AppPreviewsAPI {
         return resp.data
     }
 
-    /// Phase 3 — finalize. PATCH `uploaded: true` + checksum.
+    /// Phase 3 - finalize. PATCH `uploaded: true` + checksum.
     @discardableResult
     package func confirmPreviewUpload(
         previewID: String,
@@ -962,7 +962,7 @@ package struct AppClipsAPI {
 
 /// App Store Connect endpoints for custom product pages (up to 35 alternate
 /// product page variants per app, each with their own screenshots / preview
-/// videos / promo text — used to A/B different campaign landing experiences).
+/// videos / promo text - used to A/B different campaign landing experiences).
 /// Each `appCustomProductPage` has one editable + zero-or-more historical
 /// `appCustomProductPageVersions`. Each version has per-locale
 /// `appCustomProductPageLocalizations` that hold the screenshot sets +
@@ -1248,7 +1248,7 @@ package struct CustomProductPagesAPI {
 // MARK: - App Events
 
 /// App Store Connect endpoints for App Events (in-app events shown on the
-/// App Store — tournaments, premieres, new content drops). Each `appEvent`
+/// App Store - tournaments, premieres, new content drops). Each `appEvent`
 /// has per-locale `appEventLocalizations` plus `appEventScreenshots` and
 /// `appEventVideoClips` (both uploaded via the 3-phase reservation flow).
 ///
@@ -1320,7 +1320,7 @@ package struct AppEventsAPI {
         }
     }
 
-    /// Fields shared between create and update. All optional — only non-nil
+    /// Fields shared between create and update. All optional - only non-nil
     /// values are PATCHed onto ASC. Mirrors the AppStoreReviewDetail pattern
     /// in AppsAPI.swift for the same reason: keeps unchanged attributes
     /// untouched.

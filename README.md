@@ -1125,10 +1125,10 @@ When the current render's locale matches a key, that entry replaces the slide's 
 
 ## App Store search preview
 
-`storescreens search-preview` renders faithful iPhone App Store mockups so you can see how the app will read in search results — and on its detail page — before you ship. SF Pro throughout, drawn natively in Swift Core Graphics. Two modes:
+`storescreens search-preview` renders faithful iPhone App Store mockups so you can see how the app will read in search results - and on its detail page - before you ship. SF Pro throughout, drawn natively in Swift Core Graphics. Two modes:
 
-- **Search row** — icon, three-line name/subtitle/stars stack next to the icon, category icons + developer in the meta row, 3-up screenshot strip.
-- **Detail page** — what users see after tapping a search result. Hero row + GET, stats strip (ratings · age · category · developer), What's New (version + release notes with `more` link), Preview screenshots, About This App (description with `more` link).
+- **Search row** - icon, three-line name/subtitle/stars stack next to the icon, category icons + developer in the meta row, 3-up screenshot strip.
+- **Detail page** - what users see after tapping a search result. Hero row + GET, stats strip (ratings · age · category · developer), What's New (version + release notes with `more` link), Preview screenshots, About This App (description with `more` link).
 
 <table>
   <tr>
@@ -1141,7 +1141,7 @@ When the current render's locale matches a key, that entry replaces the slide's 
   </tr>
 </table>
 
-Every input is sourced from elsewhere in the pipeline — no copy to maintain twice:
+Every input is sourced from elsewhere in the pipeline - no copy to maintain twice:
 
 ```yaml
 search_preview:
@@ -1321,7 +1321,7 @@ App Store Connect splits per-locale metadata across two resources, and `submit` 
 | `support_url.txt` | `appStoreVersionLocalizations.supportUrl` |
 | `marketing_url.txt` | `appStoreVersionLocalizations.marketingUrl` |
 
-`appInfoLocalizations` lives on the app-level `appInfo` record, which can only be edited while the app has a version in an editable state (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `METADATA_REJECTED`, etc.). If the only existing version is `READY_FOR_SALE`, App Store Connect won't accept `name`/`subtitle`/privacy URL PATCHes; `submit` detects the missing editable `appInfo`, logs `Skipped name/subtitle update — no editable appInfo (create a new editable version first)`, and proceeds with the version-level fields. To update name/subtitle on an already-released app, bump `submit.create_version` so `submit` creates a new editable version (which auto-creates a fresh editable `appInfo`).
+`appInfoLocalizations` lives on the app-level `appInfo` record, which can only be edited while the app has a version in an editable state (`PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`, `METADATA_REJECTED`, etc.). If the only existing version is `READY_FOR_SALE`, App Store Connect won't accept `name`/`subtitle`/privacy URL PATCHes; `submit` detects the missing editable `appInfo`, logs `Skipped name/subtitle update - no editable appInfo (create a new editable version first)`, and proceeds with the version-level fields. To update name/subtitle on an already-released app, bump `submit.create_version` so `submit` creates a new editable version (which auto-creates a fresh editable `appInfo`).
 
 `review_notes.txt` and the `review_contact_*.txt` / `review_demo_account_*.txt` files feed the version-level `appStoreReviewDetails` resource (the "App Review Information" panel in App Store Connect): free-form notes Apple's reviewers see when triaging, plus contact info Apple uses if they need to reach you during review, plus an optional demo-account login. These fields are NOT per-locale on Apple's side, so put them under one locale (any locale, typically your primary). If they appear in multiple locale folders, the alphabetically-first one wins and the rest emit a warning.
 
@@ -1429,7 +1429,7 @@ Four values:
 | `non_exempt` | `usesNonExemptEncryption: true` | App uses non-exempt encryption. You're responsible for filing the BIS export paperwork separately. |
 | `skip` | (not PATCHed) | Leave the question untouched. The build shows "Missing Compliance" in ASC until you answer manually. |
 
-When `none` or `exempt_algorithms` is used, you can also bake the answer into the binary at build time by setting `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO` in your Xcode target's Info.plist — `storescreens upload-build` does this by default for new archives so the question is pre-answered before the build even uploads.
+When `none` or `exempt_algorithms` is used, you can also bake the answer into the binary at build time by setting `INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO` in your Xcode target's Info.plist - `storescreens upload-build` does this by default for new archives so the question is pre-answered before the build even uploads.
 
 ### Pricing and availability
 
@@ -2455,13 +2455,13 @@ one MCP namespace plus one CLI sub-tree.
 
 Three families are covered:
 
-- **Sales and Trends** — daily / weekly / monthly / yearly reports of
+- **Sales and Trends** - daily / weekly / monthly / yearly reports of
   units sold, installs, subscriber events, redemption events, and the
   related sub-types. Apple ships these as gzipped TSV; storescreens
   decompresses and returns typed rows.
-- **Finance** — monthly per-region revenue rollups (`FINANCIAL`,
+- **Finance** - monthly per-region revenue rollups (`FINANCIAL`,
   `FINANCE_DETAIL`). Gzipped CSV under the hood; same parsed-row surface.
-- **App Analytics** — the newer report-request flow. Create an
+- **App Analytics** - the newer report-request flow. Create an
   `analyticsReportRequest`, list the `analyticsReports` it exposes, pick
   an instance for the date you care about, list its segments, and
   download each segment (also gzipped CSV).
@@ -2477,31 +2477,31 @@ All endpoints require App Store Connect API credentials. Run
 
 Sales:
 
-- `reports_sales_get` — `frequency`, `report_date`, `report_type`,
+- `reports_sales_get` - `frequency`, `report_date`, `report_type`,
   `report_sub_type`, `vendor_number`, optional `version`, `summary_only`.
 
 Finance:
 
-- `reports_finance_get` — `region`, `report_date`, `vendor_number`,
+- `reports_finance_get` - `region`, `report_date`, `vendor_number`,
   `report_type`, `summary_only`.
 
 App Analytics:
 
-- `reports_analytics_request_create` — `app_id`, `access_type`
+- `reports_analytics_request_create` - `app_id`, `access_type`
   (`ONE_TIME_SNAPSHOT` or `ONGOING`).
-- `reports_analytics_request_list` — `app_id`.
-- `reports_analytics_request_delete` — `request_id`.
-- `reports_analytics_reports_list` — `request_id`.
-- `reports_analytics_instances_list` — `report_id`.
-- `reports_analytics_segments_list` — `instance_id`.
-- `reports_analytics_segment_download` — `segment_url` or `segment_id`,
+- `reports_analytics_request_list` - `app_id`.
+- `reports_analytics_request_delete` - `request_id`.
+- `reports_analytics_reports_list` - `request_id`.
+- `reports_analytics_instances_list` - `report_id`.
+- `reports_analytics_segments_list` - `instance_id`.
+- `reports_analytics_segment_download` - `segment_url` or `segment_id`,
   `summary_only`. Downloads, gunzips, and parses the segment to CSV rows.
 
 Performance + diagnostics:
 
-- `reports_metrics_perfpower_list` — `app_id` or `build_id`.
-- `reports_metrics_diagnostics_list` — `build_id`.
-- `reports_metrics_diagnostics_get` — `signature_id`, `include_logs`.
+- `reports_metrics_perfpower_list` - `app_id` or `build_id`.
+- `reports_metrics_diagnostics_list` - `build_id`.
+- `reports_metrics_diagnostics_get` - `signature_id`, `include_logs`.
 
 Each tool returns pretty-printed JSON in a single text block. Errors come
 back with `isError: true` and an ASC error envelope when available.
@@ -2588,7 +2588,7 @@ look up its build id under the App Store Connect builds list.
 
 ### Implementation notes
 
-- Sales and finance responses are not JSON — they are gzipped TSV / CSV
+- Sales and finance responses are not JSON - they are gzipped TSV / CSV
   file bodies that don't go through the JSON:API decoder. The
   `ReportsAPI` namespace mints a JWT via `ASCJWTSigner.sign` and uses
   `URLSession` directly for those calls, then shells out to
@@ -4446,7 +4446,7 @@ This is the API-native alternative to the existing `storescreens upload-build` c
 | Resource | Purpose |
 |----------|---------|
 | `buildUploads` | Outer reservation. One per .ipa upload attempt. Scopes the upload to an app and exposes processing state (`PENDING`, `UPLOADED`, `PROCESSING`, `VALID`, `INVALID`, `FAILED`) and any `errorMessages`. |
-| `buildUploadFiles` | Per-file chunked-upload target inside a buildUpload. Each file's response includes `uploadOperations` — the signed PUT URLs, headers, offsets, and lengths that the client uses to push bytes. Most uploads have a single file (the .ipa). |
+| `buildUploadFiles` | Per-file chunked-upload target inside a buildUpload. Each file's response includes `uploadOperations` - the signed PUT URLs, headers, offsets, and lengths that the client uses to push bytes. Most uploads have a single file (the .ipa). |
 | `apps/{id}/buildUploads` | Relationship listing for an app, surfacing in-flight and completed reservations. |
 
 ### MCP tools
@@ -4545,10 +4545,10 @@ If only a subset of chunks failed to land, the file's `state` stays `AWAITING_UP
 
 | Concern | `upload-build` (altool) | `build-uploads upload-ipa` (API) |
 |---------|-------------------------|----------------------------------|
-| Local validation | Yes — altool runs Apple's pre-upload checks. | No — ASC validates server-side only. |
-| Xcode dependency | Yes — needs a pinned non-beta Xcode. | No — pure HTTPS. |
-| Battle-tested | Yes — every Xcode submission goes through altool. | New (spec v4.1, October 2025). |
-| Resumable | No — altool runs to completion. | Yes — `buildUploads` can be re-listed and `buildUploadFiles` re-committed. |
+| Local validation | Yes - altool runs Apple's pre-upload checks. | No - ASC validates server-side only. |
+| Xcode dependency | Yes - needs a pinned non-beta Xcode. | No - pure HTTPS. |
+| Battle-tested | Yes - every Xcode submission goes through altool. | New (spec v4.1, October 2025). |
+| Resumable | No - altool runs to completion. | Yes - `buildUploads` can be re-listed and `buildUploadFiles` re-committed. |
 | Recommended for production | Yes. | Use altool unless you specifically need API-only. |
 
 The altool path remains the default. If you do not have a specific reason to drive the API directly, stick with `storescreens upload-build`.
@@ -4696,7 +4696,7 @@ all three phases including local MD5 streaming.
 | `bg_assets_list` | List backgroundAssets for an app (filter[app]) |
 | `bg_assets_list_for_app` | List via apps/{id}/backgroundAssets relationship |
 | `bg_assets_get` | Fetch a single backgroundAsset by id |
-| `bg_assets_create` | POST /backgroundAssets — create parent record on app |
+| `bg_assets_create` | POST /backgroundAssets - create parent record on app |
 | `bg_assets_update` | PATCH state attributes (internal/external beta, app store) |
 | `bg_assets_delete` | DELETE /backgroundAssets/{id} (cascades to children) |
 | `bg_asset_versions_list` | List versions on a backgroundAsset |
@@ -4704,7 +4704,7 @@ all three phases including local MD5 streaming.
 | `bg_asset_versions_create` | POST /backgroundAssetVersions on a backgroundAsset |
 | `bg_asset_files_list` | List backgroundAssetUploadFiles on a version |
 | `bg_asset_files_get` | Fetch a single file (inspect uploadOperations + state) |
-| `bg_asset_files_create` | POST /backgroundAssetUploadFiles — reserve chunked-upload target |
+| `bg_asset_files_create` | POST /backgroundAssetUploadFiles - reserve chunked-upload target |
 | `bg_asset_files_commit` | PATCH uploaded:true + sourceFileChecksum |
 | `bg_asset_files_upload` | High-level chunked upload (create + chunk-PUT + commit) |
 | `bg_asset_app_store_release_get` | Read App Store delivery state (v4.1) |
@@ -5371,17 +5371,17 @@ leaf, and resolve credentials from env vars or
 It does not edit anything `SubscriptionsAPI` already exposes; it adds
 the resources Apple introduced after the original wrapper landed:
 
-- `subscriptionIntroductoryOffers` — intro offers for new subscribers,
+- `subscriptionIntroductoryOffers` - intro offers for new subscribers,
   scoped per (subscription, territory, price-point). Distinct from
   `subscriptionPromotionalOffers` (already in Wave 1), which targets
   existing subscribers.
-- `winBackOffers` — incentives for lapsed subscribers, with a separate
+- `winBackOffers` - incentives for lapsed subscribers, with a separate
   per-territory price relationship (`winBackOfferPrices`).
-- `subscriptionGracePeriods` — billing grace-period config on a whole
+- `subscriptionGracePeriods` - billing grace-period config on a whole
   subscription group; read and update.
-- `subscriptionGroupSubmissions` — single-shot submit-for-review
+- `subscriptionGroupSubmissions` - single-shot submit-for-review
   covering every pending change in a subscription group.
-- `subscriptionPricePoints` GET by id — fills in the read path missing
+- `subscriptionPricePoints` GET by id - fills in the read path missing
   from the Wave 1 wrapper (which only listed price points scoped to a
   subscription).
 
@@ -5443,9 +5443,9 @@ storescreens subs-extras group-submission create --group-id 1112223334
 `Wave4ExtrasAPI.CustomerReviewExtras` adds the two review surfaces the
 base `CustomerReviewsAPI` does not cover:
 
-- `customerReviewSummarizations` — Apple Intelligence generated
+- `customerReviewSummarizations` - Apple Intelligence generated
   per-(locale, territory) rollup summaries. READ-ONLY.
-- `appStoreReviewAttachments` — developer-supplied supporting files
+- `appStoreReviewAttachments` - developer-supplied supporting files
   (sign-in walkthroughs, network captures, etc.) attached to an App
   Review submission. CRUD plus the standard 3-phase upload pattern
   Apple uses for assets.
@@ -5492,25 +5492,25 @@ storescreens review-extras attachments upload \
 
 `Wave4ExtrasAPI` namespaces a grab-bag of small late-2025 resources:
 
-- `merchantIds` — Apple Pay merchant identifiers (distinct from
+- `merchantIds` - Apple Pay merchant identifiers (distinct from
   `merchantDomains` which Wave 2's ApplePayAPI already covers);
   includes a `merchantIdCertificates` list relationship.
-- `nominations` — App Store editorial feature nomination submissions.
-- `appTags` — Per-(app, territory) tags from Apple's editorial taxonomy.
-- `endUserLicenseAgreements` — Per-app custom EULA; an override of
+- `nominations` - App Store editorial feature nomination submissions.
+- `appTags` - Per-(app, territory) tags from Apple's editorial taxonomy.
+- `endUserLicenseAgreements` - Per-app custom EULA; an override of
   Apple's standard EULA.
-- `androidToIosAppMappingDetails` — Metadata for Android-to-iOS user
+- `androidToIosAppMappingDetails` - Metadata for Android-to-iOS user
   migration flows.
-- `actors` — Read-only registry of in-app actors (niche, mostly games).
-- App price points V3 — Get by id + cross-territory `equalizations`.
-- `appClipAdvancedExperienceImages` — Sibling of the App Clip advanced
+- `actors` - Read-only registry of in-app actors (niche, mostly games).
+- App price points V3 - Get by id + cross-territory `equalizations`.
+- `appClipAdvancedExperienceImages` - Sibling of the App Clip advanced
   experiences (already in Wave 1's MarketingAPI); standard 3-phase
   upload.
-- `inAppPurchaseAvailabilities` — Per-territory availability for
+- `inAppPurchaseAvailabilities` - Per-territory availability for
   one-time IAPs (subscription siblings live in SubscriptionsAPI).
-- `inAppPurchaseContents` — Apple-hosted content metadata for IAPs;
+- `inAppPurchaseContents` - Apple-hosted content metadata for IAPs;
   read-only.
-- `territoryAvailabilities` — Single-shot update of an (app, territory)
+- `territoryAvailabilities` - Single-shot update of an (app, territory)
   pair.
 
 #### MCP tools

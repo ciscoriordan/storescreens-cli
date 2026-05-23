@@ -83,7 +83,7 @@ package struct CaptureConfig: Codable {
     /// the post-capture pipeline renders a faithful iPhone App Store search
     /// result row (icon + name + subtitle + stars + 3 screenshots) wrapped in
     /// an iPhone bezel + status bar, sourced from existing capture/metadata
-    /// inputs. Inspired by ezscreenshots' Search Preview tool — gives an
+    /// inputs. Inspired by ezscreenshots' Search Preview tool - gives an
     /// honest preview of how the app will look when surfaced in App Store
     /// search before you ship.
     package var searchPreview: SearchPreviewConfig?

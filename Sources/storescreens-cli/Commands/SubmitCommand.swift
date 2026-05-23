@@ -157,9 +157,9 @@ struct SubmitCommand: AsyncParsableCommand {
         if let skip = report.appInfoSkipped {
             switch skip {
             case .noEditableAppInfo:
-                print("  appInfo updates: skipped — no editable appInfo (create a new editable version first)")
+                print("  appInfo updates: skipped - no editable appInfo (create a new editable version first)")
             case .lookupFailed(let message):
-                print("  appInfo updates: skipped — appInfos lookup failed: \(message)")
+                print("  appInfo updates: skipped - appInfos lookup failed: \(message)")
             }
         }
         if !report.screenshotUploads.isEmpty {

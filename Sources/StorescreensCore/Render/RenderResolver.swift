@@ -216,7 +216,7 @@ package enum RenderResolver {
     static func mergePattern(base: PatternConfig?, override: PatternConfig?) -> PatternConfig? {
         guard override != nil || base != nil else { return nil }
         // `pattern` is required on PatternConfig (no nullable enum), so fall
-        // through to `.topographic` only as an unreachable failsafe — either
+        // through to `.topographic` only as an unreachable failsafe - either
         // side present means its pattern wins by position.
         let chosen = override?.pattern ?? base?.pattern ?? .topographic
         return PatternConfig(

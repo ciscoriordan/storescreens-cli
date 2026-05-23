@@ -7,7 +7,7 @@ import CryptoKit
 /// covers only the V2 surface (`inAppPurchases/v2` create/update, plus the
 /// satellite resources that hang off it). Subscriptions are a separate
 /// resource family (`subscriptionGroups`, `subscriptions`) and are NOT
-/// covered here — V2 IAP only handles consumable, non-consumable, and
+/// covered here - V2 IAP only handles consumable, non-consumable, and
 /// non-renewing subscription product types.
 ///
 /// Resources covered:
@@ -36,7 +36,7 @@ package struct InAppPurchasesAPI {
         self.client = client
     }
 
-    // Nested namespaces — each maps to one Apple resource family.
+    // Nested namespaces - each maps to one Apple resource family.
     package var purchases: Purchases { Purchases(client: client) }
     package var localizations: Localizations { Localizations(client: client) }
     package var pricePoints: PricePoints { PricePoints(client: client) }
@@ -97,9 +97,9 @@ package struct InAppPurchasesAPI {
     /// Operations on the V2 inAppPurchases resource.
     ///
     /// Apple uses three product types here:
-    ///   - `CONSUMABLE` — used up on purchase (e.g. in-game coins)
-    ///   - `NON_CONSUMABLE` — permanent unlock (e.g. ad-removal)
-    ///   - `NON_RENEWING_SUBSCRIPTION` — fixed duration, no auto-renew
+    ///   - `CONSUMABLE` - used up on purchase (e.g. in-game coins)
+    ///   - `NON_CONSUMABLE` - permanent unlock (e.g. ad-removal)
+    ///   - `NON_RENEWING_SUBSCRIPTION` - fixed duration, no auto-renew
     /// Auto-renewing subscriptions are a different resource family
     /// (`subscriptionGroups`, `subscriptions`) and are not handled here.
     package struct Purchases: Sendable {
@@ -124,7 +124,7 @@ package struct InAppPurchasesAPI {
                 /// "APPROVED" | "REJECTED" | "DEVELOPER_REMOVED_FROM_SALE" | "REMOVED_FROM_SALE".
                 package let state: String?
                 /// Customer-facing pricing model: "PAY_AS_YOU_GO" | "PAY_UP_FRONT" | "FREE_OF_CHARGE".
-                /// Not always populated — depends on the product type.
+                /// Not always populated - depends on the product type.
                 package let reviewNote: String?
                 package let familySharable: Bool?
                 /// Only meaningful for NON_RENEWING_SUBSCRIPTION; ISO 8601 duration.
@@ -495,7 +495,7 @@ package struct InAppPurchasesAPI {
                 /// Developer's take in the same currency.
                 package let proceeds: String?
                 /// ISO 4217 currency code, e.g. "USD". Some payloads carry the
-                /// territory under a relationships block instead — keep this
+                /// territory under a relationships block instead - keep this
                 /// nullable.
                 package let priceTier: String?
             }
@@ -503,7 +503,7 @@ package struct InAppPurchasesAPI {
 
         /// Lists price points for an IAP, optionally filtered to a single
         /// territory. Pass `territoryID` like "USA" (ISO 3166-1 alpha-3) to
-        /// scope the list — without it you'll get every territory's tier,
+        /// scope the list - without it you'll get every territory's tier,
         /// which is hundreds of rows per IAP.
         package func list(
             iapID: String,
@@ -643,7 +643,7 @@ package struct InAppPurchasesAPI {
         /// full desired list of (territory, price-point) tuples.
         ///
         /// `baseTerritoryID` is the territory whose price Apple uses to
-        /// compute equivalents for any territory NOT in `prices` — usually
+        /// compute equivalents for any territory NOT in `prices` - usually
         /// "USA" for English-first apps.
         @discardableResult
         package func set(
@@ -1116,7 +1116,7 @@ package struct InAppPurchasesAPI {
             }
         }
 
-        /// Step 1 of upload — reserve a slot.
+        /// Step 1 of upload - reserve a slot.
         @discardableResult
         package func reserve(
             iapID: String,
@@ -1236,7 +1236,7 @@ package struct InAppPurchasesAPI {
     /// Different from `Images` (the IAP detail page) and from
     /// `PromotedPurchaseImages` (the artwork tied to a `promotedPurchases`
     /// record). Note Apple's docs do NOT list an update operation for this
-    /// resource — only list/create/delete — matching the deliverable spec.
+    /// resource - only list/create/delete - matching the deliverable spec.
     package struct PromotionalImages: Sendable {
         package let client: ASCClient
 

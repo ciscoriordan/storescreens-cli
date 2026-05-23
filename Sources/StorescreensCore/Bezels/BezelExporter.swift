@@ -62,7 +62,7 @@ package enum BezelExporter {
 
         // 2. Redraw into a transparent pixel-dimension bitmap, then clear the
         //    Screen rect to punch a hole. CGContext uses bottom-left origin;
-        //    the PSD bbox is top-left — flip Y on the clear rect only.
+        //    the PSD bbox is top-left - flip Y on the clear rect only.
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         guard let ctx = CGContext(
@@ -125,7 +125,7 @@ package enum BezelExporter {
     /// export time lines up exactly with the rounded clip applied to the
     /// screenshot at render time.
     ///
-    /// Values tuned against Apple's shipped bezels — larger than a pure
+    /// Values tuned against Apple's shipped bezels - larger than a pure
     /// "display corner radius" reading because the bezel PSDs stylize the
     /// display opening with a slightly rounder arc than the hardware spec.
     package static func deviceScreenCornerRadius(productFamily: Int, screenSize: CGSize) -> CGFloat {

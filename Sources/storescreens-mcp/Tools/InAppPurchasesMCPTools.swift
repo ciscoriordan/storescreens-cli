@@ -499,7 +499,7 @@ package enum InAppPurchasesMCPTools {
 
     /// Routes any `iap_*` tool call to the appropriate handler. Returns a
     /// `CallTool.Result` with `isError: true` and the message in the text
-    /// payload when the call fails for any reason — auth, network, ASC 4xx.
+    /// payload when the call fails for any reason - auth, network, ASC 4xx.
     package static func handle(_ params: CallTool.Parameters) async throws -> CallTool.Result {
         do {
             let client = try makeClient()

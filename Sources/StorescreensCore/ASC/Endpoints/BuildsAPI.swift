@@ -80,7 +80,7 @@ package struct BuildsAPI {
     }
 
     /// Newest processed, "VALID" build for the marketing-version train
-    /// — the one `submit` should attach to the App Store version.
+    /// - the one `submit` should attach to the App Store version.
     /// Apple's processing is async and can take several minutes; when
     /// nothing has finished processing yet this returns nil.
     package func latestValidBuild(

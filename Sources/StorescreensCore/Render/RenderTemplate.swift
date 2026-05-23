@@ -2,7 +2,7 @@ import Foundation
 
 /// Named preset that seeds a full `RenderConfig` for a specific visual style.
 /// User-supplied fields in the YAML's `render:` block overlay on top of the
-/// template's defaults at resolve time — see `RenderResolver.applyTemplate`.
+/// template's defaults at resolve time - see `RenderResolver.applyTemplate`.
 ///
 /// The 8 built-ins are clean-room reproductions of the free ButterKit template
 /// palettes and moods (ButterKit's templates are MIT-licensed), expressed in

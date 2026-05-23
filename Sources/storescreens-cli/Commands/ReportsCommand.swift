@@ -2,7 +2,7 @@ import ArgumentParser
 import Foundation
 import StorescreensCore
 
-/// `storescreens reports` — top-level parent command grouping all of
+/// `storescreens reports` - top-level parent command grouping all of
 /// Apple's reporting endpoints (sales, finance, analytics, metrics) under
 /// one CLI surface. Read-only; every subcommand resolves ASC credentials
 /// via `ASCCredentialResolver` and either prints a brief human-readable
@@ -20,7 +20,7 @@ struct ReportsCommand: AsyncParsableCommand {
             All subcommands require App Store Connect API credentials. \
             Run `storescreens auth login` once to store them, then use \
             `--json` for machine-readable output. Sales and finance \
-            reports come back as gzipped TSV/CSV — we gunzip and parse \
+            reports come back as gzipped TSV/CSV - we gunzip and parse \
             them into rows so callers don't have to.
             """,
         subcommands: [
@@ -43,7 +43,7 @@ struct ReportsSalesCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Frequency: DAILY, WEEKLY, MONTHLY, YEARLY.")
     var frequency: String = "DAILY"
 
-    @Option(name: .long, help: "Report date — YYYY-MM-DD (daily/weekly), YYYY-MM (monthly), YYYY (yearly).")
+    @Option(name: .long, help: "Report date - YYYY-MM-DD (daily/weekly), YYYY-MM (monthly), YYYY (yearly).")
     var date: String
 
     @Option(name: .long, help: "SALES, PRE_ORDER, NEWSSTAND, SUBSCRIPTION, SUBSCRIPTION_EVENT, SUBSCRIBER, SUBSCRIPTION_OFFER_CODE_REDEMPTION, INSTALLS, FIRST_ANNUAL, WIN_BACK_ELIGIBILITY.")
@@ -128,7 +128,7 @@ struct ReportsSalesCommand: AsyncParsableCommand {
         print("  rows:       \(report.rows.count)")
         print("  bytes:      \(report.rawBytes)")
         if report.rows.isEmpty {
-            print("  (empty — Apple returned the header but no data rows for this filter)")
+            print("  (empty - Apple returned the header but no data rows for this filter)")
             return
         }
         if summary {
@@ -160,7 +160,7 @@ struct ReportsFinanceCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Apple region code: US, EU, JP, AU, etc.")
     var region: String
 
-    @Option(name: .long, help: "Report date — YYYY-MM.")
+    @Option(name: .long, help: "Report date - YYYY-MM.")
     var date: String
 
     @Option(name: .long, help: "Vendor number from App Store Connect Payments and Financial Reports.")
@@ -229,7 +229,7 @@ struct ReportsFinanceCommand: AsyncParsableCommand {
         print("  rows:       \(report.rows.count)")
         print("  bytes:      \(report.rawBytes)")
         if report.rows.isEmpty {
-            print("  (empty — Apple returned the header but no data rows for this filter)")
+            print("  (empty - Apple returned the header but no data rows for this filter)")
             return
         }
         if summary {
@@ -509,7 +509,7 @@ struct ReportsAnalyticsSegmentDownloadCommand: AsyncParsableCommand {
         if let path = output {
             // Reconstruct a CSV representation of the parsed rows so the
             // caller can pipe the result into their own tooling. We don't
-            // emit Apple's raw gzip — that's lossy to the caller.
+            // emit Apple's raw gzip - that's lossy to the caller.
             let header = data.headers.map(csvEscape).joined(separator: ",")
             let lines = data.rows.map { row -> String in
                 data.headers.map { csvEscape(row[$0] ?? "") }.joined(separator: ",")
@@ -710,7 +710,7 @@ private func numericTotals(headers: [String], rows: [[String: String]]) -> [Stri
         var hadAny = false
         for row in rows {
             guard let raw = row[header] else { continue }
-            // Strip thousands separators before parsing — Apple reports
+            // Strip thousands separators before parsing - Apple reports
             // sometimes format proceeds with embedded commas inside
             // quoted fields (we already de-quoted them in the parser).
             let cleaned = raw.replacingOccurrences(of: ",", with: "")
