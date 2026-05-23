@@ -59,6 +59,9 @@ struct CaptureCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Skip the post-capture render pass.")
     var noRender: Bool = false
 
+    @Flag(name: .long, help: "Skip the post-capture App Store search preview render.")
+    var noSearchPreview: Bool = false
+
     @Option(name: .long, help: "Persistent DerivedData directory for faster incremental builds. Reused across runs; created on first use.")
     var derivedDataPath: String?
 
@@ -152,6 +155,7 @@ struct CaptureCommand: AsyncParsableCommand {
             capturedRoot: result.outputDir,
             baseDirectory: baseDirectory,
             skip: noRender,
+            skipSearchPreview: noSearchPreview,
             logger: { msg in
                 // Map the runner's prefix convention back onto the
                 // CLI's Logger levels so the console output matches

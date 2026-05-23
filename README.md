@@ -395,6 +395,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens list` | Show available simulators and App Store size mappings |
 | `storescreens screenshot` | Take a quick screenshot of a running simulator |
 | `storescreens render` | Render captioned/framed screenshots from an existing capture |
+| `storescreens search-preview` | Render an iPhone App Store search-result preview (icon + name + subtitle + stars + 3 screenshots) in light/dark |
 | `storescreens templates` | List the built-in render templates (curated background + type + chrome presets) |
 | `storescreens bezels` | Import / inspect Apple device bezel assets used by `render` |
 | `storescreens auth` | Manage App Store Connect API credentials |
@@ -750,6 +751,18 @@ test_class: ScreenshotTests
 #   slides:
 #     "Home":
 #       caption: "Your recipes, organized."
+
+# App Store search preview (optional): renders a faithful iPhone search
+# result row + iPhone bezel + status bar, sourced from your metadata files
+# and captured assets. Useful for confirming how the app shows up in App
+# Store search before you ship.
+# search_preview:
+#   enabled: true
+#   output_dir: ./storescreens-search-preview
+#   appearances: [light, dark]
+#   developer: "Acme Co"
+#   rating: 4.8
+#   reviews: "1.2K"
 ```
 
 </details>

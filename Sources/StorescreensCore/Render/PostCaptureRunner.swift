@@ -36,61 +36,89 @@ package struct PostCaptureRunner {
         capturedRoot: URL,
         baseDirectory: URL,
         skip: Bool = false,
+        skipSearchPreview: Bool = false,
         logger: ((String) -> Void)? = nil
     ) async {
         guard !skip else { return }
-        guard captureConfig.render?.enabled == true, let renderConfig = captureConfig.render else {
-            return
-        }
 
-        let renderRoot: URL = {
-            if let configured = renderConfig.outputDir {
-                return URL(fileURLWithPath: configured)
-            }
-            return URL(fileURLWithPath: "./storescreens-framed")
-        }()
+        var resolvedRenderRoot: URL?
 
-        logger?("● Rendering")
-        logger?("  output:  \(renderRoot.path)")
-
-        let pipeline = RenderPipeline(config: renderConfig, baseDirectory: baseDirectory)
-        do {
-            let out = try await pipeline.render(
-                manifest: manifest,
-                capturedRoot: capturedRoot,
-                renderRoot: renderRoot,
-                screenshotOrder: captureConfig.screenshots
-            )
-            for w in out.warnings { logger?("⚠ \(w)") }
-            if out.failures.isEmpty {
-                logger?("✓ rendered \(out.renderedSlides) slide(s)")
-            } else {
-                logger?("✗ rendered \(out.renderedSlides) slide(s); \(out.failures.count) failure(s)")
-                for (slide, err) in out.failures {
-                    logger?("  ✗ \(slide): \(err)")
+        if captureConfig.render?.enabled == true, let renderConfig = captureConfig.render {
+            let renderRoot: URL = {
+                if let configured = renderConfig.outputDir {
+                    return URL(fileURLWithPath: configured)
                 }
-            }
-        } catch {
-            logger?("✗ render failed: \(error)")
-        }
+                return URL(fileURLWithPath: "./storescreens-framed")
+            }()
+            resolvedRenderRoot = renderRoot
 
-        // Regenerate preview.html so the per-device pages surface
-        // the just-written framed PNGs next to the raw captures.
-        // `framedRelative` is a POSIX-style path from the capture
-        // dir to the render dir so relative `<img src>`s resolve
-        // whether the user opens file:// or serves the output.
-        let framedRelative = Self.relativePathString(from: capturedRoot, to: renderRoot.standardized)
-        do {
-            try HTMLPreviewGenerator(localeFlags: captureConfig.localeFlags)
-                .generate(
+            logger?("● Rendering")
+            logger?("  output:  \(renderRoot.path)")
+
+            let pipeline = RenderPipeline(config: renderConfig, baseDirectory: baseDirectory)
+            do {
+                let out = try await pipeline.render(
                     manifest: manifest,
-                    outputDir: capturedRoot.path,
-                    framedDir: framedRelative,
-                    keepOldPreviews: captureConfig.keepOldPreviews ?? false,
+                    capturedRoot: capturedRoot,
+                    renderRoot: renderRoot,
                     screenshotOrder: captureConfig.screenshots
                 )
-        } catch {
-            logger?("⚠ preview regeneration failed: \(error)")
+                for w in out.warnings { logger?("⚠ \(w)") }
+                if out.failures.isEmpty {
+                    logger?("✓ rendered \(out.renderedSlides) slide(s)")
+                } else {
+                    logger?("✗ rendered \(out.renderedSlides) slide(s); \(out.failures.count) failure(s)")
+                    for (slide, err) in out.failures {
+                        logger?("  ✗ \(slide): \(err)")
+                    }
+                }
+            } catch {
+                logger?("✗ render failed: \(error)")
+            }
+
+            // Regenerate preview.html so the per-device pages surface
+            // the just-written framed PNGs next to the raw captures.
+            // `framedRelative` is a POSIX-style path from the capture
+            // dir to the render dir so relative `<img src>`s resolve
+            // whether the user opens file:// or serves the output.
+            let framedRelative = Self.relativePathString(from: capturedRoot, to: renderRoot.standardized)
+            do {
+                try HTMLPreviewGenerator(localeFlags: captureConfig.localeFlags)
+                    .generate(
+                        manifest: manifest,
+                        outputDir: capturedRoot.path,
+                        framedDir: framedRelative,
+                        keepOldPreviews: captureConfig.keepOldPreviews ?? false,
+                        screenshotOrder: captureConfig.screenshots
+                    )
+            } catch {
+                logger?("⚠ preview regeneration failed: \(error)")
+            }
+        }
+
+        // Search-preview pass. Runs after the regular render so it can
+        // prefer the framed PNGs (the same ones the user will upload to
+        // App Store Connect) over the raw captures. Independent of the
+        // render block — a user can enable just search-preview and skip
+        // the render pass entirely.
+        if !skipSearchPreview, captureConfig.searchPreview?.enabled == true {
+            logger?("● Rendering search preview")
+            let result = SearchPreviewRunner().run(
+                captureConfig: captureConfig,
+                manifest: manifest,
+                capturedRoot: capturedRoot,
+                renderedRoot: resolvedRenderRoot,
+                baseDirectory: baseDirectory
+            )
+            for w in result.warnings { logger?("⚠ \(w)") }
+            if result.renderedCount > 0 {
+                logger?("✓ rendered \(result.renderedCount) search preview(s)")
+                if let firstParent = result.outputs.first?.deletingLastPathComponent() {
+                    logger?("  output:  \(firstParent.path)")
+                }
+            } else {
+                logger?("✗ search preview produced no output")
+            }
         }
     }
 
