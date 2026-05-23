@@ -63,6 +63,19 @@ package struct SearchPreviewConfig: Codable, Sendable {
     /// when possible, otherwise omitted from the stats strip.
     package var ageRating: String?
 
+    /// Device families the app supports on the App Store, shown as small
+    /// SF Symbol icons + names below the screenshot strip. Values:
+    /// `iphone`, `ipad`, `mac`, `watch`, `tv`, `vision`. Default:
+    /// `["iphone"]`. The detail-page Compatibility row reads this list.
+    package var supportedDevices: [String]?
+
+    /// Release date for the version named in `version`. ISO-8601 string
+    /// (e.g. `2026-05-20`). The renderer derives a relative-time label
+    /// ("3d ago", "2w ago", "4mo ago", "1y ago") shown right-aligned on
+    /// the What's New version row, mirroring the App Store detail page.
+    /// When unset, the relative-time label is hidden.
+    package var releaseDate: String?
+
     // MARK: - Text + identity overrides
 
     /// App name shown in the search row. When unset, falls back to
@@ -118,6 +131,11 @@ package struct SearchPreviewConfig: Codable, Sendable {
     /// for other action types.
     package var price: String?
 
+    /// Whether the app advertises in-app purchases. When true the search
+    /// row + detail page draw the "In-App / Purchases" subscript label
+    /// under the Get / price pill, matching the App Store badge.
+    package var hasInAppPurchases: Bool?
+
     /// Search term shown in the fake search bar at the top of the bezel.
     /// Default: lowercased first 20 chars of the resolved name.
     package var searchTerm: String?
@@ -148,12 +166,15 @@ package struct SearchPreviewConfig: Codable, Sendable {
         screenshots: [String]? = nil,
         action: SearchPreviewAction? = nil,
         price: String? = nil,
+        hasInAppPurchases: Bool? = nil,
         searchTerm: String? = nil,
         bezel: SearchPreviewBezel? = nil,
         version: String? = nil,
         whatsNew: String? = nil,
         descriptionText: String? = nil,
-        ageRating: String? = nil
+        ageRating: String? = nil,
+        releaseDate: String? = nil,
+        supportedDevices: [String]? = nil
     ) {
         self.enabled = enabled
         self.outputDir = outputDir
@@ -172,12 +193,15 @@ package struct SearchPreviewConfig: Codable, Sendable {
         self.screenshots = screenshots
         self.action = action
         self.price = price
+        self.hasInAppPurchases = hasInAppPurchases
         self.searchTerm = searchTerm
         self.bezel = bezel
         self.version = version
         self.whatsNew = whatsNew
         self.descriptionText = descriptionText
         self.ageRating = ageRating
+        self.releaseDate = releaseDate
+        self.supportedDevices = supportedDevices
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -190,12 +214,15 @@ package struct SearchPreviewConfig: Codable, Sendable {
         case name, subtitle, developer, rating, reviews, categories, icon
         case screenshotsDir = "screenshots_dir"
         case screenshots, action, price
+        case hasInAppPurchases = "has_in_app_purchases"
         case searchTerm = "search_term"
         case bezel
         case version
         case whatsNew = "whats_new"
         case descriptionText = "description"
         case ageRating = "age_rating"
+        case releaseDate = "release_date"
+        case supportedDevices = "supported_devices"
     }
 }
 

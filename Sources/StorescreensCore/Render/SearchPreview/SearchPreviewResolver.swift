@@ -21,6 +21,7 @@ package struct SearchPreviewInput: Sendable {
     package let screenshotPaths: [URL]
     package let action: SearchPreviewAction
     package let priceLabel: String?
+    package let hasInAppPurchases: Bool
     package let searchTerm: String
     package let bezel: SearchPreviewBezel
     /// Detail-page only. Marketing version label drawn in the "What's New"
@@ -34,6 +35,13 @@ package struct SearchPreviewInput: Sendable {
     package let descriptionText: String?
     /// Detail-page only. Age rating label for the stats strip (e.g. `4+`).
     package let ageRating: String?
+    /// Detail-page only. Already-formatted relative-time label
+    /// ("3d ago", "2w ago", "4mo ago", "1y ago"). nil suppresses the label.
+    package let releaseAgo: String?
+    /// Detail-page only. Device families the app supports (lowercase short
+    /// names: `iphone`, `ipad`, `mac`, etc.). Default `["iphone"]`. Drives
+    /// the Compatibility row's SF Symbol icons.
+    package let supportedDevices: [String]
     package let outputURL: URL
 
     package init(
@@ -52,12 +60,15 @@ package struct SearchPreviewInput: Sendable {
         screenshotPaths: [URL],
         action: SearchPreviewAction,
         priceLabel: String?,
+        hasInAppPurchases: Bool = false,
         searchTerm: String,
         bezel: SearchPreviewBezel,
         version: String? = nil,
         whatsNew: String? = nil,
         descriptionText: String? = nil,
         ageRating: String? = nil,
+        releaseAgo: String? = nil,
+        supportedDevices: [String] = ["iphone"],
         outputURL: URL
     ) {
         self.locale = locale
@@ -75,12 +86,15 @@ package struct SearchPreviewInput: Sendable {
         self.screenshotPaths = screenshotPaths
         self.action = action
         self.priceLabel = priceLabel
+        self.hasInAppPurchases = hasInAppPurchases
         self.searchTerm = searchTerm
         self.bezel = bezel
         self.version = version
         self.whatsNew = whatsNew
         self.descriptionText = descriptionText
         self.ageRating = ageRating
+        self.releaseAgo = releaseAgo
+        self.supportedDevices = supportedDevices
         self.outputURL = outputURL
     }
 }
@@ -200,6 +214,7 @@ package struct SearchPreviewResolver {
         // App-level fallbacks for detail-page text. Per-locale whatsNew /
         // descriptionText overrides come from `metadata/<locale>/*.txt`.
         let resolvedVersion = sp.version ?? captureConfig.appStoreConnect?.submit?.createVersion
+        let resolvedReleaseAgo = Self.relativeAgo(from: sp.releaseDate)
 
         var inputs: [SearchPreviewInput] = []
         for locale in configuredLocales {
@@ -252,12 +267,15 @@ package struct SearchPreviewResolver {
                             screenshotPaths: screenshotURLs,
                             action: resolvedAction,
                             priceLabel: sp.price,
+                            hasInAppPurchases: sp.hasInAppPurchases ?? false,
                             searchTerm: searchTerm,
                             bezel: bezel,
                             version: resolvedVersion,
                             whatsNew: resolvedWhatsNew,
                             descriptionText: resolvedDescription,
                             ageRating: sp.ageRating,
+                            releaseAgo: resolvedReleaseAgo,
+                            supportedDevices: sp.supportedDevices?.map { $0.lowercased() } ?? ["iphone"],
                             outputURL: outputURL
                         ))
                     }
@@ -269,6 +287,32 @@ package struct SearchPreviewResolver {
     }
 
     // MARK: - Helpers
+
+    /// Turns an ISO-8601-ish date string (`2026-05-20`) into a compact
+    /// App Store-style relative-time label ("3d ago", "2w ago", "4mo ago",
+    /// "1y ago"). Returns nil for unparseable or empty inputs.
+    package static func relativeAgo(from dateString: String?) -> String? {
+        guard let dateString, !dateString.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        var parsed: Date?
+        parsed = formatter.date(from: dateString)
+        if parsed == nil {
+            let alt = DateFormatter()
+            alt.dateFormat = "yyyy-MM-dd"
+            alt.locale = Locale(identifier: "en_US_POSIX")
+            alt.timeZone = TimeZone(secondsFromGMT: 0)
+            parsed = alt.date(from: dateString)
+        }
+        guard let date = parsed else { return nil }
+        let seconds = max(0, Date().timeIntervalSince(date))
+        let days = Int(seconds / 86_400)
+        if days < 1   { return "Today" }
+        if days < 7   { return "\(days)d ago" }
+        if days < 30  { return "\(days / 7)w ago" }
+        if days < 365 { return "\(days / 30)mo ago" }
+        return "\(days / 365)y ago"
+    }
 
     /// Default search term: lowercased first 20 chars of the name, with
     /// trailing whitespace trimmed (matches ezscreenshots' default).

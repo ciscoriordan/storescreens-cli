@@ -112,7 +112,7 @@ package struct SearchPreviewRenderer {
         drawBezel(into: ctx, canvas: canvas, theme: theme)
         let navBottom = drawDetailNavBar(into: ctx, canvas: canvas, theme: theme)
 
-        let contentPad = canvas.width * 0.05
+        let contentPad = canvas.width * 0.075
         let contentRect = CGRect(
             x: contentPad,
             y: navBottom + canvas.height * 0.012,
@@ -137,10 +137,87 @@ package struct SearchPreviewRenderer {
             into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
             theme: theme, input: input
         )
+        cursorY = drawDetailCompatibility(
+            into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
+            theme: theme, input: input
+        )
         _ = drawDetailAbout(
             into: ctx, contentRect: contentRect, canvas: canvas, topY: cursorY,
             theme: theme, input: input
         )
+    }
+
+    /// Compatibility row: small SF Symbols for each supported device family
+    /// followed by their display names, like the App Store row below
+    /// Preview. Derived from `input.deviceLabel` for now (the rendered
+    /// canvas device); a future enhancement could let the YAML list
+    /// multiple supported families explicitly.
+    private func drawDetailCompatibility(
+        into ctx: CGContext,
+        contentRect: CGRect,
+        canvas: CGRect,
+        topY: CGFloat,
+        theme: Theme,
+        input: SearchPreviewInput
+    ) -> CGFloat {
+        // Map each lowercase short name in `input.supportedDevices` to its
+        // SF Symbol + display name. Unknown values are skipped.
+        let symbolByDevice: [String: (symbol: String, name: String)] = [
+            "iphone":  ("iphone", "iPhone"),
+            "ipad":    ("ipad", "iPad"),
+            "mac":     ("macbook", "Mac"),
+            "watch":   ("applewatch", "Apple Watch"),
+            "tv":      ("appletv", "Apple TV"),
+            "vision":  ("visionpro", "Apple Vision Pro"),
+        ]
+        var families: [(symbol: String, name: String)] = []
+        for d in input.supportedDevices {
+            if let entry = symbolByDevice[d.lowercased()] {
+                families.append(entry)
+            }
+        }
+        if families.isEmpty { families = [("iphone", "iPhone")] }
+
+        let iconHeight = canvas.height * 0.024
+        let nameFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
+        let nameAscent = CGFloat(CTFontGetAscent(nameFont))
+        let cursorBaselineY = topY + iconHeight * 0.55
+
+        // Draw icons first, then the name strip "iPhone, iPad".
+        var cursorX = contentRect.minX
+        for (i, family) in families.enumerated() {
+            let iconRect = CGRect(
+                x: cursorX,
+                y: topY + (iconHeight - iconHeight) * 0.5,
+                width: iconHeight * 0.72,
+                height: iconHeight
+            )
+            drawSymbol(
+                family.symbol, into: ctx,
+                rect: iconRect,
+                color: theme.secondaryText,
+                weight: .regular
+            )
+            cursorX += iconRect.width + (i == families.count - 1 ? canvas.width * 0.020 : canvas.width * 0.008)
+        }
+        let nameString = families.map { $0.name }.joined(separator: ", ")
+        drawText(
+            into: ctx, text: nameString,
+            font: nameFont, color: theme.primaryText,
+            topLeft: CGPoint(x: cursorX, y: cursorBaselineY - nameAscent * 0.55)
+        )
+
+        // Thin divider under the row.
+        let dividerY = topY + iconHeight + canvas.height * 0.020
+        ctx.saveGState()
+        ctx.setStrokeColor(theme.iconStroke.cgColor)
+        ctx.setLineWidth(canvas.height * 0.0006)
+        ctx.move(to: CGPoint(x: contentRect.minX, y: dividerY))
+        ctx.addLine(to: CGPoint(x: contentRect.maxX, y: dividerY))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        return dividerY + canvas.height * 0.025
     }
 
     private func drawDetailNavBar(
@@ -148,67 +225,85 @@ package struct SearchPreviewRenderer {
         canvas: CGRect,
         theme: Theme
     ) -> CGFloat {
-        // Status bar pieces (time, Dynamic Island, signal cluster).
-        let statusTopY: CGFloat = canvas.height * 0.018
-        let statusHeight: CGFloat = canvas.height * 0.040
-
-        drawText(
-            into: ctx, text: "9:41",
-            font: systemFont(size: canvas.height * 0.018, weight: .semibold),
-            color: theme.statusBarText,
-            topLeft: CGPoint(x: canvas.width * 0.095, y: statusTopY + statusHeight * 0.10)
-        )
-        let islandWidth = canvas.width * 0.32
-        let islandHeight = canvas.height * 0.034
-        let islandRect = CGRect(
-            x: (canvas.width - islandWidth) / 2,
-            y: statusTopY + (statusHeight - islandHeight) / 2,
-            width: islandWidth, height: islandHeight
-        )
-        ctx.setFillColor(NSColor.black.cgColor)
-        ctx.addPath(CGPath(
-            roundedRect: islandRect,
-            cornerWidth: islandHeight / 2, cornerHeight: islandHeight / 2,
-            transform: nil
-        ))
-        ctx.fillPath()
-        drawStatusRightCluster(
-            into: ctx,
-            rightX: canvas.width * 0.905,
-            centerY: statusTopY + statusHeight / 2,
-            scale: canvas.height * 0.015,
-            theme: theme
-        )
-
-        // Nav row: back chevron on left, share + ellipsis on right.
-        let navTopY = statusTopY + statusHeight + canvas.height * 0.010
-        let navHeight = canvas.height * 0.045
-        let navMidY = navTopY + navHeight / 2
-        let iconSize = canvas.height * 0.030
-        drawSymbol(
-            "chevron.left", into: ctx,
+        let statusTopY = drawStatusBar(into: ctx, canvas: canvas, theme: theme)
+        // Nav row: liquid-glass back button on the left, share on the right.
+        let navTopY = statusTopY + canvas.height * 0.012
+        let buttonSize = canvas.height * 0.052
+        let buttonY = navTopY
+        drawGlassNavButton(
+            into: ctx, theme: theme,
             rect: CGRect(
                 x: canvas.width * 0.060,
-                y: navMidY - iconSize / 2,
-                width: iconSize, height: iconSize
+                y: buttonY,
+                width: buttonSize, height: buttonSize
             ),
-            color: theme.actionText,
+            symbol: "chevron.left",
             weight: .semibold
         )
-        // Share button on the right (no ellipsis menu - iOS App Store
-        // detail page just shows the share icon next to the back chevron).
-        drawSymbol(
-            "square.and.arrow.up", into: ctx,
+        drawGlassNavButton(
+            into: ctx, theme: theme,
             rect: CGRect(
-                x: canvas.width * 0.905 - iconSize,
-                y: navMidY - iconSize / 2,
-                width: iconSize, height: iconSize
+                x: canvas.width * 0.940 - buttonSize,
+                y: buttonY,
+                width: buttonSize, height: buttonSize
             ),
-            color: theme.actionText,
+            symbol: "square.and.arrow.up",
             weight: .regular
         )
+        return buttonY + buttonSize
+    }
 
-        return navTopY + navHeight
+    /// Translucent "liquid glass" circular button with the given SF Symbol
+    /// inside, dark glyph for visibility. Approximates the iOS 26 floating
+    /// nav buttons (the real material requires a backdrop blur we don't
+    /// have here; we get close with a soft gradient + subtle border).
+    private func drawGlassNavButton(
+        into ctx: CGContext,
+        theme: Theme,
+        rect: CGRect,
+        symbol: String,
+        weight: NSFont.Weight
+    ) {
+        let cs = CGColorSpaceCreateDeviceRGB()
+        ctx.saveGState()
+        // Soft drop shadow under the button.
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: rect.height * 0.03),
+            blur: rect.height * 0.10,
+            color: NSColor.black.withAlphaComponent(0.18).cgColor
+        )
+        // Translucent fill - subtle vertical gradient (lighter on top).
+        let fillColors = [
+            NSColor.white.withAlphaComponent(0.78).cgColor,
+            NSColor.white.withAlphaComponent(0.55).cgColor,
+        ] as CFArray
+        if let gradient = CGGradient(colorsSpace: cs, colors: fillColors, locations: [0, 1]) {
+            ctx.saveGState()
+            ctx.beginPath()
+            ctx.addEllipse(in: rect)
+            ctx.clip()
+            ctx.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: rect.midX, y: rect.minY),
+                end: CGPoint(x: rect.midX, y: rect.maxY),
+                options: []
+            )
+            ctx.restoreGState()
+        }
+        // Subtle border.
+        ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.06).cgColor)
+        ctx.setLineWidth(rect.height * 0.025)
+        ctx.strokeEllipse(in: rect)
+        ctx.restoreGState()
+
+        // Symbol in the middle, dark for contrast against the translucent fill.
+        let symbolInset = rect.height * 0.27
+        drawSymbol(
+            symbol, into: ctx,
+            rect: rect.insetBy(dx: symbolInset, dy: symbolInset),
+            color: NSColor.black,
+            weight: weight
+        )
     }
 
     private func drawDetailHero(
@@ -312,7 +407,7 @@ package struct SearchPreviewRenderer {
             width: actionWidth, height: actionHeight
         )
         ctx.saveGState()
-        ctx.setFillColor(theme.actionBackground.cgColor)
+        ctx.setFillColor(theme.actionSolidBackground.cgColor)
         ctx.addPath(CGPath(
             roundedRect: actionRect,
             cornerWidth: actionHeight / 2, cornerHeight: actionHeight / 2,
@@ -321,7 +416,7 @@ package struct SearchPreviewRenderer {
         ctx.fillPath()
         drawTextCentered(
             into: ctx, text: actionLabel,
-            font: actionFont, color: theme.actionText,
+            font: actionFont, color: theme.actionSolidText,
             center: CGPoint(x: actionRect.midX, y: actionRect.midY)
         )
         ctx.restoreGState()
@@ -490,16 +585,27 @@ package struct SearchPreviewRenderer {
             weight: .semibold
         )
 
-        // Version row (left) - "Version X.Y.Z"
+        // Version row: "Version X.Y.Z" on the left, "Nd ago" right-aligned,
+        // both in lighter gray. Adds vertical breathing room above + below.
+        let metaTopY = topY + headerLine + canvas.height * 0.012
         if let version = input.version, !version.isEmpty {
             drawText(
                 into: ctx, text: "Version \(version)",
-                font: metaFont, color: theme.secondaryText,
-                topLeft: CGPoint(x: contentRect.minX, y: topY + headerLine + canvas.height * 0.005)
+                font: metaFont, color: theme.versionMeta,
+                topLeft: CGPoint(x: contentRect.minX, y: metaTopY)
+            )
+        }
+        if let ago = input.releaseAgo, !ago.isEmpty {
+            let agoWidth = measureText(ago, font: metaFont)
+            drawText(
+                into: ctx, text: ago,
+                font: metaFont, color: theme.versionMeta,
+                topLeft: CGPoint(x: contentRect.maxX - agoWidth, y: metaTopY)
             )
         }
 
-        let bodyTopY = topY + headerLine + canvas.height * 0.025
+        let metaLine = CGFloat(CTFontGetAscent(metaFont)) + CGFloat(CTFontGetDescent(metaFont))
+        let bodyTopY = metaTopY + metaLine + canvas.height * 0.020
         let bottomY = drawTruncatedParagraph(
             into: ctx,
             text: whatsNew,
@@ -581,15 +687,9 @@ package struct SearchPreviewRenderer {
         input: SearchPreviewInput
     ) -> CGFloat {
         guard let body = input.descriptionText, !body.isEmpty else { return topY }
-        let headerFont = systemFont(size: canvas.height * 0.020, weight: .bold)
-        drawText(
-            into: ctx, text: "About This App",
-            font: headerFont, color: theme.primaryText,
-            topLeft: CGPoint(x: contentRect.minX, y: topY)
-        )
-        let headerLine = CGFloat(CTFontGetAscent(headerFont)) + CGFloat(CTFontGetDescent(headerFont))
+        // No "About This App" header — iOS App Store flows the description
+        // straight after the Preview screenshots without a section heading.
         let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
-        let bodyTopY = topY + headerLine + canvas.height * 0.012
         return drawTruncatedParagraph(
             into: ctx,
             text: body,
@@ -599,7 +699,7 @@ package struct SearchPreviewRenderer {
             linkFont: bodyFont,
             moreLabel: "more",
             backgroundColor: theme.bezelBackground,
-            topLeft: CGPoint(x: contentRect.minX, y: bodyTopY),
+            topLeft: CGPoint(x: contentRect.minX, y: topY),
             width: contentRect.width,
             maxLines: 3
         )
@@ -876,33 +976,25 @@ package struct SearchPreviewRenderer {
 
     // MARK: - Status bar + search bar
 
-    /// Draws the status bar (clock + Dynamic Island + battery cluster) and
-    /// the fake search bar. Returns the visual-y of the search bar's
-    /// bottom edge so the caller can place the card directly below it.
-    private func drawStatusBarAndSearch(
+    /// Draws the iPhone status bar (clock + Dynamic Island + signal
+    /// cluster). Returns the visual-y of the bottom of the status bar so
+    /// the caller can stack content below it. Shared between the search-
+    /// row's search bar layout and the detail-page nav bar layout.
+    private func drawStatusBar(
         into ctx: CGContext,
         canvas: CGRect,
-        theme: Theme,
-        searchTerm: String
+        theme: Theme
     ) -> CGFloat {
-        let statusTopY: CGFloat = canvas.height * 0.018
-        let statusHeight: CGFloat = canvas.height * 0.040
-
-        // Time (9:41) - left side of the status bar.
-        drawText(
-            into: ctx,
-            text: "9:41",
-            font: systemFont(size: canvas.height * 0.018, weight: .semibold),
-            color: theme.statusBarText,
-            topLeft: CGPoint(x: canvas.width * 0.095, y: statusTopY + statusHeight * 0.10)
-        )
+        let statusTopY: CGFloat = canvas.height * 0.012
+        let statusHeight: CGFloat = canvas.height * 0.032
+        let statusCenterY = statusTopY + statusHeight / 2
 
         // Dynamic Island - centered pill, always black.
-        let islandWidth = canvas.width * 0.32
-        let islandHeight = canvas.height * 0.034
+        let islandWidth = canvas.width * 0.28
+        let islandHeight = canvas.height * 0.030
         let islandRect = CGRect(
             x: (canvas.width - islandWidth) / 2,
-            y: statusTopY + (statusHeight - islandHeight) / 2,
+            y: statusCenterY - islandHeight / 2,
             width: islandWidth, height: islandHeight
         )
         ctx.setFillColor(NSColor.black.cgColor)
@@ -913,17 +1005,42 @@ package struct SearchPreviewRenderer {
         ))
         ctx.fillPath()
 
-        // Right cluster: signal / wifi / battery.
+        // Time (9:41) - far left, vertically centered on the status bar.
+        let timeFont = systemFont(size: canvas.height * 0.014, weight: .semibold)
+        let timeAscent = CGFloat(CTFontGetAscent(timeFont))
+        drawText(
+            into: ctx,
+            text: "9:41",
+            font: timeFont,
+            color: theme.statusBarText,
+            topLeft: CGPoint(
+                x: canvas.width * 0.075,
+                y: statusCenterY - timeAscent * 0.5
+            )
+        )
+
+        // Right cluster: signal / wifi / battery, far right edge.
         drawStatusRightCluster(
             into: ctx,
-            rightX: canvas.width * 0.905,
-            centerY: statusTopY + statusHeight / 2,
-            scale: canvas.height * 0.015,
+            rightX: canvas.width * 0.925,
+            centerY: statusCenterY,
+            scale: canvas.height * 0.011,
             theme: theme
         )
 
-        // Search bar - pill just below the status bar.
-        let searchTopY = statusTopY + statusHeight + canvas.height * 0.015
+        return statusTopY + statusHeight
+    }
+
+    /// Draws the status bar + the fake search bar. Returns the visual-y of
+    /// the search bar's bottom edge so the caller can place the card below.
+    private func drawStatusBarAndSearch(
+        into ctx: CGContext,
+        canvas: CGRect,
+        theme: Theme,
+        searchTerm: String
+    ) -> CGFloat {
+        let statusBottom = drawStatusBar(into: ctx, canvas: canvas, theme: theme)
+        let searchTopY = statusBottom + canvas.height * 0.018
         let searchHeight = canvas.height * 0.046
         let searchRect = CGRect(
             x: canvas.width * 0.080,
@@ -970,83 +1087,40 @@ package struct SearchPreviewRenderer {
         scale: CGFloat,
         theme: Theme
     ) {
-        let tint = theme.statusBarIcon.cgColor
+        let tint = theme.statusBarIcon
 
-        // Battery (right-most): rounded outline + interior fill + stub.
-        let batteryWidth = scale * 2.0
-        let batteryHeight = scale * 1.0
+        // Battery: SF Symbol so the proportions match iOS exactly. Draw
+        // it last (right-most) and walk left for the other glyphs.
+        let batteryWidth = scale * 2.4
+        let batteryHeight = scale * 1.1
         let batteryRect = CGRect(
             x: rightX - batteryWidth,
             y: centerY - batteryHeight / 2,
-            width: batteryWidth,
-            height: batteryHeight
+            width: batteryWidth, height: batteryHeight
         )
-        ctx.saveGState()
-        ctx.setStrokeColor(tint)
-        ctx.setFillColor(tint)
-        ctx.setLineWidth(scale * 0.10)
-        ctx.addPath(CGPath(
-            roundedRect: batteryRect,
-            cornerWidth: scale * 0.20, cornerHeight: scale * 0.20,
-            transform: nil
-        ))
-        ctx.strokePath()
-        let fillInset = scale * 0.20
-        let fillRect = batteryRect.insetBy(dx: fillInset, dy: fillInset)
-        ctx.addPath(CGPath(
-            roundedRect: fillRect,
-            cornerWidth: scale * 0.12, cornerHeight: scale * 0.12,
-            transform: nil
-        ))
-        ctx.fillPath()
-        // Battery stub on the right.
-        let stubRect = CGRect(
-            x: batteryRect.maxX,
-            y: centerY - batteryHeight * 0.22,
-            width: scale * 0.14,
-            height: batteryHeight * 0.44
+        drawSymbol("battery.100", into: ctx, rect: batteryRect, color: tint, weight: .regular)
+
+        // Wifi: SF Symbol "wifi" (arcs opening downward toward the dot,
+        // matching the iOS status bar).
+        let wifiSize = scale * 1.4
+        let wifiRect = CGRect(
+            x: batteryRect.minX - scale * 0.3 - wifiSize,
+            y: centerY - wifiSize / 2,
+            width: wifiSize, height: wifiSize
         )
-        ctx.fill(stubRect)
-        ctx.restoreGState()
+        drawSymbol("wifi", into: ctx, rect: wifiRect, color: tint, weight: .regular)
 
-        // Wifi: three nested arcs facing up.
-        let wifiCenter = CGPoint(x: batteryRect.minX - scale * 1.2, y: centerY + scale * 0.05)
-        ctx.saveGState()
-        ctx.setStrokeColor(tint)
-        ctx.setFillColor(tint)
-        ctx.setLineWidth(scale * 0.16)
-        for i in 0..<3 {
-            let r = scale * (0.40 + Double(i) * 0.22)
-            let path = CGMutablePath()
-            // Upward-facing arc (in our flipped coordinate space, "up" = smaller y).
-            // 5π/4 → 7π/4 traces a half-circle facing upward.
-            path.addArc(
-                center: wifiCenter,
-                radius: r,
-                startAngle: -CGFloat.pi * 5 / 4,
-                endAngle: -CGFloat.pi * 7 / 4,
-                clockwise: true
-            )
-            ctx.addPath(path)
-            ctx.strokePath()
-        }
-        ctx.fillEllipse(in: CGRect(
-            x: wifiCenter.x - scale * 0.12,
-            y: wifiCenter.y - scale * 0.12,
-            width: scale * 0.24,
-            height: scale * 0.24
-        ))
-        ctx.restoreGState()
-
-        // Signal bars: four ascending bars to the left of wifi.
-        let signalRight = wifiCenter.x - scale * 1.3
+        // Cellular signal: 4 ascending bars left of wifi (no SF symbol
+        // matches exactly, so we keep a small custom shape).
         let barWidth = scale * 0.22
         let gap = scale * 0.10
+        let totalBarsWidth = 4 * barWidth + 3 * gap
+        let barsRight = wifiRect.minX - scale * 0.3
         ctx.saveGState()
-        ctx.setFillColor(tint)
+        ctx.setFillColor(tint.cgColor)
         for i in 0..<4 {
-            let h = scale * (0.30 + Double(i) * 0.22)
-            let x = signalRight - CGFloat(4 - 1 - i) * (barWidth + gap) - barWidth
+            let h = scale * (0.36 + Double(i) * 0.18)
+            let x = barsRight - totalBarsWidth + CGFloat(i) * (barWidth + gap)
             let bar = CGRect(x: x, y: centerY + scale * 0.55 - h, width: barWidth, height: h)
             ctx.fill(bar)
         }
@@ -1133,20 +1207,21 @@ package struct SearchPreviewRenderer {
         ctx.restoreGState()
 
         // Action button (right side, vertically centered against the icon).
+        // Solid blue pill ("Get" / "Open" / "$0.99") with white text and
+        // tight padding — sized to the text, not a uniform minimum width.
         let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
-        // App Store action pill ("GET") uses SF Pro Semibold, not Bold.
-        let actionFont = systemFont(size: iconSize * 0.34, weight: .semibold)
+        let actionFont = systemFont(size: iconSize * 0.32, weight: .semibold)
         let actionTextWidth = measureText(actionLabel, font: actionFont)
-        let actionPaddingX = iconSize * 0.32
-        let actionWidth = max(iconSize * 1.4, actionTextWidth + 2 * actionPaddingX)
-        let actionHeight = iconSize * 0.50
+        let actionPaddingX = iconSize * 0.22
+        let actionWidth = max(iconSize * 0.95, actionTextWidth + 2 * actionPaddingX)
+        let actionHeight = iconSize * 0.46
         let actionRect = CGRect(
             x: cardRect.maxX - actionWidth,
             y: iconRect.midY - actionHeight / 2,
             width: actionWidth, height: actionHeight
         )
         ctx.saveGState()
-        ctx.setFillColor(theme.actionBackground.cgColor)
+        ctx.setFillColor(theme.actionSolidBackground.cgColor)
         ctx.addPath(CGPath(
             roundedRect: actionRect,
             cornerWidth: actionHeight / 2, cornerHeight: actionHeight / 2,
@@ -1155,10 +1230,28 @@ package struct SearchPreviewRenderer {
         ctx.fillPath()
         drawTextCentered(
             into: ctx, text: actionLabel,
-            font: actionFont, color: theme.actionText,
+            font: actionFont, color: theme.actionSolidText,
             center: CGPoint(x: actionRect.midX, y: actionRect.midY)
         )
         ctx.restoreGState()
+
+        // "In-App / Purchases" mini-label underneath the action button, on
+        // two lines. Only rendered when the app advertises IAPs.
+        if input.hasInAppPurchases {
+            let iapFont = systemFont(size: iconSize * 0.18, weight: .regular)
+            let iapLineHeight = CGFloat(CTFontGetAscent(iapFont)) + CGFloat(CTFontGetDescent(iapFont))
+            let iapTopY = actionRect.maxY + iconSize * 0.06
+            drawTextCentered(
+                into: ctx, text: "In-App",
+                font: iapFont, color: theme.secondaryText,
+                center: CGPoint(x: actionRect.midX, y: iapTopY + iapLineHeight * 0.5)
+            )
+            drawTextCentered(
+                into: ctx, text: "Purchases",
+                font: iapFont, color: theme.secondaryText,
+                center: CGPoint(x: actionRect.midX, y: iapTopY + iapLineHeight * 1.5)
+            )
+        }
 
         // Right of icon: three-line stack matching the actual App Store
         // search row.
@@ -1256,9 +1349,9 @@ package struct SearchPreviewRenderer {
 
     private static func actionLabel(_ action: SearchPreviewAction, price: String?) -> String {
         switch action {
-        case .get:    return "GET"
-        case .open:   return "OPEN"
-        case .update: return "UPDATE"
+        case .get:    return "Get"
+        case .open:   return "Open"
+        case .update: return "Update"
         case .price:  return price?.isEmpty == false ? price! : "$0.99"
         }
     }
@@ -1667,8 +1760,14 @@ extension SearchPreviewRenderer {
         let screenshotPlaceholder: NSColor
         let actionBackground: NSColor
         let actionText: NSColor
+        /// Solid blue Get button background (used by the search row).
+        let actionSolidBackground: NSColor
+        /// White text on top of the solid blue Get button.
+        let actionSolidText: NSColor
+        let versionMeta: NSColor
 
         static func resolve(appearance: String) -> Theme {
+            let systemBlue = NSColor(red: 0, green: 122/255, blue: 1, alpha: 1)
             switch appearance.lowercased() {
             case "dark":
                 return Theme(
@@ -1686,7 +1785,10 @@ extension SearchPreviewRenderer {
                     iconStroke:                 NSColor.white.withAlphaComponent(0.08),
                     screenshotPlaceholder:      NSColor(hex: 0x1C1C1E),
                     actionBackground:           NSColor(hex: 0x1C3A5C),
-                    actionText:                 NSColor(hex: 0x0A84FF)
+                    actionText:                 NSColor(hex: 0x0A84FF),
+                    actionSolidBackground:      NSColor(hex: 0x0A84FF),
+                    actionSolidText:            NSColor.white,
+                    versionMeta:                NSColor(hex: 0x636366)
                 )
             default:
                 return Theme(
@@ -1701,10 +1803,13 @@ extension SearchPreviewRenderer {
                     secondaryText:              NSColor(hex: 0x636366),
                     iconPlaceholderBackground:  NSColor(hex: 0xF2F2F7),
                     iconPlaceholderText:        NSColor(hex: 0x8E8E93),
-                    iconStroke:                 NSColor.black.withAlphaComponent(0.08),
+                    iconStroke:                 NSColor.black.withAlphaComponent(0.10),
                     screenshotPlaceholder:      NSColor(hex: 0xF2F2F7),
                     actionBackground:           NSColor(red: 0, green: 122/255, blue: 1, alpha: 0.12),
-                    actionText:                 NSColor(red: 0, green: 122/255, blue: 1, alpha: 1)
+                    actionText:                 systemBlue,
+                    actionSolidBackground:      systemBlue,
+                    actionSolidText:            NSColor.white,
+                    versionMeta:                NSColor(hex: 0xA0A0A6)
                 )
             }
         }
