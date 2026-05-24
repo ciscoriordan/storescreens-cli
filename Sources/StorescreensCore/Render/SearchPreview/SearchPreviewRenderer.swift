@@ -398,8 +398,8 @@ package struct SearchPreviewRenderer {
         let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
         let actionFont = systemFont(size: iconSize * 0.20, weight: .semibold)
         let actionTextWidth = measureText(actionLabel, font: actionFont)
-        let actionPadX = iconSize * 0.40
-        let actionWidth = max(iconSize * 1.4, actionTextWidth + 2 * actionPadX)
+        let actionPadX = iconSize * 0.22
+        let actionWidth = max(iconSize * 0.95, actionTextWidth + 2 * actionPadX)
         let actionHeight = iconSize * 0.36
         let actionTopY = subTopY + subLineHeight + iconSize * 0.08
         let actionRect = CGRect(
@@ -562,7 +562,7 @@ package struct SearchPreviewRenderer {
 
         let headerFont = systemFont(size: canvas.height * 0.020, weight: .bold)
         let metaFont = systemFont(size: canvas.height * 0.013, weight: .regular)
-        let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
+        let bodyFont = systemFont(size: canvas.height * 0.0175, weight: .regular)
         let linkFont = bodyFont
 
         // Header: "What's New" + gray chevron > inline (like iOS detail page).
@@ -689,7 +689,7 @@ package struct SearchPreviewRenderer {
         guard let body = input.descriptionText, !body.isEmpty else { return topY }
         // No "About This App" header — iOS App Store flows the description
         // straight after the Preview screenshots without a section heading.
-        let bodyFont = systemFont(size: canvas.height * 0.0155, weight: .regular)
+        let bodyFont = systemFont(size: canvas.height * 0.0175, weight: .regular)
         return drawTruncatedParagraph(
             into: ctx,
             text: body,
@@ -1005,7 +1005,11 @@ package struct SearchPreviewRenderer {
         ))
         ctx.fillPath()
 
-        // Time (9:41) - far left, vertically centered on the status bar.
+        // Time (9:41) and the right cluster sit inside the bezel's
+        // rounded-corner safe zone — at the very top of the bezel, the
+        // corners curve inward by ~120pt at this canvas scale, so we
+        // inset both glyph groups by ~14% from the canvas edges to keep
+        // them visible.
         let timeFont = systemFont(size: canvas.height * 0.014, weight: .semibold)
         let timeAscent = CGFloat(CTFontGetAscent(timeFont))
         drawText(
@@ -1014,15 +1018,14 @@ package struct SearchPreviewRenderer {
             font: timeFont,
             color: theme.statusBarText,
             topLeft: CGPoint(
-                x: canvas.width * 0.075,
+                x: canvas.width * 0.140,
                 y: statusCenterY - timeAscent * 0.5
             )
         )
 
-        // Right cluster: signal / wifi / battery, far right edge.
         drawStatusRightCluster(
             into: ctx,
-            rightX: canvas.width * 0.925,
+            rightX: canvas.width * 0.860,
             centerY: statusCenterY,
             scale: canvas.height * 0.011,
             theme: theme
@@ -1212,8 +1215,8 @@ package struct SearchPreviewRenderer {
         let actionLabel = Self.actionLabel(input.action, price: input.priceLabel)
         let actionFont = systemFont(size: iconSize * 0.32, weight: .semibold)
         let actionTextWidth = measureText(actionLabel, font: actionFont)
-        let actionPaddingX = iconSize * 0.22
-        let actionWidth = max(iconSize * 0.95, actionTextWidth + 2 * actionPaddingX)
+        let actionPaddingX = iconSize * 0.18
+        let actionWidth = max(iconSize * 0.80, actionTextWidth + 2 * actionPaddingX)
         let actionHeight = iconSize * 0.46
         let actionRect = CGRect(
             x: cardRect.maxX - actionWidth,
@@ -1673,6 +1676,12 @@ package struct SearchPreviewRenderer {
     ) {
         let pointSize = max(rect.height, rect.width)
         var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        if #available(macOS 14, *) {
+            // Force monochrome rendering so multilayer symbols (e.g. iphone /
+            // ipad with screen + frame layers) collapse to a single solid
+            // color, then tint to the requested color.
+            config = config.applying(NSImage.SymbolConfiguration.preferringMonochrome())
+        }
         if #available(macOS 13, *) {
             config = config.applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         }
@@ -1800,7 +1809,7 @@ extension SearchPreviewRenderer {
                     searchBarText:              NSColor.black,
                     searchBarPlaceholder:       NSColor(hex: 0x8E8E93),
                     primaryText:                NSColor.black,
-                    secondaryText:              NSColor(hex: 0x636366),
+                    secondaryText:              NSColor(hex: 0x8E8E93),
                     iconPlaceholderBackground:  NSColor(hex: 0xF2F2F7),
                     iconPlaceholderText:        NSColor(hex: 0x8E8E93),
                     iconStroke:                 NSColor.black.withAlphaComponent(0.10),
