@@ -39,7 +39,32 @@ struct SearchPreviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Override the locale(s) to render. Repeatable: --locale en-US --locale ja.")
     var locale: [String] = []
 
+    @Option(name: .long, help: "App Store URL to fetch and preview (e.g. https://apps.apple.com/us/app/id6762309721). Skips local config + metadata; pulls every input from iTunes Lookup.")
+    var url: String?
+
+    @Option(name: .long, help: "Numeric App Store app id to fetch and preview (e.g. 6762309721). Same as --url but skipping the URL parsing step.")
+    var appID: String?
+
+    @Option(name: .long, help: "Country/region for iTunes Lookup (default: us). Used with --url / --app-id.")
+    var country: String = "us"
+
     func run() async throws {
+        // App Store fetch path: --url or --app-id was passed. Builds an
+        // in-memory config from iTunes Lookup + the icon/screenshot
+        // downloads instead of reading any local YAML.
+        if let id = appID ?? AppStoreFetcher.extractAppID(from: url ?? "") {
+            try await runFromAppStore(appID: id)
+            return
+        }
+        if url != nil || appID != nil {
+            // The user passed --url but it didn't yield a valid id.
+            Logger().log(
+                "could not extract App Store app id from --url \"\(url ?? "")\"",
+                level: .error
+            )
+            throw ExitCode(1)
+        }
+
         let logger = Logger()
 
         let configLoader = ConfigLoader()
@@ -111,5 +136,125 @@ struct SearchPreviewCommand: AsyncParsableCommand {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(CaptureManifest.self, from: data)
+    }
+
+    // MARK: - App Store fetch path
+
+    /// Renders a search preview for a shipped App Store app, by app id.
+    /// Pulls every input from iTunes Lookup + the public App Store web
+    /// page; writes the resulting PNGs to `<outputDir>/<appID>/...`.
+    private func runFromAppStore(appID: String) async throws {
+        let logger = Logger()
+        logger.header("Fetching App Store metadata")
+        print("  app id:  \(appID)")
+        print("  country: \(country)")
+
+        let fetcher = AppStoreFetcher()
+        let fetched: AppStoreFetcher.FetchedApp
+        do {
+            fetched = try await fetcher.fetch(appID: appID, country: country)
+        } catch {
+            logger.log("App Store fetch failed: \(error)", level: .error)
+            throw ExitCode(1)
+        }
+        logger.log("\(fetched.name) by \(fetched.developer)", level: .success)
+        if let subtitle = fetched.subtitle {
+            logger.log("subtitle: \(subtitle)", level: .info)
+        }
+        logger.log("rating: \(String(format: "%.1f", fetched.rating)) (\(fetched.reviewCount) reviews) · age \(fetched.ageRating) · v\(fetched.version)", level: .info)
+        logger.log("screenshots: \(fetched.screenshotURLs.count) · devices: \(fetched.supportedDevices.joined(separator: ", "))", level: .info)
+
+        // Resolve output directory + asset cache. Each app id gets its own
+        // subdir so multiple URL renders don't clobber each other.
+        let outputRoot: URL = {
+            if let configured = outputDir { return URL(fileURLWithPath: configured) }
+            return URL(fileURLWithPath: "./storescreens-search-preview")
+        }()
+        let appOutputDir = outputRoot.appendingPathComponent("appstore-\(appID)")
+        let assetCacheDir = appOutputDir.appendingPathComponent(".cache")
+
+        logger.header("Downloading assets")
+        let (iconLocals, iconWarnings) = try await fetcher.downloadImages(
+            [fetched.iconURL], to: assetCacheDir, basename: "icon"
+        )
+        for w in iconWarnings { logger.log(w, level: .warning) }
+        let (screenshotLocals, shotWarnings) = try await fetcher.downloadImages(
+            Array(fetched.screenshotURLs.prefix(3)), to: assetCacheDir, basename: "screenshot"
+        )
+        for w in shotWarnings { logger.log(w, level: .warning) }
+        logger.log("\(iconLocals.count) icon + \(screenshotLocals.count) screenshot(s) cached", level: .success)
+
+        // Modes: both by default for fetched apps so users see search-row
+        // + detail-page from one invocation.
+        let modes: [SearchPreviewMode] = [.searchRow, .detailPage]
+        let appearances = appearance.isEmpty ? ["light"] : appearance
+        let canvasSize = CGSize(width: 1290, height: 2796)
+        let deviceLabel = "iPhone 6.9\""
+
+        let searchTerm = SearchPreviewResolver.defaultSearchTerm(from: fetched.name)
+        let reviewsString = Self.formatReviewCount(fetched.reviewCount)
+        let releaseAgo = SearchPreviewResolver.relativeAgo(from: fetched.releaseDateISO)
+
+        logger.header("Rendering")
+        var inputs: [SearchPreviewInput] = []
+        for app in appearances {
+            for mode in modes {
+                let modeSlug = mode == .searchRow ? "search-row" : "detail-page"
+                let outputURL = appOutputDir.appendingPathComponent("\(app)/iPhone_6.9_\(modeSlug).png")
+                inputs.append(SearchPreviewInput(
+                    locale: nil,
+                    appearance: app,
+                    mode: mode,
+                    canvasSize: canvasSize,
+                    deviceLabel: deviceLabel,
+                    name: fetched.name,
+                    subtitle: fetched.subtitle ?? "",
+                    developer: fetched.developer,
+                    rating: fetched.rating,
+                    reviews: reviewsString,
+                    categories: fetched.categories,
+                    iconPath: iconLocals.first,
+                    screenshotPaths: screenshotLocals,
+                    action: .get,
+                    priceLabel: nil,
+                    hasInAppPurchases: false,
+                    searchTerm: searchTerm,
+                    bezel: .iphone,
+                    version: fetched.version,
+                    whatsNew: fetched.releaseNotes,
+                    descriptionText: fetched.description,
+                    ageRating: fetched.ageRating,
+                    releaseAgo: releaseAgo,
+                    supportedDevices: fetched.supportedDevices,
+                    outputURL: outputURL
+                ))
+            }
+        }
+
+        let renderer = SearchPreviewRenderer()
+        let warnings = try renderer.render(inputs)
+        for w in warnings { logger.log(w, level: .warning) }
+        let written = inputs.map { $0.outputURL }.filter {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        guard !written.isEmpty else {
+            logger.log("no PNGs were rendered", level: .error)
+            throw ExitCode(1)
+        }
+        logger.log("rendered \(written.count) PNG(s)", level: .success)
+        logger.log("output: \(appOutputDir.path)", level: .info)
+    }
+
+    /// Compact App Store-style review count: 999 stays as is, 1234 becomes
+    /// 1.2K, 12_500_000 becomes 12.5M. Drops trailing `.0` so 5000 reads
+    /// as "5K", not "5.0K".
+    private static func formatReviewCount(_ count: Int) -> String {
+        if count < 1_000 { return "\(count)" }
+        if count < 1_000_000 {
+            let k = Double(count) / 1_000
+            return String(format: "%.1fK", k).replacingOccurrences(of: ".0K", with: "K")
+        }
+        let m = Double(count) / 1_000_000
+        return String(format: "%.1fM", m).replacingOccurrences(of: ".0M", with: "M")
     }
 }
