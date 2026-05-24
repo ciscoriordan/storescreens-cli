@@ -407,7 +407,7 @@ package struct SearchPreviewRenderer {
             width: actionWidth, height: actionHeight
         )
         ctx.saveGState()
-        ctx.setFillColor(theme.actionSolidBackground.cgColor)
+        ctx.setFillColor(theme.actionBackground.cgColor)
         ctx.addPath(CGPath(
             roundedRect: actionRect,
             cornerWidth: actionHeight / 2, cornerHeight: actionHeight / 2,
@@ -416,7 +416,7 @@ package struct SearchPreviewRenderer {
         ctx.fillPath()
         drawTextCentered(
             into: ctx, text: actionLabel,
-            font: actionFont, color: theme.actionSolidText,
+            font: actionFont, color: theme.actionText,
             center: CGPoint(x: actionRect.midX, y: actionRect.midY)
         )
         ctx.restoreGState()
@@ -1223,8 +1223,11 @@ package struct SearchPreviewRenderer {
             y: iconRect.midY - actionHeight / 2,
             width: actionWidth, height: actionHeight
         )
+        // Translucent gray pill with the iOS-style blue label - matches
+        // what App Store search rows actually show, not a solid blue
+        // button.
         ctx.saveGState()
-        ctx.setFillColor(theme.actionSolidBackground.cgColor)
+        ctx.setFillColor(theme.actionBackground.cgColor)
         ctx.addPath(CGPath(
             roundedRect: actionRect,
             cornerWidth: actionHeight / 2, cornerHeight: actionHeight / 2,
@@ -1233,26 +1236,22 @@ package struct SearchPreviewRenderer {
         ctx.fillPath()
         drawTextCentered(
             into: ctx, text: actionLabel,
-            font: actionFont, color: theme.actionSolidText,
+            font: actionFont, color: theme.actionText,
             center: CGPoint(x: actionRect.midX, y: actionRect.midY)
         )
         ctx.restoreGState()
 
-        // "In-App / Purchases" mini-label underneath the action button, on
-        // two lines. Only rendered when the app advertises IAPs.
+        // "In-App Purchases" mini-label underneath the action button, on
+        // a single centered line. Font sits between the original small
+        // size and the briefly-too-large 0.18.
         if input.hasInAppPurchases {
-            let iapFont = systemFont(size: iconSize * 0.18, weight: .regular)
-            let iapLineHeight = CGFloat(CTFontGetAscent(iapFont)) + CGFloat(CTFontGetDescent(iapFont))
+            let iapFont = systemFont(size: iconSize * 0.155, weight: .regular)
             let iapTopY = actionRect.maxY + iconSize * 0.06
+            let iapLineHeight = CGFloat(CTFontGetAscent(iapFont)) + CGFloat(CTFontGetDescent(iapFont))
             drawTextCentered(
-                into: ctx, text: "In-App",
+                into: ctx, text: "In-App Purchases",
                 font: iapFont, color: theme.secondaryText,
                 center: CGPoint(x: actionRect.midX, y: iapTopY + iapLineHeight * 0.5)
-            )
-            drawTextCentered(
-                into: ctx, text: "Purchases",
-                font: iapFont, color: theme.secondaryText,
-                center: CGPoint(x: actionRect.midX, y: iapTopY + iapLineHeight * 1.5)
             )
         }
 
