@@ -153,13 +153,20 @@ package struct AppStoreFetcher {
         if hasIPad { supportedDevices.append("ipad") }
         if supportedDevices.isEmpty { supportedDevices = ["iphone"] }
 
-        // Subtitle isn't exposed in the JSON endpoint, so we (optionally)
-        // grab the App Store web page and pull it out of the rendered
-        // HTML. Network failure here is non-fatal - the render just goes
-        // without a subtitle.
+        // iTunes Lookup's `screenshotUrls` is usually empty even for apps
+        // that have visible screenshots on the App Store web page, and the
+        // marketing subtitle isn't exposed at all. Grab both off the
+        // public web page in one HTTP call when requested. Failures are
+        // non-fatal - the render falls back to what iTunes Lookup gave us.
         var subtitle: String?
+        var finalScreenshots = screenshotURLs
         if fetchSubtitle {
-            subtitle = try? await scrapeSubtitle(appID: appID, country: country)
+            if let scrape = try? await scrapePage(appID: appID, country: country) {
+                subtitle = scrape.subtitle
+                if !scrape.screenshots.isEmpty {
+                    finalScreenshots = scrape.screenshots
+                }
+            }
         }
 
         return FetchedApp(
@@ -169,7 +176,7 @@ package struct AppStoreFetcher {
             description: description,
             releaseNotes: releaseNotes,
             iconURL: iconURL,
-            screenshotURLs: screenshotURLs,
+            screenshotURLs: finalScreenshots,
             categories: categories,
             developer: developer,
             rating: rating,
@@ -211,22 +218,34 @@ package struct AppStoreFetcher {
 
     // MARK: - Private
 
-    private func scrapeSubtitle(appID: String, country: String) async throws -> String? {
+    /// One HTTP fetch + two regex passes: pulls the marketing subtitle and
+    /// the iPhone screenshot URLs out of the App Store web page HTML.
+    /// Both are nil/empty on parse failure; callers fall back to iTunes
+    /// Lookup data.
+    private func scrapePage(
+        appID: String,
+        country: String
+    ) async throws -> (subtitle: String?, screenshots: [URL]) {
         guard let pageURL = URL(
             string: "https://apps.apple.com/\(country)/app/id\(appID)"
-        ) else { return nil }
+        ) else { return (nil, []) }
         var request = URLRequest(url: pageURL)
         // Apple serves a thin shell to known bot UAs; the real markup
-        // (with the subtitle) only renders for browser-style UAs.
+        // (with subtitle + screenshot picture elements) only renders for
+        // browser-style UAs.
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
             forHTTPHeaderField: "User-Agent"
         )
         let (data, _) = try await URLSession.shared.data(for: request)
-        guard let html = String(data: data, encoding: .utf8) else { return nil }
-        // The subtitle ships in a JSON-LD blob: `"subtitle":"<value>"`.
-        // Fall back to the rendered `<h2 class="product-header__subtitle">`
-        // if the JSON isn't present.
+        guard let html = String(data: data, encoding: .utf8) else {
+            return (nil, [])
+        }
+        return (scrapeSubtitle(html: html), scrapeScreenshots(html: html))
+    }
+
+    private func scrapeSubtitle(html: String) -> String? {
+        // The subtitle ships in a JSON blob: `"subtitle":"<value>"`.
         if let match = html.range(
             of: #""subtitle"\s*:\s*"([^"]+)""#,
             options: .regularExpression
@@ -256,5 +275,77 @@ package struct AppStoreFetcher {
             if !cleaned.isEmpty { return cleaned }
         }
         return nil
+    }
+
+    /// Pull iPhone screenshot URLs out of the App Store page HTML. Apple
+    /// renders each screenshot as a `<picture>` with multiple
+    /// `<source srcset="...">` variants. Each URL has the shape
+    /// `.../WIDTHxHEIGHTbb[-QUALITY].<ext>` (e.g. `600x1300bb-60.jpg` is
+    /// 60% JPEG quality; `600x1300bb.webp` is lossless). Detail-page hero
+    /// images use a similar shape but with an extra `SCS.ApDPCS01` token
+    /// before the quality suffix, which this pattern excludes. We filter
+    /// to portrait, hi-res images and dedupe by the base path so each
+    /// screenshot only appears once.
+    private func scrapeScreenshots(html: String) -> [URL] {
+        let pattern = #"https://is\d+-ssl\.mzstatic\.com/image/thumb/[^"\s\\]+?/(\d{3,4})x(\d{3,4})bb(?:-\d+)?\.(?:png|jpg|webp|jpeg)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return []
+        }
+        let nsHtml = html as NSString
+        let range = NSRange(location: 0, length: nsHtml.length)
+        let matches = regex.matches(in: html, range: range)
+
+        /// One variant of one screenshot. We track the first occurrence
+        /// order so the final list preserves screenshot order from the
+        /// page; within each screenshot we keep the largest pixel-width
+        /// variant.
+        struct Variant {
+            let firstSeenAt: Int
+            let width: Int
+            let url: URL
+        }
+        var byBase: [String: Variant] = [:]
+
+        for (matchIndex, match) in matches.enumerated() {
+            guard
+                let urlR = Range(match.range, in: html),
+                let wR = Range(match.range(at: 1), in: html),
+                let hR = Range(match.range(at: 2), in: html),
+                let width = Int(html[wR]),
+                let height = Int(html[hR])
+            else { continue }
+            // Portrait only. Excludes square icons and the
+            // detail-page hero/landscape preview frames.
+            guard height > width, width >= 200 else { continue }
+            let urlString = String(html[urlR])
+            // Dedupe by the URL minus the size suffix so multiple
+            // <source srcset> variants of the same screenshot collapse
+            // to a single entry.
+            let base = urlString.replacingOccurrences(
+                of: #"/\d{3,4}x\d{3,4}bb(?:-\d+)?\.(?:png|jpg|webp|jpeg)$"#,
+                with: "",
+                options: .regularExpression
+            )
+            guard let url = URL(string: urlString) else { continue }
+            if let existing = byBase[base] {
+                if width > existing.width {
+                    byBase[base] = Variant(
+                        firstSeenAt: existing.firstSeenAt,
+                        width: width,
+                        url: url
+                    )
+                }
+            } else {
+                byBase[base] = Variant(
+                    firstSeenAt: matchIndex,
+                    width: width,
+                    url: url
+                )
+            }
+        }
+
+        return byBase.values
+            .sorted { $0.firstSeenAt < $1.firstSeenAt }
+            .map { $0.url }
     }
 }
