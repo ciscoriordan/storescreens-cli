@@ -5937,9 +5937,8 @@ That one push triggers, in order:
 1. Build + GitHub Release: compiles `storescreens` and `storescreens-mcp` in release mode, tars them under `storescreens-v<version>-macos.tar.gz`, and attaches the tarball to a new GitHub Release whose notes are auto-generated from merged PRs.
 2. Homebrew tap bump: rewrites `Formula/storescreens.rb` in [`ciscoriordan/homebrew-tap`](https://github.com/ciscoriordan/homebrew-tap) with the new URL and SHA256 so `brew upgrade storescreens` picks up the release. Requires the `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, `Contents: Write` on the tap).
 3. Skill tag + template sync: syncs `Sources/storescreens-cli/Resources/ScreenshotTests.swift.template` into `ciscoriordan/storescreens-skill`'s `assets/`, commits the diff if any, and mirrors the same `v<version>` tag onto the skill so `npx skills add ciscoriordan/storescreens-skill@v<version>` and `brew install ciscoriordan/tap/storescreens@<version>` resolve to matching behavior. Requires `SKILL_REPO_TOKEN` (or falls back to `HOMEBREW_TAP_TOKEN` if that token's scope covers the skill repo).
-4. Web rebuild: fires a `repository_dispatch(cli-release)` at [`ciscoriordan/storescreens-web`](https://github.com/ciscoriordan/storescreens-web). Its `Hero.astro` fetches this repo's `releases/latest` at build time, so the site's "V X.Y.Z AVAILABLE NOW" eyebrow updates on the next deploy. Requires `WEB_REPO_TOKEN` (`Contents: Write` on storescreens-web).
 
-Steps 2-4 are `continue-on-error: true`. A missing or too-narrowly-scoped token emits a warning and a manual command to run, but does not fail the release. The GitHub Release itself (step 1) is fatal on error.
+Steps 2-3 are `continue-on-error: true`. A missing or too-narrowly-scoped token emits a warning and a manual command to run, but does not fail the release. The GitHub Release itself (step 1) is fatal on error.
 
 ## Alternatives
 
