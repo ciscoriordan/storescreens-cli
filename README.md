@@ -1375,7 +1375,7 @@ Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create 
 When Apple rejects a build, the previous `reviewSubmission` transitions to state `UNRESOLVED_ISSUES` and the rejected version is "stuck inside" that submission. Aborted prior runs can also leave `READY_FOR_REVIEW` drafts behind. To avoid manual cleanup in the ASC web UI, `submit` runs a pre-flight that either cancels or adopts the stale submissions before creating a new one:
 
 1. List existing `reviewSubmissions` for the app on the configured platform.
-2. If any are in `IN_REVIEW` or `WAITING_FOR_REVIEW`, bail loudly with an error. Apple is actively reviewing (or about to), and pulling the rug out from under that wastes a review slot. Cancel manually via the ASC web UI if you really mean to resubmit.
+2. If any are in `IN_REVIEW` or `WAITING_FOR_REVIEW`, bail loudly with an error. Apple is actively reviewing (or about to), and pulling the rug out from under that wastes a review slot. Cancel explicitly with `storescreens review-submissions cancel <id>` if you really mean to resubmit.
 3. For each `UNRESOLVED_ISSUES` (rejected) submission: PATCH `canceled: true` and poll until the state settles to `COMPLETE`. The IDs land in `report.canceledReviewSubmissionIDs`.
 4. For each stale `READY_FOR_REVIEW` draft: GET its items first.
     - If items reference our target version (or the items list is empty so we can attach our version): adopt the draft as our submission. The flow attaches the version if needed and PATCHes `submitted: true` in place rather than recreating. The adopted ID lands in `report.adoptedReviewSubmissionID`.
@@ -1562,10 +1562,38 @@ App Store Connect status
   Open review submissions:
     WAITING_FOR_REVIEW    abc-...    submitted 2026-05-09 14:11
 
-  Submission is queued; Apple has not started reviewing yet.
+  Submission is queued; Apple has not started reviewing yet. Cancel with `storescreens review-submissions cancel abc-...` if needed.
 ```
 
-`--json` switches to machine-readable output for scripts and CI. `--platform` accepts `IOS` (default), `MAC_OS`, `TV_OS`, `VISION_OS`. Read-only: makes no changes to the app.
+`--json` switches to machine-readable output for scripts and CI. `--platform` accepts `IOS` (default), `MAC_OS`, `TV_OS`, `VISION_OS`. Read-only: makes no changes to the app. To act on what it shows (withdraw the queued submission, inspect what Apple rejected), use `storescreens review-submissions` below.
+
+### Managing review submissions with `storescreens review-submissions`
+
+`storescreens submit --submit-for-review` drives Apple's `reviewSubmissions` flow automatically. The `review-submissions` family exposes the same resources directly, for the cases the orchestrator deliberately leaves alone: withdrawing a submission Apple has queued or is already reviewing, pulling one item out of a draft, or sending a non-version resource (Custom Product Page version, app event, A/B experiment, Background Assets version, Game Center version) to review by hand.
+
+```bash
+storescreens review-submissions list                 # submissions + states for the app in ./storescreens.yml
+storescreens review-submissions cancel <id> --wait   # withdraw a queued / in-review / rejected submission
+storescreens review-submissions items <id>           # what's attached, with per-item review state
+```
+
+| Subcommand | Apple operation | Notes |
+|---|---|---|
+| `list` | `GET /reviewSubmissions` | `--app-id` / `--bundle-id`, or falls back to the app in storescreens.yml. `--state` filters server-side. |
+| `get <id>` | `GET /reviewSubmissions/{id}` | State, platform, submitted date. |
+| `items <id>` | `GET /reviewSubmissions/{id}/items` | Per-item state; `REJECTED` pinpoints what Apple objected to. |
+| `create` | `POST /reviewSubmissions` | Starts a `READY_FOR_REVIEW` draft. ASC allows one open submission per app + platform. |
+| `add-item` | `POST /reviewSubmissionItems` | `--version-id` shorthand, or `--item-type` + `--item-id` for the other reviewable kinds. |
+| `submit <id>` | `PATCH submitted:true` | Sends the draft; state moves to `WAITING_FOR_REVIEW`. |
+| `cancel <id>` | `PATCH canceled:true` | Works on `WAITING_FOR_REVIEW`, `IN_REVIEW`, `UNRESOLVED_ISSUES`, and stale `READY_FOR_REVIEW` drafts. `--wait` polls until the state settles to `COMPLETE`. |
+| `update-item --id <id>` | `PATCH /reviewSubmissionItems/{id}` | `--removed` pulls an item from a draft; `--resolved` marks a rejected item addressed. |
+| `remove-item <item-id>` | `DELETE /reviewSubmissionItems/{id}` | Item-level DELETE works; submission-level DELETE is 403 on Apple's side, which is why `cancel` PATCHes instead. |
+
+The same operations are exposed as MCP tools: `review_submissions_list`, `review_submissions_get`, `review_submissions_items_list`, `review_submissions_create`, `review_submissions_add_item`, `review_submissions_submit`, `review_submissions_cancel`, `review_submissions_item_update`, `review_submissions_item_delete`, plus `app_store_versions_list` for finding the version id to attach.
+
+A canceled submission frees its attached version, so the recover-from-rejection loop is: `cancel` the `UNRESOLVED_ISSUES` submission (or let the next `submit` run auto-clean it), fix the build or metadata, then `storescreens submit --submit-for-review` again.
+
+Cancelling a submission Apple is actively reviewing (`IN_REVIEW`) gives up that review slot and the next submission goes to the back of the queue. The `submit` orchestrator refuses to do this automatically for exactly that reason; `review-submissions cancel` is the explicit path when you really mean it.
 
 ## Archiving + uploading the app binary
 
@@ -1626,7 +1654,7 @@ storescreens wraps Apple's App Store Connect API as both CLI subcommands and MCP
 Every operation is reachable from two surfaces:
 
 - **CLI**: nested subcommand trees like `storescreens testflight beta-groups list`, `storescreens iap purchases create`, `storescreens reports sales --frequency DAILY`. Every leaf supports `--json` for machine-readable output.
-- **MCP**: snake_case tool names like `testflight_beta_groups_list`, `iap_in_app_purchases_create`, `reports_sales_get`. The full catalog (267 new tools across 7 families) is auto-exposed via `tools/list`.
+- **MCP**: snake_case tool names like `testflight_beta_groups_list`, `iap_in_app_purchases_create`, `review_submissions_cancel`. The full catalog is auto-exposed via `tools/list`.
 
 Read-only operations (lookups, listings, GETs) are safe to call freely; write operations (POST/PATCH/DELETE) act on live App Store Connect data, so review the dry-run flow of `submit` for the surface you're editing.
 

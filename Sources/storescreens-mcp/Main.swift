@@ -125,6 +125,7 @@ struct StorescreensMCP {
         + GameCenterActivitiesMCPTools.tools
         + BetaFeedbackAndExtrasMCPTools.tools
         + Wave4ExtrasMCPTools.tools
+        + ReviewSubmissionsMCPTools.tools
 
     static let baseTools: [Tool] = [
         Tool(
@@ -381,6 +382,9 @@ struct StorescreensMCP {
             }
             if Wave4ExtrasMCPTools.tools.contains(where: { $0.name == params.name }) {
                 return try await Wave4ExtrasMCPTools.handle(params)
+            }
+            if ReviewSubmissionsMCPTools.tools.contains(where: { $0.name == params.name }) {
+                return try await ReviewSubmissionsMCPTools.handle(params)
             }
             // Marketing + Apple Pay grab-bag use tools.contains too.
             if MarketingMCPTools.tools.contains(where: { $0.name == params.name }) {

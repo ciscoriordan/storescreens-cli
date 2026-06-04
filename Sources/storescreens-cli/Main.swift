@@ -22,7 +22,7 @@ struct StoreScreensCLI: AsyncParsableCommand {
             SearchPreviewCommand.self, TemplatesCommand.self,
             // App Store Connect: submit + binary upload + state
             AuthCommand.self, SubmitCommand.self, MetadataCommand.self, UploadBuildCommand.self,
-            StatusCommand.self,
+            StatusCommand.self, ReviewSubmissionsCommand.self,
             // App Store Connect: full API surface (added 2026-05)
             TestFlightCommand.self, InAppPurchaseCommand.self, SubscriptionCommand.self,
             ReviewsCommand.self, ReportsCommand.self, UsersCommand.self, DevPortalCommand.self,

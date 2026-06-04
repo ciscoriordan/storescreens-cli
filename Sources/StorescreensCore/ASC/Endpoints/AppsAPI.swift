@@ -485,7 +485,16 @@ package struct AppsAPI {
 
     package struct ReviewSubmissionItem: Codable, Sendable {
         package let id: String
+        package let attributes: Attributes?
         package let relationships: Relationships?
+
+        package struct Attributes: Codable, Sendable {
+            /// Per-item review state (READY_FOR_REVIEW, ACCEPTED, APPROVED,
+            /// REJECTED, REMOVED). Distinct from the parent submission's
+            /// state: a rejected submission pinpoints the offending item(s)
+            /// through this field.
+            package let state: String?
+        }
 
         package struct Relationships: Codable, Sendable {
             package let appStoreVersion: AppStoreVersionRel?
@@ -538,19 +547,26 @@ package struct AppsAPI {
 
     /// Lists `reviewSubmissions` for an app. ASC scopes them per-app via
     /// `filter[app]`. The response is unsorted; callers typically filter by
-    /// `attributes.state` (see `cancellableReviewSubmissionStates`).
+    /// `attributes.state` (see `cancellableReviewSubmissionStates`). Pass
+    /// `states` to push the state filter server-side (`filter[state]`,
+    /// comma-joined enum values per Apple's spec).
     package func listReviewSubmissions(
         appID: String,
-        platform: String = "IOS"
+        platform: String = "IOS",
+        states: [String]? = nil
     ) async throws -> [ReviewSubmission] {
+        var query: [String: String] = [
+            "filter[app]": appID,
+            "filter[platform]": platform,
+            "limit": "200",
+        ]
+        if let states, !states.isEmpty {
+            query["filter[state]"] = states.joined(separator: ",")
+        }
         struct Resp: Decodable { let data: [ReviewSubmission] }
         let resp: Resp = try await client.get(
             path: "reviewSubmissions",
-            query: [
-                "filter[app]": appID,
-                "filter[platform]": platform,
-                "limit": "200",
-            ],
+            query: query,
             as: Resp.self
         )
         return resp.data
@@ -598,16 +614,20 @@ package struct AppsAPI {
     /// Lists the items attached to a `reviewSubmission`. Used by the
     /// submit cleanup path to figure out whether a stale draft already
     /// owns the target version (in which case we finalize the draft
-    /// instead of cancelling it). The response carries each item's
-    /// `appStoreVersion` relationship so callers can match on the
-    /// version ID without an additional GET.
+    /// instead of cancelling it).
+    ///
+    /// `include=appStoreVersion` is required for the relationship linkage:
+    /// without it ASC omits `relationships.appStoreVersion.data` from the
+    /// items (verified live 2026-06-04), leaving `appStoreVersionID` nil
+    /// and degrading the adopt-has-our-version match. The `included`
+    /// payload itself is ignored by the decoder.
     package func listReviewSubmissionItems(
         reviewSubmissionID: String
     ) async throws -> [ReviewSubmissionItem] {
         struct Resp: Decodable { let data: [ReviewSubmissionItem] }
         let resp: Resp = try await client.get(
             path: "reviewSubmissions/\(reviewSubmissionID)/items",
-            query: ["limit": "200"],
+            query: ["limit": "200", "include": "appStoreVersion"],
             as: Resp.self
         )
         return resp.data
@@ -646,43 +666,129 @@ package struct AppsAPI {
         return resp.data
     }
 
-    /// Attaches an App Store Version to an in-progress reviewSubmission.
-    /// Step 2 of the 3-step submit flow.
+    /// The reviewable resource kinds Apple accepts as `reviewSubmissionItems`
+    /// relationships (`ReviewSubmissionItemCreateRequest` in spec v4.3.1).
+    /// The raw value is the JSON:API relationship *key*; `resourceType` is
+    /// the relationship's `data.type`. Note both experiment generations share
+    /// the `appStoreVersionExperiments` resource type and differ only in the
+    /// relationship key.
+    package enum ReviewSubmissionItemType: String, CaseIterable, Sendable {
+        case appStoreVersion
+        case appCustomProductPageVersion
+        case appStoreVersionExperiment
+        case appStoreVersionExperimentV2
+        case appEvent
+        case backgroundAssetVersion
+        case gameCenterAchievementVersion
+        case gameCenterActivityVersion
+        case gameCenterChallengeVersion
+        case gameCenterLeaderboardSetVersion
+        case gameCenterLeaderboardVersion
+
+        package var resourceType: String {
+            switch self {
+            case .appStoreVersion:                return "appStoreVersions"
+            case .appCustomProductPageVersion:    return "appCustomProductPageVersions"
+            case .appStoreVersionExperiment,
+                 .appStoreVersionExperimentV2:    return "appStoreVersionExperiments"
+            case .appEvent:                       return "appEvents"
+            case .backgroundAssetVersion:         return "backgroundAssetVersions"
+            case .gameCenterAchievementVersion:   return "gameCenterAchievementVersions"
+            case .gameCenterActivityVersion:      return "gameCenterActivityVersions"
+            case .gameCenterChallengeVersion:     return "gameCenterChallengeVersions"
+            case .gameCenterLeaderboardSetVersion: return "gameCenterLeaderboardSetVersions"
+            case .gameCenterLeaderboardVersion:   return "gameCenterLeaderboardVersions"
+            }
+        }
+    }
+
+    /// Attaches a reviewable resource to an in-progress reviewSubmission
+    /// (POST /v1/reviewSubmissionItems). Besides appStoreVersions, Apple
+    /// reviews Custom Product Page versions, app events, A/B experiments,
+    /// Background Asset versions, and Game Center versions through the same
+    /// items mechanism.
     @discardableResult
-    package func addVersionToReviewSubmission(
+    package func addItemToReviewSubmission(
         reviewSubmissionID: String,
-        versionID: String
+        itemType: ReviewSubmissionItemType,
+        itemID: String
     ) async throws -> ReviewSubmissionItem {
+        struct Rel: Encodable {
+            struct Data: Encodable { let type: String; let id: String }
+            let data: Data
+        }
         struct Body: Encodable {
             struct Data: Encodable {
                 let type = "reviewSubmissionItems"
-                let relationships: Rels
-            }
-            struct Rels: Encodable {
-                struct Sub: Encodable {
-                    struct Data: Encodable { let type = "reviewSubmissions"; let id: String }
-                    let data: Data
-                }
-                struct Ver: Encodable {
-                    struct Data: Encodable { let type = "appStoreVersions"; let id: String }
-                    let data: Data
-                }
-                let reviewSubmission: Sub
-                let appStoreVersion: Ver
+                // Keyed by relationship name; a [String: Rel] dictionary
+                // encodes to exactly the JSON:API relationships object.
+                let relationships: [String: Rel]
             }
             let data: Data
         }
-        let body = Body(data: .init(
-            relationships: .init(
-                reviewSubmission: .init(data: .init(id: reviewSubmissionID)),
-                appStoreVersion: .init(data: .init(id: versionID))
-            )
-        ))
+        let body = Body(data: .init(relationships: [
+            "reviewSubmission": Rel(data: .init(type: "reviewSubmissions", id: reviewSubmissionID)),
+            itemType.rawValue: Rel(data: .init(type: itemType.resourceType, id: itemID)),
+        ]))
         struct Resp: Decodable { let data: ReviewSubmissionItem }
         let resp: Resp = try await client.post(
             path: "reviewSubmissionItems", body: body, as: Resp.self
         )
         return resp.data
+    }
+
+    /// Attaches an App Store Version to an in-progress reviewSubmission.
+    /// Step 2 of the 3-step submit flow. Convenience over
+    /// `addItemToReviewSubmission` for the by-far-most-common item kind.
+    @discardableResult
+    package func addVersionToReviewSubmission(
+        reviewSubmissionID: String,
+        versionID: String
+    ) async throws -> ReviewSubmissionItem {
+        try await addItemToReviewSubmission(
+            reviewSubmissionID: reviewSubmissionID,
+            itemType: .appStoreVersion,
+            itemID: versionID
+        )
+    }
+
+    /// PATCH /v1/reviewSubmissionItems/{id}. Apple exposes two booleans:
+    /// `removed` pulls the item out of a not-yet-submitted submission;
+    /// `resolved` marks a rejected item as addressed so the submission can
+    /// be re-submitted. Pass only the flag you mean to set.
+    @discardableResult
+    package func updateReviewSubmissionItem(
+        id: String,
+        removed: Bool? = nil,
+        resolved: Bool? = nil
+    ) async throws -> ReviewSubmissionItem {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "reviewSubmissionItems"
+                let id: String
+                let attributes: Attrs
+            }
+            struct Attrs: Encodable {
+                let removed: Bool?
+                let resolved: Bool?
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            id: id, attributes: .init(removed: removed, resolved: resolved)
+        ))
+        struct Resp: Decodable { let data: ReviewSubmissionItem }
+        let resp: Resp = try await client.patch(
+            path: "reviewSubmissionItems/\(id)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// DELETE /v1/reviewSubmissionItems/{id}: removes an item from a draft
+    /// (not-yet-submitted) reviewSubmission. Unlike the submission-level
+    /// DELETE (which Apple 403s), the item-level DELETE is supported.
+    package func deleteReviewSubmissionItem(id: String) async throws {
+        try await client.delete(path: "reviewSubmissionItems/\(id)")
     }
 
     /// PATCH `submitted: true` to finalize a reviewSubmission. Step 3 of the

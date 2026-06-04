@@ -217,10 +217,10 @@ struct StatusCommand: AsyncParsableCommand {
         let openStates: Set<String> = ["WAITING_FOR_REVIEW", "IN_REVIEW", "READY_FOR_REVIEW", "UNRESOLVED_ISSUES"]
         if let open = report.reviewSubmissions.first(where: { ($0.state.map(openStates.contains) ?? false) }) {
             switch open.state {
-            case "IN_REVIEW":           return "Apple is reviewing the submission."
-            case "WAITING_FOR_REVIEW":  return "Submission is queued; Apple has not started reviewing yet."
+            case "IN_REVIEW":           return "Apple is reviewing the submission. Withdraw it with `storescreens review-submissions cancel \(open.id)` if needed."
+            case "WAITING_FOR_REVIEW":  return "Submission is queued; Apple has not started reviewing yet. Cancel with `storescreens review-submissions cancel \(open.id)` if needed."
             case "READY_FOR_REVIEW":    return "Draft submission exists but has not been finalized. Run `storescreens submit --submit-for-review` to send it."
-            case "UNRESOLVED_ISSUES":   return "Apple rejected the submission. Resolve issues and resubmit."
+            case "UNRESOLVED_ISSUES":   return "Apple rejected the submission. Resolve issues and resubmit (`storescreens review-submissions cancel \(open.id)` frees the version for a fresh submission)."
             default: return nil
             }
         }

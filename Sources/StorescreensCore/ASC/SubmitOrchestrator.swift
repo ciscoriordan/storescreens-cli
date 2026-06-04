@@ -151,8 +151,9 @@ package struct SubmitOrchestrator {
         case missingCreateVersion
         case unsupportedScreenshotDims(file: String, w: Int, h: Int)
         /// A prior `reviewSubmission` is in WAITING_FOR_REVIEW or IN_REVIEW
-        /// and we refuse to auto-cancel it. Operator must cancel it via the
-        /// ASC web UI before re-running submit-for-review.
+        /// and we refuse to auto-cancel it. Operator must cancel it
+        /// explicitly (`storescreens review-submissions cancel <id>`) before
+        /// re-running submit-for-review.
         case activeReviewInProgress(submissionID: String, state: String)
 
         package var description: String {
@@ -166,7 +167,7 @@ package struct SubmitOrchestrator {
             case .unsupportedScreenshotDims(let f, let w, let h):
                 return "screenshot \(f) has unsupported dimensions \(w)x\(h); no ASC display type matches"
             case .activeReviewInProgress(let id, let state):
-                return "an active review submission (\(id), state \(state)) is in progress; cancel it via the App Store Connect web UI before re-running submit-for-review"
+                return "an active review submission (\(id), state \(state)) is in progress; cancel it with `storescreens review-submissions cancel \(id) --wait` before re-running submit-for-review"
             }
         }
     }
@@ -436,8 +437,9 @@ package struct SubmitOrchestrator {
     ///
     /// 1. List existing reviewSubmissions for the app.
     /// 2. If any are in WAITING_FOR_REVIEW or IN_REVIEW: bail loudly.
-    ///    Operator must cancel via the ASC web UI; we won't pull the rug
-    ///    out from under an active Apple review.
+    ///    Operator must cancel explicitly (`storescreens review-submissions
+    ///    cancel`); we won't pull the rug out from under an active Apple
+    ///    review.
     /// 3. For each cancellable (READY_FOR_REVIEW / UNRESOLVED_ISSUES):
     ///    - If its items already reference our target version: adopt it.
     ///    - If its items list is empty: attach our version and adopt it.

@@ -10,7 +10,9 @@ struct SubmitCommand: AsyncParsableCommand {
             Requires `storescreens auth login` (or ASC_* env vars) and an \
             `app_store_connect:` block in storescreens.yml. Screenshots are \
             sourced from the render output directory; metadata from a \
-            fastlane-style metadata/<locale>/*.txt directory.
+            fastlane-style metadata/<locale>/*.txt directory. Track the \
+            resulting review submission with `storescreens status`; withdraw \
+            it with `storescreens review-submissions cancel <id>`.
             """
     )
 
