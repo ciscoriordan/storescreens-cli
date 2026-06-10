@@ -403,6 +403,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
 | `storescreens upload-build` | Archive, export, and upload the `.ipa` to App Store Connect / TestFlight |
 | `storescreens status` | Show current ASC state: versions and any in-flight review submission |
+| `storescreens pricing ...` | App price schedule: get, set (free / paid / per-territory), and price-point discovery |
 | `storescreens testflight ...` | TestFlight: beta groups, testers, builds, beta-app/build-localizations, beta-review, license-agreement, tester-metrics |
 | `storescreens iap ...` | In-App Purchases (V2): products, localizations, pricing, submissions, content-hosting, images, promoted purchases |
 | `storescreens subscriptions ...` | Auto-renewing subscriptions: groups, products, prices, offer codes, promotional offers, availability, submissions |
@@ -1440,7 +1441,7 @@ app_store_connect:
   bundle_id: com.example.app
 
   pricing:
-    free: true
+    free: true                          # free everywhere
     base_territory: USA
 
   availability:
@@ -1448,7 +1449,28 @@ app_store_connect:
     available_in_new_territories: true
 ```
 
-Both blocks are optional and idempotent. `pricing` only supports `free: true` today (paid pricing requires price-tier lookup, which isn't wired up yet - set paid pricing in the ASC web UI). The step is a no-op if the app already has a price schedule, so re-runs don't overwrite manual edits. `availability` accepts either `"all"` (expanded to every territory Apple supports at submit time) or an explicit list of ISO 3166-1 alpha-3 codes; it diffs against the current availability and skips the POST if nothing changed.
+For a paid app, drop `free` and set a `base_price` instead. Prices are local-currency amounts with no symbol; each snaps to the nearest valid App Store tier for its territory. Add `territory_prices` to override specific countries (true per-territory pricing); every territory you don't list is equivalenced from the base price:
+
+```yaml
+  pricing:
+    base_territory: USA
+    base_price: "4.99"                  # US$4.99, snapped to nearest tier
+    territory_prices:                   # optional per-territory overrides
+      GBR: "3.99"
+      JPN: "600"
+```
+
+Both blocks are optional and idempotent. On `submit`, pricing is a no-op if the app already has a price schedule, so re-runs don't overwrite manual edits; to change an existing schedule use the standalone `storescreens pricing set` command (below). `availability` accepts either `"all"` (expanded to every territory Apple supports at submit time) or an explicit list of ISO 3166-1 alpha-3 codes; it diffs against the current availability and skips the POST if nothing changed.
+
+Outside the submit flow, `storescreens pricing` reads and writes the schedule directly:
+
+```bash
+storescreens pricing get --app-id 1234567890
+storescreens pricing set --app-id 1234567890 --base-price 4.99 --territory GBR=3.99 JPN=600
+storescreens pricing price-points --app-id 1234567890 --territory USA --around 4.99
+```
+
+`pricing set` replaces the whole schedule (it is the explicit "change it now" path, so unlike submit it does not skip an existing one). `price-points` lists a territory's valid tiers, or with `--around` returns just the nearest one. The same three operations are exposed to MCP clients as `pricing_get`, `pricing_set`, and `pricing_price_points_list`.
 
 `release_notes.txt` (`whatsNew`) is also handled intelligently: ASC rejects release notes on the first version of a brand-new app, so `submit` detects that case (no prior released version on the app) and drops `whatsNew` from the metadata PATCH with a `skipping whatsNew` progress line. Leave your `release_notes.txt` in place - it'll be picked up automatically on subsequent submissions.
 
@@ -1521,7 +1543,7 @@ Quick map of what each YAML block sends to which App Store Connect resource:
 | `metadata/<locale>/{description,keywords,promotional_text,release_notes,support_url,marketing_url}.txt` | `appStoreVersionLocalizations` | PATCH | Per-locale, per-version. |
 | `metadata/<locale>/{name,subtitle,privacy_url,privacy_choices_url}.txt` | `appInfoLocalizations` | PATCH | Per-locale, app-level (lives on editable AppInfo). |
 | `metadata/<locale>/review_*.txt` _or_ `review_info:` | `appStoreReviewDetails` | POST or PATCH | Per-version, not per-locale. |
-| `pricing.free: true` | `appPriceSchedules` | POST | Idempotent: skips if a schedule already exists. |
+| `pricing.free` / `pricing.base_price` (+ `territory_prices`) | `appPriceSchedules` | POST | Resolves amounts to nearest tiers. Idempotent: skips if a schedule already exists. |
 | `availability.territories` | `appAvailabilities` (v2) | POST | Diffs against current; skips if unchanged. |
 | `categories.{primary,secondary,...}` | `appInfos` (relationships) | PATCH | All six slots in one body. |
 | `age_rating.*` | `ageRatingDeclarations` | PATCH | Diffed before write; skips empty diffs. |

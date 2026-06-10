@@ -2019,9 +2019,9 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertEqual(report.pricingStatus, "unchanged")
     }
 
-    /// Paid pricing is not yet implemented — surface a clear error rather
-    /// than silently skipping.
-    func testSubmit_pricing_paidNotSupported_reportsError() async throws {
+    /// A `pricing:` block with neither `free: true` nor a `base_price` is
+    /// invalid — surface a clear error rather than silently skipping.
+    func testSubmit_pricing_noDirective_reportsError() async throws {
         let (client, _) = makeClient()
 
         ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
@@ -2050,9 +2050,76 @@ final class SubmitOrchestratorTests: XCTestCase {
             shouldUploadMetadata: false
         )
 
-        XCTAssertTrue(report.errors.contains { $0.contains("only `free: true`") },
-                      "paid pricing must surface a clear error, got: \(report.errors)")
+        XCTAssertTrue(report.errors.contains { $0.contains("base_price") },
+                      "must point the user at free/base_price, got: \(report.errors)")
         XCTAssertNil(report.pricingStatus)
+    }
+
+    /// Paid pricing with a per-territory override: resolve the base price and
+    /// each override to the nearest tier, then POST one schedule whose manual
+    /// prices cover both territories. The base territory anchors equivalencing
+    /// for everything not listed.
+    func testSubmit_pricing_paidWithTerritoryOverride_createsSchedule() async throws {
+        let (client, _) = makeClient()
+
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+        // No existing price schedule → 404.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appPriceSchedule") { _ in
+            (404, Data(#"{"errors":[{"code":"NOT_FOUND","title":"not found","detail":"no schedule"}]}"#.utf8))
+        }
+        // Territory-specific ladders: branch on the filter[territory] value so
+        // USA and GBR resolve to distinct tier IDs.
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appPricePoints") { request in
+            let isGBR = request.url?.absoluteString.contains("=GBR") ?? false
+            let body = isGBR ? """
+            {"data":[
+              {"id":"PP-GBR-399","type":"appPricePoints","attributes":{"customerPrice":"3.99","proceeds":"2.79"}},
+              {"id":"PP-GBR-499","type":"appPricePoints","attributes":{"customerPrice":"4.99","proceeds":"3.49"}}
+            ]}
+            """ : """
+            {"data":[
+              {"id":"PP-USA-399","type":"appPricePoints","attributes":{"customerPrice":"3.99","proceeds":"2.79"}},
+              {"id":"PP-USA-499","type":"appPricePoints","attributes":{"customerPrice":"4.99","proceeds":"3.49"}}
+            ]}
+            """
+            return (200, Data(body.utf8))
+        }
+        let postBodies = NSMutableArray()
+        ASCStub.add(method: "POST", suffix: "/v1/appPriceSchedules") { _ in
+            postBodies.add(ASCStub.requestBodies.last ?? Data())
+            return (201, Data(#"{"data":{"id":"PS-1","type":"appPriceSchedules"}}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", attachBuild: false),
+            pricing: PricingConfig(baseTerritory: "USA", basePrice: "4.99", territoryPrices: ["GBR": "3.99"])
+        )
+        let orchestrator = SubmitOrchestrator(client: client, config: config)
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s", devices: []
+        )
+
+        let report = try await orchestrator.submit(
+            manifest: manifest,
+            renderRoot: URL(fileURLWithPath: "/tmp"),
+            metadataRoot: nil,
+            shouldUploadScreenshots: false,
+            shouldUploadMetadata: false
+        )
+
+        XCTAssertEqual(postBodies.count, 1, "expected one POST to /v1/appPriceSchedules")
+        let bodyStr = String(data: postBodies[0] as! Data, encoding: .utf8) ?? ""
+        XCTAssertTrue(bodyStr.contains("\"PP-USA-499\""), "base USA tier must be in the POST body: \(bodyStr)")
+        XCTAssertTrue(bodyStr.contains("\"PP-GBR-399\""), "GBR override tier must be in the POST body: \(bodyStr)")
+        XCTAssertEqual(report.pricingStatus, "paid (base: USA @ 4.99, 1 territory override(s))")
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
     }
 
     // MARK: - First-version whatsNew skip

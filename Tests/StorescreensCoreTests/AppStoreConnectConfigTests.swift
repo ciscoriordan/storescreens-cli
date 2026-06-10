@@ -214,4 +214,36 @@ final class AppStoreConnectConfigTests: XCTestCase {
         XCTAssertEqual(config.ageRating?.gambling, false)
         XCTAssertEqual(config.reviewInfo?.firstName, "Jane")
     }
+
+    // MARK: - Pricing (paid + per-territory)
+
+    func testPricingConfig_paidBasePriceOnly() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        pricing:
+          base_territory: USA
+          base_price: "4.99"
+        """
+        let config = try decode(yaml)
+        XCTAssertNil(config.pricing?.free)
+        XCTAssertEqual(config.pricing?.baseTerritory, "USA")
+        XCTAssertEqual(config.pricing?.basePrice, "4.99")
+        XCTAssertNil(config.pricing?.territoryPrices)
+    }
+
+    func testPricingConfig_perTerritoryOverrides() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        pricing:
+          base_price: "4.99"
+          territory_prices:
+            GBR: "3.99"
+            JPN: "600"
+        """
+        let config = try decode(yaml)
+        XCTAssertEqual(config.pricing?.basePrice, "4.99")
+        XCTAssertEqual(config.pricing?.territoryPrices?["GBR"], "3.99")
+        XCTAssertEqual(config.pricing?.territoryPrices?["JPN"], "600")
+        XCTAssertEqual(config.pricing?.territoryPrices?.count, 2)
+    }
 }

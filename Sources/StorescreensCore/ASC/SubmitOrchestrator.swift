@@ -1152,33 +1152,76 @@ package struct SubmitOrchestrator {
         progress: ((String) -> Void)?
     ) async throws {
         let free = pricing.free ?? false
-        guard free else {
-            // Paid pricing is not yet supported; surface a clear message
-            // rather than silently succeeding.
-            report.errors.append("pricing: only `free: true` is supported today; paid pricing is not implemented")
+        let hasPaid = pricing.basePrice != nil
+
+        // Free and paid are mutually exclusive, and at least one is required.
+        if free && hasPaid {
+            report.errors.append("pricing: set either `free: true` or `base_price`, not both")
+            return
+        }
+        guard free || hasPaid else {
+            report.errors.append("pricing: set `free: true` or a `base_price` (e.g. \"4.99\")")
             return
         }
 
-        // Idempotent: if the app already has a price schedule, don't
-        // replace it - creating a new schedule is destructive to whatever
-        // the developer set up in the ASC web UI.
+        // Idempotent: if the app already has a price schedule, don't replace
+        // it - creating a new schedule supersedes whatever the developer set
+        // up in the ASC web UI. Use `storescreens pricing set` to change it.
         if try await api.hasExistingPriceSchedule(appID: appID) {
             report.pricingStatus = "unchanged"
-            progress?("pricing: schedule already exists, leaving untouched")
+            progress?("pricing: schedule already exists, leaving untouched (use `storescreens pricing set` to change)")
             return
         }
 
         let base = pricing.baseTerritory ?? "USA"
-        guard let pricePoint = try await api.findFreePricePoint(appID: appID, territoryID: base) else {
-            report.errors.append("pricing: no free price point for base territory \(base)")
+
+        // Free is just a base price of 0 - the territory's "0" tier resolves
+        // exactly and Apple equivalences free everywhere.
+        if free {
+            let plan = try await api.resolvePricing(appID: appID, baseTerritory: base, basePrice: 0)
+            try await api.createPriceSchedule(
+                appID: appID, baseTerritoryID: base, manualPrices: plan.manualPrices
+            )
+            report.pricingStatus = "free (base: \(base))"
+            progress?("pricing: set to free with base territory \(base)")
             return
         }
 
-        _ = try await api.createPriceSchedule(
-            appID: appID, baseTerritoryID: base, pricePointID: pricePoint.id
+        // Paid: a base price plus optional per-territory overrides. All amounts
+        // are in each territory's local currency and snap to the nearest tier.
+        func money(_ v: Double) -> String {
+            v == v.rounded() ? String(Int(v)) : String(format: "%.2f", v)
+        }
+        guard let baseAmount = Double(pricing.basePrice ?? "") else {
+            report.errors.append("pricing: base_price \"\(pricing.basePrice ?? "")\" is not a number")
+            return
+        }
+        var overrides: [String: Double] = [:]
+        for (territory, raw) in pricing.territoryPrices ?? [:] {
+            guard let amount = Double(raw) else {
+                report.errors.append("pricing: territory_prices[\(territory)] value \"\(raw)\" is not a number")
+                return
+            }
+            overrides[territory] = amount
+        }
+
+        let plan = try await api.resolvePricing(
+            appID: appID, baseTerritory: base, basePrice: baseAmount, territoryPrices: overrides
         )
-        report.pricingStatus = "free (base: \(base))"
-        progress?("pricing: set to free with base territory \(base)")
+        try await api.createPriceSchedule(
+            appID: appID, baseTerritoryID: base, manualPrices: plan.manualPrices
+        )
+
+        let overrideCount = plan.manualPrices.count - 1
+        var status = "paid (base: \(base) @ \(money(baseAmount))"
+        if overrideCount > 0 { status += ", \(overrideCount) territory override(s)" }
+        status += ")"
+        report.pricingStatus = status
+        progress?("pricing: \(status)")
+        // Surface any amounts that snapped to a different tier than requested.
+        for r in plan.resolutions where !r.isExact {
+            progress?("pricing: \(r.territory) requested \(money(r.requested)) snapped to \(money(r.actual)) (nearest tier)")
+        }
     }
 
     private func applyAvailability(

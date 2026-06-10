@@ -291,28 +291,58 @@ package struct ReviewInfoConfig: Codable, Sendable {
     }
 }
 
-/// App-level pricing. Currently supports the "free" case (most common for a
-/// first submission). Setting a specific paid tier is doable via the same
-/// `createPriceSchedule` path but isn't exposed here yet - add a `price_tier`
-/// or `base_price` field when a real paid-app use case comes up.
+/// App-level pricing. Supports three mutually exclusive shapes:
+///
+///   - Free: `free: true`. Apple auto-computes a free price everywhere.
+///   - Single paid tier: `base_price: "4.99"`. The base territory is priced
+///     at that amount (resolved to the nearest valid App Store tier) and
+///     Apple equivalences every other territory from it.
+///   - Per-territory pricing: `base_price` plus a `territory_prices` map of
+///     ISO 3166-1 alpha-3 code -> local-currency amount. Listed territories
+///     get the given price; the rest are equivalenced from the base.
+///
+/// All amounts are in each territory's local currency (no symbol): "4.99"
+/// under `base_price` with `base_territory: USA` means US$4.99; "600" under
+/// `territory_prices.JPN` means ¥600.
 package struct PricingConfig: Codable, Sendable {
     /// `true` sets the app to free in the base territory; Apple auto-computes
-    /// free prices for every other territory. `false` is currently rejected -
-    /// paid pricing needs more fields than this config exposes today.
+    /// free prices for every other territory. Mutually exclusive with
+    /// `base_price` / `territory_prices`. `false` is treated as "no free
+    /// directive" - set a `base_price` for a paid app.
     package var free: Bool?
 
     /// Territory used as the base for price equivalencing. Defaults to USA
     /// (matches the ASC web UI default). Any ISO 3166-1 alpha-3 code works.
     package var baseTerritory: String?
 
-    package init(free: Bool? = nil, baseTerritory: String? = nil) {
+    /// Paid price for the base territory, in its local currency, e.g. "4.99".
+    /// Resolved to the nearest valid App Store price tier. Mutually exclusive
+    /// with `free: true`.
+    package var basePrice: String?
+
+    /// Optional per-territory price overrides: ISO 3166-1 alpha-3 code ->
+    /// local-currency amount (e.g. `["GBR": "3.99", "JPN": "600"]`). Each is
+    /// resolved to that territory's nearest valid tier. Territories absent
+    /// from this map are equivalenced from the base price.
+    package var territoryPrices: [String: String]?
+
+    package init(
+        free: Bool? = nil,
+        baseTerritory: String? = nil,
+        basePrice: String? = nil,
+        territoryPrices: [String: String]? = nil
+    ) {
         self.free = free
         self.baseTerritory = baseTerritory
+        self.basePrice = basePrice
+        self.territoryPrices = territoryPrices
     }
 
     package enum CodingKeys: String, CodingKey {
         case free
         case baseTerritory = "base_territory"
+        case basePrice = "base_price"
+        case territoryPrices = "territory_prices"
     }
 }
 
