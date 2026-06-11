@@ -57,8 +57,11 @@ Requires macOS 14+ (Sonoma or later) on Apple Silicon (arm64). Intel Macs are no
 
 ```bash
 brew tap ciscoriordan/tap
+brew trust ciscoriordan/tap   # one-time: Homebrew gates third-party taps
 brew install storescreens
 ```
+
+Newer Homebrew refuses to load formulae from untrusted third-party taps ("Refusing to load formula ... from untrusted tap"). `brew trust ciscoriordan/tap` clears that once per machine. To upgrade later: `brew update && brew upgrade storescreens`.
 
 ### Script
 
