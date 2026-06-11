@@ -4,7 +4,7 @@
 
 Every App Store Connect API call. Granular, agentic screenshot rendering.
 
-StoreScreens is a `brew`-installed Swift MCP/CLI (and MD Skill) that drives the entire App Store Connect pipeline from one config file: XCUITest screenshots, framed renders with markdown captions (optionally unique per device/locale), metadata and binary upload via Apple's official API. Beautiful, modern bezels, no Ruby version hell.
+StoreScreens is a `brew`-installed Swift MCP/CLI (and MD Skill) that drives the entire App Store Connect pipeline from one config file: XCUITest screenshots, framed renders with markdown captions (optionally unique per device/locale), bring-your-own-DeepL metadata translation, metadata and binary upload via Apple's official API. Beautiful, modern bezels, no Ruby version hell.
 
 Captures run your UI tests on multiple simulators in parallel (or natively on macOS), organize the output by device and locale, and auto-detect which App Store size each simulator maps to. Supports iPhone, iPad, Apple Watch, and Mac App Store screenshots.
 
@@ -400,6 +400,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens bezels` | Import / inspect Apple device bezel assets used by `render` |
 | `storescreens auth` | Manage App Store Connect API credentials |
 | `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
+| `storescreens translate ...` | Translate per-locale metadata with your own DeepL key (`run`, `status`, `auth`) |
 | `storescreens submit` | Upload rendered screenshots + metadata to App Store Connect |
 | `storescreens upload-build` | Archive, export, and upload the `.ipa` to App Store Connect / TestFlight |
 | `storescreens status` | Show current ASC state: versions and any in-flight review submission |
@@ -597,6 +598,29 @@ storescreens screenshot --simulator "iPhone 17 Pro" --boot
 | `--output PATH` | Output file path (default: `screenshot.png`) |
 | `--boot` | Boot the simulator if it's not already running |
 | `--verbose` | Show verbose output |
+
+## Translating metadata (DeepL)
+
+`storescreens translate` seeds your non-base metadata locales from a base locale using DeepL. Bring your own key (a free tier exists): set `DEEPL_API_KEY` or run `storescreens translate auth login`. Free-tier keys carry a `:fx` suffix and route to `api-free.deepl.com` automatically.
+
+```bash
+storescreens translate auth login            # store + verify your DeepL key
+storescreens translate run --dry-run         # preview what would change
+storescreens translate run                    # translate en-US -> every other locale folder
+storescreens translate run --to de-DE ja      # only specific targets
+storescreens translate status                 # per-locale, per-field state
+```
+
+By default it translates `name`, `subtitle`, `description`, `promotional_text`, `release_notes`, and `keywords`. URLs and App Review contact fields are never translated. Override with `--fields`, the base locale with `--from` (default `en-US`), and targets with `--to`.
+
+Overwrite policy is tracked in `metadata/.translations.json` (commit it):
+
+- A field with no translation yet gets translated.
+- A machine translation whose base text changed is re-translated. This is the point: edit `en-US`, re-run, and only the stale locales refresh.
+- A translation you (or a coding agent) edited is left alone. Editing a file is the "reviewed" signal; `--force` overrides it.
+- A hand-authored locale with no manifest entry is never clobbered.
+
+DeepL output is a starting point, not ship-ready. Have a coding agent QA-pass each locale (brand names, tone, ASO keywords, length limits) before `submit`. `translate status` lists what is still raw machine output.
 
 ## Configuration
 

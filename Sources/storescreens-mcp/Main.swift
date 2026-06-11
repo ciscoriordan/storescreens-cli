@@ -127,6 +127,7 @@ struct StorescreensMCP {
         + Wave4ExtrasMCPTools.tools
         + ReviewSubmissionsMCPTools.tools
         + PricingMCPTools.tools
+        + TranslateMCPTools.tools
 
     static let baseTools: [Tool] = [
         Tool(
@@ -403,6 +404,9 @@ struct StorescreensMCP {
             }
             if params.name.hasPrefix("pricing_") {
                 return try await PricingMCPTools.handle(params)
+            }
+            if params.name.hasPrefix("translate_") {
+                return try await TranslateMCPTools.handle(params)
             }
             if params.name.hasPrefix("subs_") {
                 return try await SubscriptionsMCPTools.handle(params)

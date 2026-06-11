@@ -57,6 +57,7 @@ struct MetadataInitCommand: AsyncParsableCommand {
             print("  created locale(s): \(createdLocales.joined(separator: ", "))")
         }
         print("  next: add .txt files in each locale folder. See \(readmePath.path) for the field reference.")
+        print("  fill in your base locale, then `storescreens translate` to seed the others with DeepL.")
         print("  then run `storescreens submit --dry-run` to verify.")
     }
 
@@ -129,6 +130,19 @@ struct MetadataInitCommand: AsyncParsableCommand {
               ja/
                 description.txt
                 release_notes.txt
+
+        ## Translate
+
+        Fill in your base locale (e.g. `en-US`), then seed the others with DeepL:
+
+            storescreens translate auth login   # one-time: store your DeepL key
+            storescreens translate run          # base -> every other locale folder
+
+        Re-run after editing base copy and only stale machine translations
+        refresh; translations you edit by hand are preserved. DeepL output is a
+        starting point - QA each locale before submit. State is tracked in
+        `.translations.json` (commit it); `storescreens translate status` shows
+        what is still raw machine output.
 
         ## Upload
 
