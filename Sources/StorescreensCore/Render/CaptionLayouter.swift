@@ -134,6 +134,45 @@ package struct CaptionLayouter {
             return CGRect(x: topLeft.x, y: slotBottom, width: blockWidth, height: middleSlotHeight)
         }
 
+        /// Visible cap-ink extent of the laid-out caption, derived from FONT
+        /// METRICS. A Core Text line box reaches `ascent` above the baseline,
+        /// but capitals only reach `capHeight`, so the visible top of the
+        /// FIRST line sits `ascent - capHeight` below the box top; the visible
+        /// bottom of the LAST line sits `descent` above the box bottom (a
+        /// typical title line has no descenders, and a descender dipping into
+        /// that slack does not move the perceived block bottom). Used by the
+        /// equal-spacing layout so the caption's gaps are measured to the
+        /// visible glyphs, not the line box (whose ascent/descent slack -
+        /// roughly 25px above and 5px below for a Latin caption - would
+        /// otherwise unbalance the equalized gaps). Font metrics are exact and
+        /// background-independent, where a trial composite mis-predicts the
+        /// brightness threshold the gap-measuring pass applies over the real
+        /// scrimmed photo. Offsets are top-origin, relative to the block's box
+        /// top edge: `top` is the box-top -> ink-top inset, `height` the ink
+        /// span. The box height is `measuredHeight` (the `Output` value).
+        package func inkExtent(measuredHeight: CGFloat) -> (top: CGFloat, height: CGFloat)? {
+            let titleH = titleSize.height
+            // Top line is the title when present, else the subtitle.
+            let topFS = titleH > 0 ? titleFramesetter : subtitleFramesetter
+            guard let topMetrics = topFS?.dominantFontMetrics() else {
+                // No measurable font (empty caption): treat the box as ink.
+                return (top: 0, height: measuredHeight)
+            }
+            // Top inset: the line box reaches `ascent`, capitals reach
+            // `capHeight`, so the visible top is `ascent - capHeight` below the
+            // box top.
+            let topInset = max(0, topMetrics.ascent - topMetrics.capHeight)
+            // Bottom inset is ~0: the Core Text frame's bottom edge sits at the
+            // last line's descent line, and a real caption's bottom row almost
+            // always reaches it (descenders in p/y/g, or the ~2px overshoot of
+            // round letters), so the visible bottom is effectively the box
+            // bottom. Subtracting the full descent here over-trimmed the ink
+            // (measured ~4px of slack vs a ~20px descent), shrinking the block
+            // and unbalancing the gaps.
+            let inkHeight = max(1, measuredHeight - topInset)
+            return (top: topInset, height: inkHeight)
+        }
+
         private func alignOffset(for align: CaptionAlign, content: CGFloat, total: CGFloat) -> CGFloat {
             // For content wider than `total` (caption width-overflow at min
             // font, or a strict array line that doesn't shrink), allow
@@ -498,5 +537,27 @@ package struct AttributedFramesetter: @unchecked Sendable {
         let path = CGPath(rect: rect, transform: nil)
         let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
         CTFrameDraw(frame, ctx)
+    }
+
+    /// Font metrics of the largest font used in the string (the dominant
+    /// glyph run, which sets the line's ascent/descent). Used by the
+    /// equal-spacing layout to derive how far the visible cap-ink is inset
+    /// from the Core Text line box: the box top sits `ascent` above the
+    /// baseline but capitals only reach `capHeight`, so the visible top is
+    /// `ascent - capHeight` below the box top; the visible bottom is `descent`
+    /// above the box bottom (for a line with no descenders). Deterministic and
+    /// independent of the background, unlike a trial-composite measurement.
+    func dominantFontMetrics() -> (ascent: CGFloat, descent: CGFloat, capHeight: CGFloat)? {
+        var best: CTFont?
+        var bestSize: CGFloat = 0
+        let full = NSRange(location: 0, length: attributed.length)
+        attributed.enumerateAttribute(.font, in: full, options: []) { value, _, _ in
+            guard let f = value else { return }
+            let font = f as! CTFont
+            let size = CTFontGetSize(font)
+            if size > bestSize { bestSize = size; best = font }
+        }
+        guard let font = best else { return nil }
+        return (CTFontGetAscent(font), CTFontGetDescent(font), CTFontGetCapHeight(font))
     }
 }

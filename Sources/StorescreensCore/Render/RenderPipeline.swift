@@ -401,6 +401,113 @@ package struct RenderPipeline {
             captionBlockTopBL = captionBlockBottomBL + out.measuredHeight
         }
 
+        // --- Equal-spacing override ------------------------------------------
+        //
+        // When `caption.equal_spacing` is on and the slide has both an
+        // above_title logo image and a caption, make the three vertical gaps
+        // identical: canvas top -> logo, logo -> caption, and caption ->
+        // device top. The two default centerings (logo centered in a tall
+        // above_title slot, caption centered in its own band) otherwise leave
+        // the caption -> device gap visibly fatter than the other two.
+        //
+        // The device stays exactly where it naturally lands; we solve for one
+        // uniform gap S from the leftover space after the logo and caption
+        // VISIBLE heights are removed, then place the logo and caption against
+        // that grid.
+        //
+        // GAPS ARE VISUAL, NOT GEOMETRIC. Three boxes-vs-ink mismatches would
+        // unbalance naive box math, so each boundary is measured to its
+        // visible (bright) edge:
+        //   - LOGO: its drawn box (the `max_height_pct` band) is taller than
+        //     the wordmark's glyph ink, and `drawSlot` centers the box, so
+        //     pinning the box leaves the wordmark floating. We measure the
+        //     wordmark's composited bright extent (`aboveTitleImageMetrics`)
+        //     and place that, not the box.
+        //   - CAPTION: a Core Text line box carries ascent slack above the
+        //     cap height and descent slack below the baseline. We measure the
+        //     caption's composited bright extent (`Drawable.inkExtent`) and
+        //     anchor the gaps to it, shifting the draw position up by the
+        //     box-top -> ink-top slack.
+        //   - DEVICE: against the dark background the eye reads the device
+        //     from its first bright pixel - the SCREEN content, not the
+        //     bezel's dark frame top. We anchor the bottom gap to the screen
+        //     top (`ChromeRenderer.screenContentTopBL`), falling back to the
+        //     frame top (`deviceTopY`) for non-bezel chrome.
+        //
+        // The logo's own `nudge` is NEUTRALIZED for the above_title draw in
+        // this mode (equal_spacing fully owns the logo's vertical position; a
+        // leftover nudge would re-skew the very gaps we are equalizing).
+        // `caption.nudge` still applies on top so users can fine-tune, and the
+        // caption x (incl. nudge.x) is left untouched. The device is never
+        // moved.
+        var equalSpacingAboveRect: CGRect? = nil
+        var equalSpacingStripLogoNudge = false
+        if captionResolved?.equalSpacing == true,
+           hasCaption,
+           let out = captionLayout,
+           let cr = captionResolved,
+           aboveTitleBandH > 0,
+           let logoMetrics = overlayPlacer.aboveTitleImageMetrics(
+               images: images, laurels: laurels, tables: tables,
+               appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
+           ) {
+            // Device bottom anchor: the screen content top (first bright pixel)
+            // for bezel chrome, else the frame top deviceTopY. chromeRect is
+            // the same rect Layer 6 will pass to the renderer.
+            let chromeRectForAnchor = CGRect(
+                x: 0, y: 0,
+                width: canvasSize.width,
+                height: canvasSize.height - chromeRectTopY
+            )
+            let screenTopBL = ChromeRenderer(bezelStore: bezelStore).screenContentTopBL(
+                config: chromeConfig,
+                productFamily: productFamily,
+                orientation: orientation,
+                screenshotPixelSize: screenshotPixelSize,
+                chromeRect: chromeRectForAnchor
+            )
+            // deviceTopY is already a top-origin distance; convert the BL
+            // screen top to the same top-origin frame.
+            let deviceAnchorFromTop = screenTopBL.map { canvasSize.height - $0 } ?? deviceTopY
+
+            // Visible heights: wordmark bright extent, caption bright extent.
+            let hLogo = logoMetrics.inkHeight
+            let capInk = out.drawable.inkExtent(measuredHeight: out.measuredHeight)
+            let capInkTop = capInk?.top ?? 0          // box top -> first bright row
+            let hCaption = capInk?.height ?? out.measuredHeight
+
+            // Single uniform gap, top-origin pixels, from the VISIBLE heights.
+            let s = (deviceAnchorFromTop - hLogo - hCaption) / 3.0
+            if s < 0 {
+                warnings.append("[\(slideName)] caption.equal_spacing: not enough room - logo ink (\(Int(hLogo))px) + caption ink (\(Int(hCaption))px) leave no space above the device; falling back to default placement")
+            } else {
+                // LOGO: size the slot to the box so drawSlot's centering is a
+                // no-op (box top == slot top), then place the box so the
+                // wordmark's bright top lands at S. The bright glyphs begin
+                // `inkTopOffset` below the box top, so the box top sits at
+                // S - inkTopOffset (top origin). In BL the slot bottom is
+                // canvasTop - boxTopFromTop - box.
+                let boxTopFromTop = s - logoMetrics.inkTopOffset
+                equalSpacingAboveRect = CGRect(
+                    x: 0,
+                    y: canvasSize.height - boxTopFromTop - logoMetrics.box,
+                    width: canvasSize.width,
+                    height: logoMetrics.box
+                )
+                equalSpacingStripLogoNudge = true
+                // CAPTION: put the caption's bright top at 2*S + H_logo from
+                // the canvas top. The bright text begins `capInkTop` below the
+                // box top, so the box top sits at (2*S + H_logo) - capInkTop.
+                // captionTopLeft.y is the BL y of the box's BOTTOM. Re-apply
+                // caption.nudge.y so fine-tuning still works.
+                let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
+                let captionBoxTopFromTop = 2.0 * s + hLogo - capInkTop
+                captionTopLeft.y = canvasSize.height - captionBoxTopFromTop - out.measuredHeight + nudgeY
+                captionBlockBottomBL = captionTopLeft.y
+                captionBlockTopBL = captionBlockBottomBL + out.measuredHeight
+            }
+        }
+
         // --- Layer 3: above_title overlays ---
         //
         // Slot semantics: when a caption is present, the slot extends from
@@ -416,33 +523,57 @@ package struct RenderPipeline {
         // canvas-top band (sized to image height) so middle-slot-only
         // configs still behave the same.
         if aboveTitleBandH > 0 {
-            let slotBottomBL: CGFloat
-            let slotHeight: CGFloat
-            if hasCaption {
-                let candidate = captionBlockTopBL + captionSpacing
-                let candidateHeight = canvasSize.height - candidate
-                if candidateHeight >= aboveTitleBandH {
-                    slotBottomBL = candidate
-                    slotHeight = candidateHeight
+            let aboveRect: CGRect
+            if let tightRect = equalSpacingAboveRect {
+                // Equal-spacing: a tight band exactly bounding the logo at the
+                // uniform gap S below the canvas top. `drawSlot` centers the
+                // logo in this slot, so a slot of height H_logo lands it there.
+                aboveRect = tightRect
+            } else {
+                let slotBottomBL: CGFloat
+                let slotHeight: CGFloat
+                if hasCaption {
+                    let candidate = captionBlockTopBL + captionSpacing
+                    let candidateHeight = canvasSize.height - candidate
+                    if candidateHeight >= aboveTitleBandH {
+                        slotBottomBL = candidate
+                        slotHeight = candidateHeight
+                    } else {
+                        // Caption block already too tall to leave breathing
+                        // room above; fall back to legacy canvas-top band so
+                        // the image still fits.
+                        slotBottomBL = canvasSize.height - aboveTitleBandH
+                        slotHeight = aboveTitleBandH
+                    }
                 } else {
-                    // Caption block already too tall to leave breathing
-                    // room above; fall back to legacy canvas-top band so
-                    // the image still fits.
                     slotBottomBL = canvasSize.height - aboveTitleBandH
                     slotHeight = aboveTitleBandH
                 }
-            } else {
-                slotBottomBL = canvasSize.height - aboveTitleBandH
-                slotHeight = aboveTitleBandH
+                aboveRect = CGRect(
+                    x: 0,
+                    y: slotBottomBL,
+                    width: canvasSize.width,
+                    height: slotHeight
+                )
             }
-            let aboveRect = CGRect(
-                x: 0,
-                y: slotBottomBL,
-                width: canvasSize.width,
-                height: slotHeight
-            )
+            // In equal-spacing mode the slot already encodes the wordmark's
+            // exact position, so strip any per-image nudge from the
+            // above_title images for this draw (a leftover nudge would shift
+            // the wordmark off the equal-spacing grid). Other slots' images
+            // are untouched.
+            let aboveImages: [ImageConfig]
+            if equalSpacingStripLogoNudge {
+                aboveImages = images.map { cfg in
+                    guard (cfg.position ?? .aboveTitle).canonicalSlot == .aboveTitle else { return cfg }
+                    var copy = cfg
+                    copy.nudge = nil
+                    return copy
+                }
+            } else {
+                aboveImages = images
+            }
             let warns = overlayPlacer.drawSlot(
-                position: .aboveTitle, images: images, laurels: laurels, tables: tables,
+                position: .aboveTitle, images: aboveImages, laurels: laurels, tables: tables,
                 appearance: appearance, slotRect: aboveRect,
                 canvasSize: canvasSize, isFirstInCombo: isFirstInCombo,
                 into: ctx

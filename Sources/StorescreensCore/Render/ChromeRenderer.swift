@@ -65,6 +65,49 @@ package struct ChromeRenderer {
         }
     }
 
+    /// Bottom-left y of the device's VISIBLE TOP - the first bright row of the
+    /// bezel as it will be composited - for the bezel chrome style, given the
+    /// same `chromeRect` the renderer will use. The equal-spacing caption
+    /// layout anchors its bottom gap here, not at the bezel rect's geometric
+    /// top: against a dark background the eye (and the gap-measuring pass) read
+    /// the device from its first bright pixel. That can be the bezel's bright
+    /// metal top rail or the screenshot's light status bar, both inset below
+    /// the bezel image's transparent/dark top margin. We reproduce the final
+    /// composite (bezel PNG over a dark backing at its on-canvas size) and
+    /// measure the bright top, so the anchor matches what actually renders.
+    /// Returns nil for non-bezel styles or when the bezel is unavailable, so
+    /// the caller falls back to the frame-top anchor.
+    package func screenContentTopBL(
+        config: ChromeConfig?,
+        productFamily: Int,
+        orientation: BezelOrientation,
+        screenshotPixelSize: CGSize,
+        chromeRect: CGRect
+    ) -> CGFloat? {
+        guard (config?.style ?? .none) == .bezel else { return nil }
+        let key = BezelStore.canonicalKey(
+            productFamily: productFamily,
+            width: Int(screenshotPixelSize.width.rounded()),
+            height: Int(screenshotPixelSize.height.rounded()),
+            orientation: orientation
+        )
+        guard let asset = bezelStore.lookup(canonicalKey: key) else { return nil }
+        let metadata = asset.metadata
+        let canvasW = CGFloat(metadata.canvasWidth)
+        let canvasH = CGFloat(metadata.canvasHeight)
+        let padded = inset(chromeRect, config: config)
+        let bezelTargetRect = fitRect(
+            imageSize: CGSize(width: canvasW, height: canvasH),
+            in: padded,
+            mode: config?.fit ?? .width
+        )
+        let scaleY = bezelTargetRect.height / canvasH
+        // Same as drawBezel's screenInBezel.maxY: the screen rect's top edge,
+        // where the screenshot's UI (the device's first large bright region)
+        // begins.
+        return bezelTargetRect.maxY - CGFloat(metadata.screenY) * scaleY
+    }
+
     // MARK: - none
 
     private func drawNone(

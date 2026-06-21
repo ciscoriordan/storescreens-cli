@@ -63,6 +63,157 @@ package struct OverlayPlacer: @unchecked Sendable {
         return maxH
     }
 
+    /// Measured geometry of the single `above_title` image overlay, for the
+    /// equal-spacing layout. `drawSlot` sizes an image to a box of height
+    /// `box` (= canvasH * max_height_pct / 100, the same value
+    /// `reservedHeight` returns) and centers that box in its slot, but the
+    /// glyph ink inside the box is usually shorter than the box and not
+    /// vertically centered in it (an SVG/PNG wordmark carries internal
+    /// padding). Equal-spacing needs the *visual ink* extent, not the box, so
+    /// the three gaps are visually equal. We rasterize the image exactly as
+    /// `drawSlot` loads it, measure the alpha bounding box, and scale those
+    /// ink rows to the on-canvas box height.
+    ///
+    /// Returns nil unless exactly one image draws in `above_title` (multiple
+    /// images, or non-image overlays, fall back to the band height upstream).
+    /// `inkTopOffset` is the gap from the box's top edge down to the first
+    /// ink row, in canvas px; `inkHeight` is the visual ink height in canvas
+    /// px; `box` is the full drawn box height.
+    package struct AboveTitleImageMetrics: Sendable {
+        package let box: CGFloat
+        package let inkHeight: CGFloat
+        package let inkTopOffset: CGFloat
+    }
+
+    package func aboveTitleImageMetrics(
+        images: [ImageConfig],
+        laurels: [LaurelConfig],
+        tables: [TableConfig] = [],
+        appearance: String,
+        canvasSize: CGSize,
+        isFirstInCombo: Bool
+    ) -> AboveTitleImageMetrics? {
+        let items = collectItems(
+            position: .aboveTitle,
+            images: images,
+            laurels: laurels,
+            tables: tables,
+            isFirstInCombo: isFirstInCombo
+        ).items
+        // Equal-spacing balances a single wordmark image; bail on anything
+        // else so the caller falls back to the reserved band height.
+        guard items.count == 1, case .image(let cfg) = items[0],
+              let path = cfg.path?.value(for: appearance),
+              let cg = loadImage(path: path) else {
+            return nil
+        }
+        let box = canvasSize.height * CGFloat(cfg.maxHeightPct ?? 8) / 100.0
+        let aspect = CGFloat(cg.width) / CGFloat(cg.height)
+        let drawnW = min(box * aspect, canvasSize.width)
+        // Measure the wordmark's VISIBLE extent by compositing it exactly as
+        // the final render will - at its drawn pixel size, over the dark
+        // background it sits on - and finding the bright rows. Predicting the
+        // visible extent from the high-res source alpha is unreliable: a
+        // white wordmark's thin strokes anti-alias against the dark scrim and
+        // drop below the brightness threshold, so the visible glyphs are
+        // shorter (and differently centered) than the source's alpha box. A
+        // trial composite at the real size reproduces that loss deterministically.
+        guard let (inkTopPx, inkBottomPx, pxH) = compositedInkRows(
+            cg, drawnWidth: drawnW, drawnHeight: box
+        ), pxH > 0 else {
+            // Nothing bright (e.g. a non-white or fully faint image): treat the
+            // whole box as ink so equal-spacing still positions something.
+            return AboveTitleImageMetrics(box: box, inkHeight: box, inkTopOffset: 0)
+        }
+        let inkTopOffset = CGFloat(inkTopPx)
+        let inkHeight = CGFloat(inkBottomPx - inkTopPx + 1)
+        return AboveTitleImageMetrics(box: box, inkHeight: inkHeight, inkTopOffset: inkTopOffset)
+    }
+
+    /// Top + bottom bright rows of `cg` composited at its on-canvas drawn size
+    /// over a representative dark background, plus the drawn pixel height. A
+    /// row is "bright" when more than ~1% of its pixels exceed luminance 235,
+    /// matching the gap-measuring pass. Returns top-origin row indices (0 ==
+    /// the drawn box's top edge) so the offsets line up with the drawn box.
+    /// Returns nil when no row is bright. The background luminance (~24, the
+    /// scrimmed photo behind the wordmark) only needs to be dark enough that
+    /// anti-aliased edge pixels fall below threshold, the same as on canvas.
+    private func compositedInkRows(
+        _ cg: CGImage, drawnWidth: CGFloat, drawnHeight: CGFloat
+    ) -> (top: Int, bottom: Int, height: Int)? {
+        let w = max(1, Int(drawnWidth.rounded()))
+        let h = max(1, Int(drawnHeight.rounded()))
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: 0, space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        // Near-black backing so anti-aliased edges composite below threshold,
+        // matching the strongly scrimmed top of the canvas where the wordmark
+        // sits (the scrim's top opacity is high, so the local background is
+        // darker there than a mid-gray; a lighter backing washed out the
+        // wordmark's faint top strokes and over-measured the top inset).
+        ctx.setFillColor(red: 0.02, green: 0.02, blue: 0.02, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let bounds = OverlayPlacer.brightRowBounds(ctx, threshold: 235) else { return nil }
+        return (top: bounds.top, bottom: bounds.bottom, height: h)
+    }
+
+    /// Top + bottom bright rows (top-origin) of a freshly-drawn RGBA bottom-up
+    /// CGContext. A row is bright when more than ~1% of its pixels exceed
+    /// `threshold` luminance (Rec.601), the same rule the gap-measuring pass
+    /// applies to the final PNG. CRITICAL: reads the context's ACTUAL
+    /// `bytesPerRow`, which CoreGraphics rounds up for alignment - assuming a
+    /// tight `width*4` stride silently shears the rows and mis-locates the ink
+    /// by several pixels. Returns nil when no row is bright.
+    static func brightRowBounds(_ ctx: CGContext, threshold: Int) -> (top: Int, bottom: Int)? {
+        // Snapshot to a CGImage and read ITS data provider. A CGImage's bytes
+        // are top-origin with the image's own bytesPerRow, so there is no
+        // bottom-up flip to get wrong and no client-vs-CoreGraphics stride
+        // mismatch (reading the live context buffer with an assumed stride/
+        // orientation mis-located the ink by several rows).
+        guard let img = ctx.makeImage() else { return nil }
+        return brightRowBounds(image: img, threshold: threshold)
+    }
+
+    /// Top + bottom bright rows (top-origin) of a CGImage. A row is bright when
+    /// more than ~1% of its pixels exceed `threshold` luminance (Rec.601),
+    /// matching the gap-measuring pass on the final PNG. Returns nil when no
+    /// row qualifies.
+    static func brightRowBounds(image img: CGImage, threshold: Int) -> (top: Int, bottom: Int)? {
+        let w = img.width, h = img.height
+        guard w > 0, h > 0,
+              let provider = img.dataProvider,
+              let data = provider.data,
+              let base = CFDataGetBytePtr(data) else { return nil }
+        let stride = img.bytesPerRow
+        let bpp = img.bitsPerPixel / 8
+        guard bpp >= 3 else { return nil }
+        // Locate the R,G,B byte offsets within a pixel from the alpha info /
+        // byte order. The contexts we snapshot are RGBA premultipliedLast on a
+        // little-endian host, so channels are R,G,B,A in memory; fall back to
+        // that ordering for anything unexpected.
+        let minCoverage = max(1, w / 100)
+        var minTop = h, maxTop = -1
+        for y in 0..<h {
+            var brightCount = 0
+            let rowBase = y * stride
+            for x in 0..<w {
+                let i = rowBase + x * bpp
+                let lum = (Int(base[i]) * 299 + Int(base[i + 1]) * 587 + Int(base[i + 2]) * 114) / 1000
+                if lum > threshold { brightCount += 1 }
+            }
+            if brightCount > minCoverage {
+                if y < minTop { minTop = y }
+                if y > maxTop { maxTop = y }
+            }
+        }
+        guard maxTop >= 0 else { return nil }
+        return (top: minTop, bottom: maxTop)
+    }
+
     /// Renders all items belonging to `position` into `slotRect`. `slotRect`
     /// is in bottom-left CG coordinates. Returns warnings for the caller.
     package func drawSlot(

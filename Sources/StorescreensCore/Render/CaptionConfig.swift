@@ -15,6 +15,13 @@ package struct CaptionConfig: Codable, Sendable {
     /// Fine-grained positional offset applied after vertical-align placement.
     /// See `NudgeConfig` for units and sign conventions.
     package var nudge: NudgeConfig?
+    /// Equal-spacing layout. When true (and the slide has both an
+    /// `above_title` image and a caption), the three vertical gaps - canvas
+    /// top -> logo, logo -> caption, and caption -> device top - are made
+    /// identical. The device stays exactly where it naturally lands; only the
+    /// logo and caption are repositioned to balance the gaps. Default
+    /// nil/false keeps the legacy two-independent-centerings behavior.
+    package var equalSpacing: Bool?
 
     package init(
         title: CaptionRole? = nil,
@@ -23,7 +30,8 @@ package struct CaptionConfig: Codable, Sendable {
         minHeightPct: Double? = nil,
         paddingPct: Double? = nil,
         verticalAlign: VerticalAlign? = nil,
-        nudge: NudgeConfig? = nil
+        nudge: NudgeConfig? = nil,
+        equalSpacing: Bool? = nil
     ) {
         self.title = title
         self.subtitle = subtitle
@@ -32,6 +40,7 @@ package struct CaptionConfig: Codable, Sendable {
         self.paddingPct = paddingPct
         self.verticalAlign = verticalAlign
         self.nudge = nudge
+        self.equalSpacing = equalSpacing
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -40,6 +49,7 @@ package struct CaptionConfig: Codable, Sendable {
         case minHeightPct = "min_height_pct"
         case paddingPct = "padding_pct"
         case verticalAlign = "vertical_align"
+        case equalSpacing = "equal_spacing"
     }
 }
 

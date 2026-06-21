@@ -1053,6 +1053,17 @@ logo:
 
 `nudge.x_pct` and `nudge.y_pct` are percentages of the canvas width and height respectively, so offsets stay the same relative size across iPhone 6.9", iPad 13", and Mac renders. Both are optional; omit a field and it's treated as zero.
 
+### Equal spacing
+
+By default the logo and the caption are positioned by two independent vertical centerings, which tends to leave the caption -> device gap visibly larger than the canvas-top -> logo and logo -> caption gaps. Set `equal_spacing: true` to make all three gaps identical:
+
+```yaml
+caption:
+  equal_spacing: true   # canvas top -> logo, logo -> caption, caption -> device all equal
+```
+
+This only takes effect on slides that have both an `above_title` logo image and a caption. The device stays exactly where it naturally lands; only the logo and caption move to balance the three gaps. The gaps are measured between the visible edges, the wordmark's actual glyph ink, the caption's cap height, and the device's screen content, not the looser layout boxes, so the spacing reads as even to the eye. `caption.nudge` still applies on top, so you can fine-tune afterward. If there isn't enough room (logo + caption taller than the space above the device) the layout falls back to the default placement and emits a warning. Default is off, so existing slides are unaffected.
+
 ### Images
 
 Up to two image overlays per slide, dropped into one of three slots around the caption block. Each entry is independent: each has its own path, slot, alignment, and nudge.

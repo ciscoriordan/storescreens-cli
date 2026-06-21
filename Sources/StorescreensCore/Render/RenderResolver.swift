@@ -54,6 +54,7 @@ package enum RenderResolver {
         package let paddingPct: Double?
         package let verticalAlign: VerticalAlign?
         package let nudge: NudgeConfig?
+        package let equalSpacing: Bool?
     }
 
     package static func resolvedBackground(
@@ -196,7 +197,8 @@ package enum RenderResolver {
             minHeightPct: defaults?.minHeightPct,
             paddingPct: defaults?.paddingPct,
             verticalAlign: defaults?.verticalAlign,
-            nudge: defaults?.nudge
+            nudge: defaults?.nudge,
+            equalSpacing: defaults?.equalSpacing
         )
     }
 
@@ -235,7 +237,8 @@ package enum RenderResolver {
             minHeightPct: override?.minHeightPct ?? base?.minHeightPct,
             paddingPct: override?.paddingPct ?? base?.paddingPct,
             verticalAlign: override?.verticalAlign ?? base?.verticalAlign,
-            nudge: mergeNudge(base: base?.nudge, override: override?.nudge)
+            nudge: mergeNudge(base: base?.nudge, override: override?.nudge),
+            equalSpacing: override?.equalSpacing ?? base?.equalSpacing
         )
     }
 
