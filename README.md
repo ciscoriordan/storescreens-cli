@@ -77,8 +77,46 @@ Requires Xcode 16+.
 git clone https://github.com/ciscoriordan/storescreens-cli.git
 cd storescreens-cli
 swift build -c release
-sudo cp .build/release/storescreens-cli /usr/local/bin/storescreens
+sudo cp .build/release/storescreens /usr/local/bin/storescreens
+sudo cp .build/release/storescreens-mcp /usr/local/bin/storescreens-mcp   # optional: MCP server
 ```
+
+### mise
+
+[mise](https://mise.jdx.dev) installs the prebuilt release binaries (no Swift toolchain needed) and puts both `storescreens` and `storescreens-mcp` on your PATH:
+
+```bash
+mise use -g github:ciscoriordan/storescreens-cli            # latest
+mise use -g github:ciscoriordan/storescreens-cli@3.8.0      # pin a version (no leading v)
+```
+
+Or pin it per-project in `mise.toml`:
+
+```toml
+[tools]
+"github:ciscoriordan/storescreens-cli" = "3.8.0"
+```
+
+To build from source instead of downloading the binary, use the `spm` backend (needs a Swift toolchain). Note the pin keeps the leading `v` here: `mise use -g spm:ciscoriordan/storescreens-cli@v3.8.0`. The older `ubi:` backend also works but mise has deprecated it.
+
+### Mint
+
+[Mint](https://github.com/yonaskolb/Mint) builds Swift command-line tools from source, so it needs a Swift toolchain (Xcode 15+). The package ships two executables, so name the one you want:
+
+```bash
+brew install mint
+mint install ciscoriordan/storescreens-cli storescreens           # the CLI
+mint install ciscoriordan/storescreens-cli storescreens-mcp       # the MCP server
+mint install ciscoriordan/storescreens-cli@v3.8.0 storescreens    # pin a version (leading v required)
+```
+
+Mint links binaries into `~/.mint/bin`, so make sure that directory is on your PATH:
+
+```bash
+export PATH="$HOME/.mint/bin:$PATH"
+```
+
+mise (`spm` backend) and Mint both build from source and need v3.8.0 or later, the first release that declares the executable products they install. The prebuilt paths (Homebrew, the install script, mise's `github`/`ubi` backends) have no such requirement.
 
 Verify the install worked:
 

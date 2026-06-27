@@ -49,7 +49,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           STAGE="$RUNNER_TEMP/storescreens-v${VERSION}-macos"
           mkdir -p "$STAGE"
-          cp .build/release/storescreens-cli "$STAGE/storescreens"
+          cp .build/release/storescreens "$STAGE/storescreens"
           cp .build/release/storescreens-mcp "$STAGE/storescreens-mcp"
           cp LICENSE "$STAGE/LICENSE"
           chmod +x "$STAGE/storescreens" "$STAGE/storescreens-mcp"

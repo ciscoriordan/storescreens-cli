@@ -6,6 +6,15 @@ let package = Package(
     platforms: [
         .macOS(.v14),
     ],
+    products: [
+        // Explicit executable products so Swift-native installers (Mint,
+        // `mise use spm:...`, `swift package experimental-install`) can
+        // discover and build the binaries. The CLI product is named
+        // `storescreens` (not `storescreens-cli`) so the installed binary
+        // keeps the name users type, matching the Homebrew formula.
+        .executable(name: "storescreens", targets: ["storescreens-cli"]),
+        .executable(name: "storescreens-mcp", targets: ["storescreens-mcp"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
