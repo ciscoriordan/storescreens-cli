@@ -215,21 +215,55 @@ package actor SimulatorManager {
         }
     }
 
-    /// Delete all simulator clones that share `name` but have a different UDID.
-    /// xcodebuild test clones the target simulator on every run; this cleans up leftovers.
-    package func deleteClonesOf(name: String, keepUDID: String) async throws {
+    /// True when a simulator named `candidate` is an xcodebuild-created clone of
+    /// the device named `base`. `xcodebuild test` clones its destination on every
+    /// run and names the clone `Clone N of <base>`; some older toolchains reused
+    /// the exact base name. This matches both forms. The base device itself also
+    /// matches the exact-name form, so callers must exclude it by UDID (`keepUDID`).
+    package static func isClone(_ candidate: String, of base: String) -> Bool {
+        if candidate == base { return true }
+        return candidate.hasPrefix("Clone ") && candidate.hasSuffix(" of \(base)")
+    }
+
+    /// Available simulator clones of `name`, excluding the base `keepUDID`.
+    private func currentClones(name: String, keepUDID: String) async throws -> [SimulatorDevice] {
         let result = try await shell.xcrun("simctl", arguments: ["list", "devices", "available", "--json"])
         guard result.succeeded, let data = result.stdout.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(SimulatorDeviceList.self, from: data)
-        else { return }
+        else { return [] }
 
-        let clones = decoded.devices.values
+        return decoded.devices.values
             .flatMap { $0 }
-            .filter { $0.name == name && $0.udid != keepUDID && $0.isAvailable }
+            .filter { Self.isClone($0.name, of: name) && $0.udid != keepUDID && $0.isAvailable }
+    }
 
-        for clone in clones {
+    /// Delete all simulator clones that share `name` but have a different UDID.
+    /// xcodebuild test clones the target simulator on every run; this cleans up leftovers.
+    package func deleteClonesOf(name: String, keepUDID: String) async throws {
+        for clone in try await currentClones(name: name, keepUDID: keepUDID) {
             try? await shutdown(clone.udid)
             _ = try? await shell.xcrun("simctl", arguments: ["delete", clone.udid])
+        }
+    }
+
+    /// Delete leftover xcodebuild clones of `name` and block until CoreSimulator
+    /// reports none remaining (or `timeout` elapses). Call this between
+    /// consecutive `xcodebuild test` runs on the same base device. Each run
+    /// clones the base; if the next run's test-runner install starts while the
+    /// previous clone is still tearing down, SpringBoard rejects the launch with
+    /// "Busy / Application failed preflight checks" (this is what makes the
+    /// 2nd-and-later locale fail in a multi-locale capture). Waiting for the
+    /// clones to fully disappear removes that race.
+    package func settleClones(
+        name: String,
+        keepUDID: String,
+        timeout: Duration = .seconds(30)
+    ) async throws {
+        try await deleteClonesOf(name: name, keepUDID: keepUDID)
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            if try await currentClones(name: name, keepUDID: keepUDID).isEmpty { return }
+            try? await Task.sleep(for: .milliseconds(500))
         }
     }
 
@@ -238,6 +272,15 @@ package actor SimulatorManager {
         if !result.succeeded && !result.stderr.contains("current state: Booted") {
             throw CLIError.simulatorBootFailed(reason: result.stderr)
         }
+    }
+
+    /// Boot the device if necessary and block until it finishes booting. Wraps
+    /// `simctl bootstatus <udid> -b`, which is safe to call when the device is
+    /// already booted (it returns immediately). Ensures the simulator is fully
+    /// ready before a test runner is installed/launched, so the launch doesn't
+    /// race an unfinished boot. Best-effort: a non-zero bootstatus does not throw.
+    package func waitUntilBooted(_ udid: String) async {
+        _ = try? await shell.xcrun("simctl", arguments: ["bootstatus", udid, "-b"])
     }
 
     package func shutdown(_ udid: String) async throws {

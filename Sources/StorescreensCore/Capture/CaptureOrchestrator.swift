@@ -482,6 +482,7 @@ package struct CaptureOrchestrator: Sendable {
         if !device.isMacOS {
             await logLine("Booting simulator for configuration...")
             try await simulatorManager.boot(device.udid)
+            await simulatorManager.waitUntilBooted(device.udid)
 
             try await simulatorManager.setAppearance(appearance, udid: device.udid)
             await logLine("Set appearance: \(appearance)")
@@ -586,6 +587,9 @@ package struct CaptureOrchestrator: Sendable {
         // then run again for real captures.
         if config.warmupRun == true {
             await logLine("Warmup run starting...")
+            if !device.isMacOS {
+                try? await simulatorManager.settleClones(name: device.simulatorName, keepUDID: device.udid)
+            }
             try? FileManager.default.removeItem(atPath: resultPath)
             _ = try? await buildRunner.test(
                 project: config.project,
@@ -609,6 +613,18 @@ package struct CaptureOrchestrator: Sendable {
         }
 
         try await withRetries(retries, label: device.simulatorName, logLine: logLine) {
+            // Between consecutive xcodebuild test runs on the same base device
+            // (each locale/appearance iteration, plus the warmup run and every
+            // retry), delete the previous run's leftover clone and wait for
+            // CoreSimulator to settle before xcodebuild clones the base again.
+            // Without this, the new clone's test-runner install races the prior
+            // clone's teardown and SpringBoard rejects the launch ("Busy /
+            // Application failed preflight checks") on the 2nd-and-later locale.
+            // This also makes --retries actually recover from that busy state.
+            if !device.isMacOS {
+                await logLine("Clearing leftover simulator clones...")
+                try? await simulatorManager.settleClones(name: device.simulatorName, keepUDID: device.udid)
+            }
             try? FileManager.default.removeItem(atPath: resultPath)
             _ = try await buildRunner.test(
                 project: config.project,
