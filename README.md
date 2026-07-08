@@ -6062,7 +6062,12 @@ See [Captions](#captions) for the full schema.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ciscoriordan/storescreens-cli&type=Date)](https://www.star-history.com/#ciscoriordan/storescreens-cli&Date)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ciscoriordan/storescreens-cli/star-history/star-history-dark.svg">
+  <img alt="Star history chart for ciscoriordan/storescreens-cli" src="https://raw.githubusercontent.com/ciscoriordan/storescreens-cli/star-history/star-history-light.svg" width="100%">
+</picture>
+
+The chart is regenerated daily by [a workflow](.github/workflows/star-history.yml) that queries the GitHub API and commits the rendered SVGs to the `star-history` branch. (Third-party chart services like star-history.com stopped working for READMEs when GitHub [restricted the stargazers API](https://github.blog/changelog/2026-06-30-upcoming-access-restrictions-to-public-api-endpoints-and-ui-views/) to repository collaborators in June 2026.)
 
 ## License
 
