@@ -303,6 +303,34 @@ struct StorescreensMCP {
             ])
         ),
         Tool(
+            name: "suggest_themes",
+            description: """
+            Suggest render themes derived from the app's own captured screenshots: dominant background \
+            and most vivid accent color become ready-to-use `render:` values (background color or \
+            gradient, caption text color, chrome device_colorway) with legible contrast built in. \
+            Returns a JSON list ordered by recommendation strength; present the options to the user \
+            and always offer custom colors as an alternative.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "paths": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("string")]),
+                        "description": .string("Screenshot paths to analyze. Default: the last capture's screenshots from manifest.json."),
+                    ]),
+                    "config_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Path to config file (default: storescreens.yml); used to locate the capture output directory."),
+                    ]),
+                    "captured_dir": .object([
+                        "type": .string("string"),
+                        "description": .string("Override the capture output directory."),
+                    ]),
+                ]),
+            ])
+        ),
+        Tool(
             name: "set_template",
             description: """
             Apply a built-in render template by writing `template: <id>` into storescreens.yml. \
@@ -446,6 +474,7 @@ struct StorescreensMCP {
             case "read_config":       return try handleReadConfig(params)
             case "write_config":      return try handleWriteConfig(params)
             case "list_templates":    return try handleListTemplates()
+            case "suggest_themes":    return try handleSuggestThemes(params)
             case "set_template":      return try handleSetTemplate(params)
             default:
                 return .init(content: [.text("Unknown tool: \(params.name)")], isError: true)
@@ -1045,6 +1074,46 @@ struct StorescreensMCP {
         \(json)
 
         Apply one with set_template(template_id: "<id>") or `storescreens render --template <id>`.
+        """)], isError: false)
+    }
+
+    // MARK: - suggest_themes
+
+    static func handleSuggestThemes(_ params: CallTool.Parameters) throws -> CallTool.Result {
+        let urls: [URL]
+        if let paths = params.arguments?["paths"]?.arrayValue?.compactMap(\.stringValue), !paths.isEmpty {
+            urls = paths.map { URL(fileURLWithPath: $0) }
+        } else {
+            let capturedRoot: URL
+            if let dir = params.arguments?["captured_dir"]?.stringValue {
+                capturedRoot = URL(fileURLWithPath: dir)
+            } else {
+                let configPath = params.arguments?["config_path"]?.stringValue ?? "storescreens.yml"
+                let captureConfig = try ConfigLoader().load(from: configPath)
+                capturedRoot = URL(fileURLWithPath: captureConfig.outputDir)
+            }
+            guard FileManager.default.fileExists(atPath: capturedRoot.appendingPathComponent("manifest.json").path) else {
+                return .init(content: [.text("No manifest.json in \(capturedRoot.path). Run a capture first or pass explicit screenshot paths.")], isError: true)
+            }
+            urls = try ThemeSuggester.capturedScreenshotURLs(capturedRoot: capturedRoot)
+        }
+        guard !urls.isEmpty else {
+            return .init(content: [.text("No screenshots to analyze.")], isError: true)
+        }
+
+        let themes = try ThemeSuggester.suggest(from: urls)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let json = String(data: try encoder.encode(themes), encoding: .utf8) ?? "[]"
+        return .init(content: [.text("""
+        \(themes.count) theme suggestion(s) from \(urls.count) screenshot(s), ordered by recommendation strength.
+        Map each entry onto the render config: background -> render.background.color (one hex = solid, \
+        two = vertical gradient), text_color -> render.caption.title.color, device_colorway -> \
+        render.chrome.device_colorway. Make sure render.chrome.style is set (bezel or device) - \
+        device_colorway has no effect without a drawn frame. Present the options to the user and \
+        offer custom colors too.
+
+        \(json)
         """)], isError: false)
     }
 
