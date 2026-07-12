@@ -438,6 +438,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens render` | Render captioned/framed screenshots from an existing capture |
 | `storescreens search-preview` | Render an iPhone App Store search-result preview (icon + name + subtitle + stars + 3 screenshots) in light/dark |
 | `storescreens templates` | List the built-in render templates (curated background + type + chrome presets) |
+| `storescreens themes suggest` | Suggest render themes derived from the app's own screenshot colors |
 | `storescreens bezels` | Import / inspect Apple device bezel assets used by `render` |
 | `storescreens auth` | Manage App Store Connect API credentials |
 | `storescreens metadata init` | Scaffold `metadata/<locale>/*.txt` files + README |
@@ -927,7 +928,7 @@ storescreens templates
 | <img src="assets/templates/sunset_blvd.png" width="120" /> | `sunset_blvd` | Bold four-stop sunset gradient, display type | Entertainment, lifestyle, social |
 | <img src="assets/templates/jazz_and_wine.png" width="120" /> | `jazz_and_wine` | Deep bordeaux with elegant cream serif | Food, drink, hospitality, creative |
 
-The showcase PNGs above are rendered by `TemplateShowcaseTests.testRegenerateShowcaseAssets`. Regenerate with `STORESCREENS_WRITE_SHOWCASE=1 swift test --filter TemplateShowcaseTests` after tweaking any template. The white rounded-rect frame in each thumbnail is `chrome.style: stroke` (a CoreGraphics outline), not a real Apple bezel PSD, so regenerating doesn't require the Apple Design Resources DMGs to be installed. When you apply a template to your own captures, each defaults to `chrome.style: bezel` and uses real silver/titanium bezels once you've run `storescreens bezels import`.
+The showcase PNGs above are rendered by `TemplateShowcaseTests.testRegenerateShowcaseAssets`. Regenerate with `STORESCREENS_WRITE_SHOWCASE=1 swift test --filter TemplateShowcaseTests` after tweaking any template. The white rounded-rect frame in each thumbnail is `chrome.style: stroke` (a CoreGraphics outline), not a real Apple bezel PSD, so regenerating doesn't require the Apple Design Resources DMGs to be installed. When you apply a template to your own captures, each defaults to `chrome.style: bezel`: that renders the drawn `device` frame out of the box, and upgrades to real silver/titanium bezels once you've run `storescreens bezels import`.
 
 #### Template credits
 
@@ -971,11 +972,27 @@ render:
 
 `color` defaults to `#000000`. If `gradient` is set, `opacity` is ignored; the gradient ramps between `top_opacity` and `bottom_opacity`.
 
+### Theme suggestions
+
+Not sure which colors to start from? `storescreens themes suggest` analyzes the captured screenshots (dominant background plus the most vivid accent color) and prints up to three ready-to-paste themes with legible contrast built in:
+
+- App Match: the app's own background, nudged so the device frame stands out against it.
+- Brand Gradient: a bold light-to-dark vertical gradient built from the app's accent color.
+- Soft Tint: a near-white wash of the accent color.
+
+Each suggestion is a `render:` snippet (background color or gradient, caption text color, `chrome.device_colorway`). Run it after a capture, or pass explicit image paths; `--json` emits machine-readable output (also available as the `suggest_themes` MCP tool). Apps without a saturated accent color get only App Match.
+
+```bash
+storescreens themes suggest             # analyze the last capture
+storescreens themes suggest shot.png    # analyze specific files
+```
+
 ### Chrome styles
 
 - `none`: no chrome; screenshot drawn at the padded rect.
 - `stroke`: rounded-rect clip with device-derived corner radius plus optional colored border and drop shadow. Zero asset download.
-- `bezel`: screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels).
+- `device`: generic device frame drawn procedurally in CoreGraphics - metal band, dark bezel ring, side buttons, and a Dynamic Island or notch picked from the screenshot's pixel dimensions. Zero asset download; the screenshot keeps its native aspect (never cropped). `device_colorway: dark | silver | natural` picks the body color (default `dark`). iPhone and iPad only; use `stroke` or `bezel` for MacBook.
+- `bezel`: screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels). When no bezel is installed for a screenshot, the renderer falls back per `bezel_fallback: device | stroke | error` (default `device`, with a warning telling you how to get the real bezels).
 
 ### Fonts
 
@@ -1250,7 +1267,7 @@ Output mirrors the rest of the pipeline: `<output_dir>/<locale>/<appearance>/iPh
 
 ## Device bezels
 
-The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple licenses these for use with Apple products; we don't redistribute.
+The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple licenses these for use with Apple products; we don't redistribute. Installing them is optional: until they're installed, `bezel` chrome falls back to the procedurally drawn `device` frame (see [Chrome styles](#chrome-styles)), so renders work out of the box. Import the real bezels when you want Apple's own artwork.
 
 ### Install
 
@@ -6003,6 +6020,7 @@ storescreens check --directory ./MyApp      # scan a specific directory
 | `list_screenshots` | List screenshots from the last capture. |
 | `get_screenshot` | Load a saved PNG as an inline image. |
 | `list_templates` | List the built-in render templates (id, name, category, description). |
+| `suggest_themes` | Suggest render themes derived from the captured screenshots' own colors (background, text color, frame colorway). |
 | `set_template` | Write `render.template: <id>` into `storescreens.yml`. Rejects unknown ids. |
 | `read_config` / `write_config` | Read or update `storescreens.yml`. |
 
@@ -6058,7 +6076,7 @@ See [Captions](#captions) for the full schema.
 ## Acknowledgements
 
 - Built-in render templates (`ascent`, `all_the_wiser`, `ethereal`, `sahara`, `midnight`, `pinecrest`, `blueprint`, `sunset_blvd`, `jazz_and_wine`) take their names and visual direction from the free MIT-licensed templates at [ButterKit](https://butterkit.app/templates/). The implementations here are independent and no ButterKit code or artwork is bundled. See [Template credits](#template-credits) for more.
-- Device bezel rendering uses PSDs from [Apple Design Resources](https://developer.apple.com/design/resources/). Apple licenses these for use with Apple products; StoreScreens does not redistribute them. Users download the DMGs from Apple and `storescreens bezels import` extracts what it needs locally.
+- Device bezel rendering uses PSDs from [Apple Design Resources](https://developer.apple.com/design/resources/). Apple licenses these for use with Apple products; StoreScreens does not redistribute them. Users download the DMGs from Apple and `storescreens bezels import` extracts what it needs locally. The drawn `device` chrome style (and the automatic fallback when no bezels are installed) uses no Apple artwork at all.
 
 ## Star History
 
