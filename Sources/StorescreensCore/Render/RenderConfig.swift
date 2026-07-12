@@ -678,6 +678,15 @@ package struct ChromeConfig: Codable, Sendable {
     package var cornerRadius: ChromeCornerRadius?
     package var shadow: Bool?
     package var paddingPct: Double?
+    /// Body color of the drawn frame for `style: device`. Ignored by the
+    /// other styles (the `bezel` style picks its colorway at import time
+    /// via `colorway_preference`). Default: `dark`.
+    package var deviceColorway: DeviceColorway?
+    /// What to do when `style: bezel` finds no installed bezel for the
+    /// screenshot's canonical key. `device` (default) renders the drawn
+    /// device frame instead, `stroke` falls back to the rounded-rect clip,
+    /// `error` fails the slide (pre-3.9 behavior).
+    package var bezelFallback: BezelFallback?
     /// How much of the device/screenshot to show. `width` scales so the
     /// content fills the available width (device may extend past the bottom
     /// of the canvas - common App Store style). `height` fits fully
@@ -719,6 +728,8 @@ package struct ChromeConfig: Codable, Sendable {
         cornerRadius: ChromeCornerRadius? = nil,
         shadow: Bool? = nil,
         paddingPct: Double? = nil,
+        deviceColorway: DeviceColorway? = nil,
+        bezelFallback: BezelFallback? = nil,
         fit: ChromeFit? = nil,
         topPct: Double? = nil,
         deviceHeightPct: Double? = nil,
@@ -731,6 +742,8 @@ package struct ChromeConfig: Codable, Sendable {
         self.cornerRadius = cornerRadius
         self.shadow = shadow
         self.paddingPct = paddingPct
+        self.deviceColorway = deviceColorway
+        self.bezelFallback = bezelFallback
         self.fit = fit
         self.topPct = topPct
         self.deviceHeightPct = deviceHeightPct
@@ -745,6 +758,8 @@ package struct ChromeConfig: Codable, Sendable {
         case cornerRadius = "corner_radius"
         case shadow
         case paddingPct = "padding_pct"
+        case deviceColorway = "device_colorway"
+        case bezelFallback = "bezel_fallback"
         case fit
         case topPct = "top_pct"
         case deviceHeightPct = "device_height_pct"
@@ -757,6 +772,23 @@ package enum ChromeStyle: String, Codable, Sendable {
     case none
     case stroke
     case bezel = "bezel"
+    /// Generic device frame drawn procedurally at render time - no Apple
+    /// Design Resources needed. See `DeviceFrame.swift`.
+    case device
+}
+
+/// Body color of the drawn `device` frame.
+package enum DeviceColorway: String, Codable, Sendable {
+    case dark
+    case silver
+    case natural
+}
+
+/// Fallback when `style: bezel` has no installed bezel for the screenshot.
+package enum BezelFallback: String, Codable, Sendable {
+    case device
+    case stroke
+    case error
 }
 
 /// How device chrome + screenshot fit inside the available area.

@@ -432,7 +432,7 @@ package struct RenderPipeline {
         //     from its first bright pixel - the SCREEN content, not the
         //     bezel's dark frame top. We anchor the bottom gap to the screen
         //     top (`ChromeRenderer.screenContentTopBL`), falling back to the
-        //     frame top (`deviceTopY`) for non-bezel chrome.
+        //     frame top (`deviceTopY`) for frame-less chrome (none/stroke).
         //
         // The logo's own `nudge` is NEUTRALIZED for the above_title draw in
         // this mode (equal_spacing fully owns the logo's vertical position; a
@@ -452,8 +452,8 @@ package struct RenderPipeline {
                appearance: appearance, canvasSize: canvasSize, isFirstInCombo: isFirstInCombo
            ) {
             // Device bottom anchor: the screen content top (first bright pixel)
-            // for bezel chrome, else the frame top deviceTopY. chromeRect is
-            // the same rect Layer 6 will pass to the renderer.
+            // for bezel/device chrome, else the frame top deviceTopY. chromeRect
+            // is the same rect Layer 6 will pass to the renderer.
             let chromeRectForAnchor = CGRect(
                 x: 0, y: 0,
                 width: canvasSize.width,
@@ -642,7 +642,7 @@ package struct RenderPipeline {
             width: canvasSize.width,
             height: canvasSize.height - chromeRectTopY
         )
-        try chromeRenderer.drawChrome(
+        let chromeWarnings = try chromeRenderer.drawChrome(
             chromeConfig,
             screenshotURL: sourceURL,
             productFamily: productFamily,
@@ -651,6 +651,7 @@ package struct RenderPipeline {
             into: ctx,
             chromeRect: chromeRect
         )
+        for w in chromeWarnings { warnings.append("[\(slideName)] \(w)") }
 
         // --- Write output PNG ---
         guard let cgOut = ctx.makeImage() else {

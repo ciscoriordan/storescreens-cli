@@ -4,10 +4,13 @@ import CoreGraphics
 import ImageIO
 
 /// Composites the captured screenshot onto the canvas with the configured
-/// chrome style. Three dispatched paths:
+/// chrome style. Four dispatched paths:
 ///   none      - screenshot drawn as-is at padding-inset rect
 ///   stroke    - screenshot clipped to rounded rect with optional border/shadow
-///   bezel  - screenshot placed inside a device bezel PNG from BezelStore
+///   device    - screenshot inside a procedurally drawn device frame (DeviceFrame)
+///   bezel     - screenshot placed inside a device bezel PNG from BezelStore;
+///               falls back per `chrome.bezel_fallback` (default: device)
+///               when no bezel is installed for the screenshot's key
 package struct ChromeRenderer {
 
     package let bezelStore: BezelStore
@@ -23,9 +26,62 @@ package struct ChromeRenderer {
         package var description: String {
             switch self {
             case .missingBezel(let k):
-                return "bezel chrome requires a bezel for '\(k)' - run `storescreens bezels import` or switch to chrome.style: stroke"
+                return "bezel chrome requires a bezel for '\(k)' - run `storescreens bezels import`, or remove chrome.bezel_fallback: error to render the drawn device frame instead"
             case .screenshotLoadFailed(let u):
                 return "failed to load screenshot: \(u.path)"
+            }
+        }
+    }
+
+    /// What `drawChrome` will actually render after resolving the configured
+    /// style against the installed bezels and the product family. Shared by
+    /// `drawChrome` and `screenContentTopBL` so the caption anchor always
+    /// matches what gets drawn.
+    enum EffectiveChrome {
+        case none
+        case stroke
+        case device(DeviceFrame.Spec)
+        case bezel(BezelStore.Asset)
+        case missingBezelError(canonicalKey: String)
+    }
+
+    func resolveEffectiveChrome(
+        config: ChromeConfig?,
+        productFamily: Int,
+        orientation: BezelOrientation,
+        screenshotPixelSize: CGSize
+    ) -> (chrome: EffectiveChrome, warnings: [String]) {
+        switch config?.style ?? .none {
+        case .none:
+            return (.none, [])
+        case .stroke:
+            return (.stroke, [])
+        case .device:
+            if let spec = DeviceFrame.spec(productFamily: productFamily, screenshotPixelSize: screenshotPixelSize) {
+                return (.device(spec), [])
+            }
+            return (.stroke, ["chrome.style: device has no drawn frame for this device family - rendered stroke chrome instead (drawn frames cover iPhone and iPad; use bezel or stroke for other devices)"])
+        case .bezel:
+            let key = BezelStore.canonicalKey(
+                productFamily: productFamily,
+                width: Int(screenshotPixelSize.width.rounded()),
+                height: Int(screenshotPixelSize.height.rounded()),
+                orientation: orientation
+            )
+            if let asset = bezelStore.lookup(canonicalKey: key) {
+                return (.bezel(asset), [])
+            }
+            let hint = "run `storescreens bezels import` for real Apple bezels"
+            switch config?.bezelFallback ?? .device {
+            case .error:
+                return (.missingBezelError(canonicalKey: key), [])
+            case .stroke:
+                return (.stroke, ["no bezel installed for '\(key)' - rendered stroke chrome instead (\(hint))"])
+            case .device:
+                if let spec = DeviceFrame.spec(productFamily: productFamily, screenshotPixelSize: screenshotPixelSize) {
+                    return (.device(spec), ["no bezel installed for '\(key)' - rendered the drawn device frame instead (\(hint))"])
+                }
+                return (.stroke, ["no bezel installed for '\(key)' - rendered stroke chrome instead (\(hint))"])
             }
         }
     }
@@ -37,6 +93,9 @@ package struct ChromeRenderer {
     /// `screenshotRegion` is the rect (in bottom-left CG coords) available to
     /// the chrome; the caller computes this from caption reservation + logo +
     /// padding.
+    ///
+    /// Returns human-readable warnings for style substitutions (e.g. bezel
+    /// chrome falling back to the drawn device frame).
     package func drawChrome(
         _ config: ChromeConfig?,
         screenshotURL: URL,
@@ -45,10 +104,15 @@ package struct ChromeRenderer {
         screenshotPixelSize: CGSize,
         into ctx: CGContext,
         chromeRect: CGRect
-    ) throws {
-        let style = config?.style ?? .none
+    ) throws -> [String] {
+        let (effective, warnings) = resolveEffectiveChrome(
+            config: config,
+            productFamily: productFamily,
+            orientation: orientation,
+            screenshotPixelSize: screenshotPixelSize
+        )
 
-        switch style {
+        switch effective {
         case .none:
             try drawNone(screenshotURL: screenshotURL,
                          config: config, into: ctx, rect: chromeRect)
@@ -56,13 +120,19 @@ package struct ChromeRenderer {
             try drawStroke(screenshotURL: screenshotURL,
                            config: config, into: ctx, rect: chromeRect,
                            productFamily: productFamily)
-        case .bezel:
+        case .device(let spec):
+            try drawDevice(screenshotURL: screenshotURL,
+                           config: config, into: ctx, rect: chromeRect,
+                           spec: spec)
+        case .bezel(let asset):
             try drawBezel(screenshotURL: screenshotURL,
                           config: config, into: ctx, rect: chromeRect,
                           productFamily: productFamily,
-                          orientation: orientation,
-                          screenshotPixelSize: screenshotPixelSize)
+                          asset: asset)
+        case .missingBezelError(let key):
+            throw RenderError.missingBezel(canonicalKey: key)
         }
+        return warnings
     }
 
     /// Bottom-left y of the device's VISIBLE TOP - the first bright row of the
@@ -75,8 +145,8 @@ package struct ChromeRenderer {
     /// the bezel image's transparent/dark top margin. We reproduce the final
     /// composite (bezel PNG over a dark backing at its on-canvas size) and
     /// measure the bright top, so the anchor matches what actually renders.
-    /// Returns nil for non-bezel styles or when the bezel is unavailable, so
-    /// the caller falls back to the frame-top anchor.
+    /// Returns nil for frame-less styles (none/stroke) or when bezel chrome
+    /// resolves to an error, so the caller falls back to the frame-top anchor.
     package func screenContentTopBL(
         config: ChromeConfig?,
         productFamily: Int,
@@ -84,28 +154,34 @@ package struct ChromeRenderer {
         screenshotPixelSize: CGSize,
         chromeRect: CGRect
     ) -> CGFloat? {
-        guard (config?.style ?? .none) == .bezel else { return nil }
-        let key = BezelStore.canonicalKey(
+        let (effective, _) = resolveEffectiveChrome(
+            config: config,
             productFamily: productFamily,
-            width: Int(screenshotPixelSize.width.rounded()),
-            height: Int(screenshotPixelSize.height.rounded()),
-            orientation: orientation
+            orientation: orientation,
+            screenshotPixelSize: screenshotPixelSize
         )
-        guard let asset = bezelStore.lookup(canonicalKey: key) else { return nil }
-        let metadata = asset.metadata
-        let canvasW = CGFloat(metadata.canvasWidth)
-        let canvasH = CGFloat(metadata.canvasHeight)
+        let canvasSize: CGSize
+        let screenTop: CGFloat
+        switch effective {
+        case .bezel(let asset):
+            canvasSize = CGSize(width: asset.metadata.canvasWidth, height: asset.metadata.canvasHeight)
+            screenTop = CGFloat(asset.metadata.screenY)
+        case .device(let spec):
+            canvasSize = CGSize(width: spec.canvasWidth, height: spec.canvasHeight)
+            screenTop = spec.screenRect.minY
+        case .none, .stroke, .missingBezelError:
+            return nil
+        }
         let padded = inset(chromeRect, config: config)
-        let bezelTargetRect = fitRect(
-            imageSize: CGSize(width: canvasW, height: canvasH),
+        let targetRect = fitRect(
+            imageSize: canvasSize,
             in: padded,
             mode: config?.fit ?? .width
         )
-        let scaleY = bezelTargetRect.height / canvasH
-        // Same as drawBezel's screenInBezel.maxY: the screen rect's top edge,
-        // where the screenshot's UI (the device's first large bright region)
-        // begins.
-        return bezelTargetRect.maxY - CGFloat(metadata.screenY) * scaleY
+        let scaleY = targetRect.height / canvasSize.height
+        // Same as the draw path's screen rect top edge, where the
+        // screenshot's UI (the device's first large bright region) begins.
+        return targetRect.maxY - screenTop * scaleY
     }
 
     // MARK: - none
@@ -179,6 +255,32 @@ package struct ChromeRenderer {
         }
     }
 
+    // MARK: - device (drawn frame)
+
+    private func drawDevice(
+        screenshotURL: URL,
+        config: ChromeConfig?,
+        into ctx: CGContext,
+        rect: CGRect,
+        spec: DeviceFrame.Spec
+    ) throws {
+        let screenshotImg = try loadImage(screenshotURL)
+        let padded = inset(rect, config: config)
+        let targetRect = fitRect(
+            imageSize: CGSize(width: spec.canvasWidth, height: spec.canvasHeight),
+            in: padded,
+            mode: config?.fit ?? .width
+        )
+        DeviceFrame.draw(
+            spec: spec,
+            colorway: config?.deviceColorway ?? .dark,
+            screenshot: screenshotImg,
+            shadow: config?.shadow ?? true,
+            into: ctx,
+            targetRect: targetRect
+        )
+    }
+
     // MARK: - bezel
 
     private func drawBezel(
@@ -187,21 +289,10 @@ package struct ChromeRenderer {
         into ctx: CGContext,
         rect: CGRect,
         productFamily: Int,
-        orientation: BezelOrientation,
-        screenshotPixelSize: CGSize
+        asset: BezelStore.Asset
     ) throws {
         let screenshotImg = try loadImage(screenshotURL)
 
-        let key = BezelStore.canonicalKey(
-            productFamily: productFamily,
-            width: Int(screenshotPixelSize.width.rounded()),
-            height: Int(screenshotPixelSize.height.rounded()),
-            orientation: orientation
-        )
-
-        guard let asset = bezelStore.lookup(canonicalKey: key) else {
-            throw RenderError.missingBezel(canonicalKey: key)
-        }
         guard let bezelSrc = CGImageSourceCreateWithURL(asset.pngURL as CFURL, nil),
               let bezelImg = CGImageSourceCreateImageAtIndex(bezelSrc, 0, nil) else {
             throw RenderError.screenshotLoadFailed(asset.pngURL)

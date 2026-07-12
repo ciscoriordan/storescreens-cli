@@ -8,7 +8,9 @@ struct BezelsCommand: AsyncParsableCommand {
         abstract: "Manage device bezel assets for rendered screenshots.",
         discussion: """
             Device bezels are used by `render` when chrome style is `bezel`.
-            Download Apple's Design Resource DMGs from \
+            Installing them is optional: without them, `bezel` chrome falls \
+            back to a procedurally drawn device frame (chrome style `device`).
+            For Apple's real artwork, download the Design Resource DMGs from \
             https://developer.apple.com/design/resources/, mount them, then run \
             `storescreens bezels import` to classify and install the PSDs.
             """,

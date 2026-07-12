@@ -287,6 +287,8 @@ package enum RenderResolver {
             cornerRadius: override?.cornerRadius ?? base?.cornerRadius,
             shadow: override?.shadow ?? base?.shadow,
             paddingPct: override?.paddingPct ?? base?.paddingPct,
+            deviceColorway: override?.deviceColorway ?? base?.deviceColorway,
+            bezelFallback: override?.bezelFallback ?? base?.bezelFallback,
             fit: override?.fit ?? base?.fit,
             topPct: override?.topPct ?? base?.topPct,
             deviceHeightPct: override?.deviceHeightPct ?? base?.deviceHeightPct,
