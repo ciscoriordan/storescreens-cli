@@ -40,3 +40,89 @@ final class SimulatorCloneMatchingTests: XCTestCase {
         XCTAssertFalse(SimulatorManager.isClone("My Clone Device", of: "iPhone 17 Pro Max"))
     }
 }
+
+/// Verifies which devices the XCTestDevices sweep is willing to delete. The
+/// sweep is name-agnostic on purpose: any `xcodebuild test` on the machine
+/// leaves clones there, and once a couple of dozen pile up CoreSimulator stops
+/// creating new ones. Being too eager is the dangerous direction - deleting a
+/// clone another test run is using kills that run.
+final class TestCloneSweepTests: XCTestCase {
+
+    private func device(
+        _ name: String,
+        udid: String,
+        state: String = "Shutdown",
+        isAvailable: Bool = true
+    ) -> SimulatorDevice {
+        let json = """
+        {
+          "udid": "\(udid)",
+          "name": "\(name)",
+          "state": "\(state)",
+          "isAvailable": \(isAvailable),
+          "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max",
+          "lastBootedAt": null
+        }
+        """
+        return try! JSONDecoder().decode(SimulatorDevice.self, from: Data(json.utf8))
+    }
+
+    private func swept(_ devices: [SimulatorDevice], sparing: Set<String> = []) -> [String] {
+        SimulatorManager.sweepableTestClones(devices, sparing: sparing).map(\.udid).sorted()
+    }
+
+    func testSweepsIdleClonesOfAnyDevice() {
+        // The leftovers are usually clones of devices this capture never
+        // touches, which is exactly what the name-scoped cleanup misses.
+        let devices = [
+            device("Clone 1 of iPhone 17 Pro Max", udid: "a"),
+            device("Clone 7 of iPad Pro 13-inch (M5)", udid: "b"),
+            device("Clone 2 of iPhone 16", udid: "c"),
+        ]
+        XCTAssertEqual(swept(devices), ["a", "b", "c"])
+    }
+
+    func testSparesDevicesInUse() {
+        // A booted or mid-transition clone belongs to a test run happening right
+        // now, possibly in another terminal.
+        let devices = [
+            device("Clone 1 of iPhone 17 Pro Max", udid: "booted", state: "Booted"),
+            device("Clone 2 of iPhone 17 Pro Max", udid: "booting", state: "Booting"),
+            device("Clone 3 of iPhone 17 Pro Max", udid: "creating", state: "Creating"),
+            device("Clone 4 of iPhone 17 Pro Max", udid: "shutting-down", state: "Shutting Down"),
+            device("Clone 5 of iPhone 17 Pro Max", udid: "idle"),
+        ]
+        XCTAssertEqual(swept(devices), ["idle"])
+    }
+
+    func testSparesExplicitlyBusyDevices() {
+        // Covers both the devices this capture is using and the ones the manager
+        // finds were touched within the grace window.
+        let devices = [
+            device("Clone 1 of iPhone 17 Pro Max", udid: "ours"),
+            device("Clone 1 of iPhone 16", udid: "just-created"),
+            device("Clone 9 of iPhone 16", udid: "stale"),
+        ]
+        XCTAssertEqual(swept(devices, sparing: ["ours", "just-created"]), ["stale"])
+    }
+
+    func testDecodesAListingEntryWithFieldsMissing() throws {
+        // simctl drops fields for a device whose runtime or device type is gone.
+        // A strict decode would throw away the whole listing over one orphan,
+        // silently turning the sweep into a no-op on the machines that need it.
+        let json = """
+        {"udid": "orphan", "name": "Clone 1 of iPhone 15", "state": "Shutdown"}
+        """
+        let decoded = try JSONDecoder().decode(SimulatorDevice.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.udid, "orphan")
+        XCTAssertEqual(decoded.deviceTypeIdentifier, "")
+        XCTAssertEqual(swept([decoded]), ["orphan"])
+    }
+
+    func testSweepsClonesWhoseRuntimeIsGone() {
+        // An orphaned clone of an uninstalled runtime still occupies the set, so
+        // the sweep has to list unavailable devices and delete them too.
+        let devices = [device("Clone 1 of iPhone 15", udid: "orphan", isAvailable: false)]
+        XCTAssertEqual(swept(devices), ["orphan"])
+    }
+}

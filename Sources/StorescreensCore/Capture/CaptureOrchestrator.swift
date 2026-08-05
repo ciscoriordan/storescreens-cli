@@ -258,6 +258,18 @@ package struct CaptureOrchestrator: Sendable {
             try? await simulatorManager.deleteClonesOf(name: device.simulatorName, keepUDID: device.udid)
         }
 
+        // Then sweep the rest of the XCTestDevices set. Every idle device in
+        // there is a leftover clone from some earlier `xcodebuild test` - any
+        // project's, not just a storescreens capture - and once a couple of
+        // dozen accumulate, CoreSimulator stops creating new ones and every run
+        // on the machine fails to launch its test runner.
+        if resolvedDevices.contains(where: { !$0.isMacOS }) {
+            let swept = await simulatorManager.sweepTestClones(sparing: Set(resolvedDevices.map(\.udid)))
+            if swept > 0 {
+                await eventHandler(.phase("Removed \(swept) leftover xcodebuild simulator clone\(swept == 1 ? "" : "s")"))
+            }
+        }
+
         let outputDir = (config.outputDir as NSString).expandingTildeInPath
         let historyManager = RunHistoryManager(
             outputDir: outputDir,

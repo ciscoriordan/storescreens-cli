@@ -13,6 +13,20 @@ package struct SimulatorDevice: Codable, Sendable {
     package let lastBootedAt: String?
 
     package var isBooted: Bool { state == "Booted" }
+
+    /// Tolerant of the fields simctl omits for a device whose runtime or device
+    /// type is no longer installed. Those are exactly the orphans clone cleanup
+    /// exists to remove, and a strict decode would throw the whole listing away
+    /// over one of them.
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        udid = try container.decode(String.self, forKey: .udid)
+        name = try container.decode(String.self, forKey: .name)
+        state = try container.decode(String.self, forKey: .state)
+        isAvailable = try container.decodeIfPresent(Bool.self, forKey: .isAvailable) ?? true
+        deviceTypeIdentifier = try container.decodeIfPresent(String.self, forKey: .deviceTypeIdentifier) ?? ""
+        lastBootedAt = try container.decodeIfPresent(String.self, forKey: .lastBootedAt)
+    }
 }
 
 /// A CoreSimulator device set. `xcodebuild test` does not clone into the set

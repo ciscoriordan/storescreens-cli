@@ -232,8 +232,21 @@ package actor SimulatorManager {
     /// device, including the several that can share a name. Best-effort:
     /// returns [] if the set doesn't exist or simctl fails.
     package func availableDevices(in set: DeviceSet = .default) async -> [SimulatorDevice] {
+        await listDevices(in: set, availableOnly: true)
+    }
+
+    /// Every device simctl lists in `set`, including ones whose runtime is no
+    /// longer installed. `availableDevices` hides those, but an orphaned clone
+    /// of a removed runtime still occupies the set, so anything cleaning the set
+    /// up has to see it.
+    package func allDevices(in set: DeviceSet = .default) async -> [SimulatorDevice] {
+        await listDevices(in: set, availableOnly: false)
+    }
+
+    private func listDevices(in set: DeviceSet, availableOnly: Bool) async -> [SimulatorDevice] {
         guard set.exists else { return [] }
-        let arguments = set.simctlArguments + ["list", "devices", "available", "--json"]
+        let filter = availableOnly ? ["available"] : []
+        let arguments = set.simctlArguments + ["list", "devices"] + filter + ["--json"]
         guard let result = try? await shell.xcrun("simctl", arguments: arguments),
               result.succeeded,
               let data = result.stdout.data(using: .utf8),
@@ -266,6 +279,72 @@ package actor SimulatorManager {
         for clone in await currentClones(name: name, keepUDID: keepUDID) {
             try? await shutdown(clone.device.udid, in: clone.set)
             _ = try? await shell.xcrun("simctl", arguments: clone.set.simctlArguments + ["delete", clone.device.udid])
+        }
+    }
+
+    /// Which devices in the xcodebuild test set are safe to delete. Pure, so the
+    /// rule is testable without a simulator.
+    ///
+    /// Booted and mid-transition devices are spared: an `xcodebuild test` may be
+    /// running right now, in this process or in another terminal, and deleting
+    /// the clone out from under it kills that run. `busyUDIDs` spares the rest -
+    /// devices this capture is using, and devices touched too recently to be
+    /// sure they aren't a concurrent run's clone that hasn't booted yet.
+    package static func sweepableTestClones(
+        _ devices: [SimulatorDevice],
+        sparing busyUDIDs: Set<String>
+    ) -> [SimulatorDevice] {
+        devices.filter { device in
+            !busyUDIDs.contains(device.udid)
+                && !device.isBooted
+                && !isTransitional(device.state)
+        }
+    }
+
+    /// Delete every idle device in the xcodebuild test set, whatever it is a
+    /// clone of. Returns how many went.
+    ///
+    /// Nothing but `xcodebuild test` writes to `~/Library/Developer/XCTestDevices`,
+    /// and it creates a fresh clone on every run, so a clone nobody is using is
+    /// garbage by definition. They pile up regardless: any interrupted test run
+    /// on the machine leaves one behind, not just a storescreens capture, and
+    /// once the set holds a couple of dozen CoreSimulator starts refusing to
+    /// create or launch new ones and every run on the machine wedges. Name-scoped
+    /// cleanup (`deleteClonesOf`) cannot dig out of that, since most of the
+    /// leftovers are clones of devices this capture never touches.
+    ///
+    /// Best-effort throughout: a delete that fails is skipped, not thrown.
+    @discardableResult
+    package func sweepTestClones(
+        sparing keepUDIDs: Set<String> = [],
+        grace: Duration = .seconds(120)
+    ) async -> Int {
+        let set = DeviceSet.xctest
+        guard set.exists else { return 0 }
+        let devices = await allDevices(in: set)
+        let busy = keepUDIDs.union(devices.map(\.udid).filter { recentlyTouched($0, in: set, within: grace) })
+
+        var deleted = 0
+        for device in Self.sweepableTestClones(devices, sparing: busy) {
+            let result = try? await shell.xcrun("simctl", arguments: set.simctlArguments + ["delete", device.udid])
+            if result?.succeeded == true { deleted += 1 }
+        }
+        return deleted
+    }
+
+    /// True when the device's on-disk state changed within `grace`. A clone that
+    /// another `xcodebuild test` created seconds ago can sit in `Shutdown` before
+    /// it boots, which is indistinguishable from a leftover by state alone.
+    private func recentlyTouched(_ udid: String, in set: DeviceSet, within grace: Duration) -> Bool {
+        guard let setPath = set.path else { return false }
+        let deviceDir = (setPath as NSString).appendingPathComponent(udid)
+        let paths = [deviceDir, (deviceDir as NSString).appendingPathComponent("device.plist")]
+        let cutoff = Date().addingTimeInterval(-Double(grace.components.seconds))
+
+        return paths.contains { path in
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { return false }
+            let dates = [attributes[.modificationDate], attributes[.creationDate]].compactMap { $0 as? Date }
+            return dates.contains { $0 > cutoff }
         }
     }
 

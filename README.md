@@ -5937,6 +5937,12 @@ Those clones do not live in the device set `simctl list devices` shows. `xcodebu
 xcrun simctl --set ~/Library/Developer/XCTestDevices list devices
 ```
 
+Every `xcodebuild test` on the machine adds to that set, not just captures, and an interrupted run leaves its clone behind. Once a couple of dozen accumulate, CoreSimulator stops creating new ones and every test run on the machine fails to launch its test runner. So each capture starts by deleting the idle clones in that set, whatever device they are clones of. Booted and mid-transition clones are left alone, as is anything created in the last two minutes, so a test run in another terminal is never disturbed. When it removes anything, it says so:
+
+```
+Removed 6 leftover xcodebuild simulator clones
+```
+
 Raise it for flakier setups, or set `--retries 0` to fail fast on the first error:
 
 ```bash
