@@ -550,7 +550,7 @@ Options:
 | `--config PATH` | Config file path (default: `storescreens.yml`) |
 | `--output DIR` | Override output directory |
 | `--locale LOCALE` | Override locales (repeatable) |
-| `--retries N` | Retry failed test runs per device |
+| `--retries N` | Retry failed test runs per device (default: 1) |
 | `--keep-alive` | Keep simulators running after capture |
 | `--xcresult` | Extract screenshots from `.xcresult` bundle instead of filesystem |
 | `--only PREFIXES` | Only capture screenshots matching these prefixes (comma-separated) |
@@ -777,7 +777,9 @@ test_class: ScreenshotTests
 
 # Advanced: override the simulator status bar (9:41 AM, full signal, full
 # battery) for clean screenshots. Default: true. Set to false to leave
-# the live status bar alone.
+# the live status bar alone. In xctest mode the override is applied to the
+# clone xcodebuild runs the tests on, not just the base device - a clone
+# does not inherit it, since it is runtime state rather than device data.
 # status_bar: false
 
 # Advanced: custom args passed to `xcrun simctl status_bar override` when
@@ -5927,7 +5929,15 @@ The filter works by writing a filter file that the test reads at runtime. Naviga
 
 ## Retries
 
-Simulators can be flaky. Use `--retries` to automatically retry failed test runs:
+Simulators can be flaky. Capture retries a failed test run once by default, because the most common failure is environmental: `xcodebuild` clones the simulator on every run, and if the new clone's test-runner install starts while the previous clone is still tearing down, SpringBoard rejects the launch with `Busy ("Application failed preflight checks")`. Capture deletes leftover clones and waits for CoreSimulator to settle before each run, and a retry recovers the cases that slip through.
+
+Those clones do not live in the device set `simctl list devices` shows. `xcodebuild test` creates them in its own set under `~/Library/Developer/XCTestDevices`, so to see them yourself:
+
+```bash
+xcrun simctl --set ~/Library/Developer/XCTestDevices list devices
+```
+
+Raise it for flakier setups, or set `--retries 0` to fail fast on the first error:
 
 ```bash
 storescreens capture --retries 2

@@ -32,8 +32,11 @@ struct CaptureCommand: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Appearances to capture (overrides config). Can be repeated: --appearance light --appearance dark")
     var appearance: [String] = []
 
-    @Option(name: .long, help: "Number of retries on test failure per device (default: 0).")
-    var retries: Int = 0
+    // Defaults to 1: the common simulator failure ("Busy / Application failed
+    // preflight checks" while a clone tears down) is environmental, and without
+    // a retry one hit fails the whole capture and the run collects nothing.
+    @Option(name: .long, help: "Number of retries on test failure per device (default: 1).")
+    var retries: Int = 1
 
     @Flag(name: .long, help: "Keep simulators running after capture.")
     var keepAlive: Bool = false
@@ -279,6 +282,14 @@ struct CaptureCommand: AsyncParsableCommand {
         let resolvedDevices = try await simulatorManager.resolveDevices(config.devices)
         for device in resolvedDevices {
             logger.log("\(device.simulatorName) -> \(device.appStoreSize.displayName)", level: .success)
+        }
+
+        // Clean up stale xcodebuild clones left by a previous (possibly killed)
+        // run. A leftover clone tearing down while this run's clone installs its
+        // test runner is what SpringBoard rejects as "Busy / Application failed
+        // preflight checks".
+        for device in resolvedDevices where !device.isMacOS {
+            try? await simulatorManager.deleteClonesOf(name: device.simulatorName, keepUDID: device.udid)
         }
 
         let outputDir = (config.outputDir as NSString).expandingTildeInPath
@@ -602,6 +613,7 @@ struct CaptureCommand: AsyncParsableCommand {
     ) async throws -> [CaptureManifest.DeviceCapture] {
         // Each call gets its own actor instances so concurrent calls don't serialize on a shared actor
         let buildRunner = XcodeBuildRunner(verbose: verbose, logDir: logDir)
+        let simulatorManager = SimulatorManager()
 
         // Write the active locale to a cache file the test bundle reads on
         // setUp. Adopts fastlane snapshot's pattern: rather than mutating
@@ -613,9 +625,10 @@ struct CaptureCommand: AsyncParsableCommand {
         // simulator state changes needed.
         Self.writeCurrentLocaleHint(locale)
 
-        // Note: appearance/status bar are not pre-configured because xcodebuild test
-        // boots its own clone simulator. To set appearance, use test launch arguments
-        // or UITraitCollection overrides in test code.
+        // Note: appearance is not pre-configured here because xcodebuild test boots
+        // its own clone simulator. To set appearance, use test launch arguments or
+        // UITraitCollection overrides in test code. The status bar is handled below
+        // by StatusBarKeeper, which follows the clone rather than the base device.
 
         // Device-specific screenshot subdir avoids conflicts during parallel runs
         let deviceScreenshotsDir = Self.screenshotsCacheDir.appendingPathComponent(device.simulatorName)
@@ -656,41 +669,66 @@ struct CaptureCommand: AsyncParsableCommand {
             testClass: testClass
         )
 
-        // If warmupRun is enabled, run the test once as a warmup (discard screenshots),
-        // then run again for real captures.
-        if config.warmupRun == true {
-            logLine("Warmup run starting...")
-            try? FileManager.default.removeItem(atPath: resultPath)
-            _ = try? await buildRunner.testWithoutBuilding(
-                xctestrunPath: xctestrunPath,
-                destinationUDID: device.udid,
-                resultBundlePath: resultPath,
-                testTarget: testTarget,
-                testClass: testClass,
-                testSelectors: testSelectors,
-                testLanguage: testLanguage,
-                testRegion: testRegion,
-                isMacOS: device.isMacOS
-            )
-            // Discard warmup screenshots so the real run starts with a clean slate
-            try? FileManager.default.removeItem(at: deviceScreenshotsDir)
-            try? FileManager.default.createDirectory(at: deviceScreenshotsDir, withIntermediateDirectories: true)
-            logLine("Warmup run complete - starting real capture...")
-        }
+        // xcodebuild runs the tests on `Clone N of <device>`, and a fresh clone
+        // does not inherit the base device's status bar override (it is runtime
+        // SpringBoard state, not persisted device data). The keeper applies the
+        // override to each clone as it boots, for as long as tests are running.
+        try await StatusBarKeeper().maintaining(
+            baseName: device.simulatorName,
+            arguments: device.isMacOS ? nil : StatusBarKeeper.arguments(for: config),
+            manager: simulatorManager,
+            log: { message in logLine(message) }
+        ) {
+            // If warmupRun is enabled, run the test once as a warmup (discard screenshots),
+            // then run again for real captures.
+            if config.warmupRun == true {
+                logLine("Warmup run starting...")
+                if !device.isMacOS {
+                    try? await simulatorManager.settleClones(name: device.simulatorName, keepUDID: device.udid)
+                }
+                try? FileManager.default.removeItem(atPath: resultPath)
+                _ = try? await buildRunner.testWithoutBuilding(
+                    xctestrunPath: xctestrunPath,
+                    destinationUDID: device.udid,
+                    resultBundlePath: resultPath,
+                    testTarget: testTarget,
+                    testClass: testClass,
+                    testSelectors: testSelectors,
+                    testLanguage: testLanguage,
+                    testRegion: testRegion,
+                    isMacOS: device.isMacOS
+                )
+                // Discard warmup screenshots so the real run starts with a clean slate
+                try? FileManager.default.removeItem(at: deviceScreenshotsDir)
+                try? FileManager.default.createDirectory(at: deviceScreenshotsDir, withIntermediateDirectories: true)
+                logLine("Warmup run complete - starting real capture...")
+            }
 
-        try await withRetries(retries, label: device.simulatorName, logLine: logLine) {
-            try? FileManager.default.removeItem(atPath: resultPath)
-            _ = try await buildRunner.testWithoutBuilding(
-                xctestrunPath: xctestrunPath,
-                destinationUDID: device.udid,
-                resultBundlePath: resultPath,
-                testTarget: testTarget,
-                testClass: testClass,
-                testSelectors: testSelectors,
-                testLanguage: testLanguage,
-                testRegion: testRegion,
-                isMacOS: device.isMacOS
-            )
+            try await withRetries(retries, label: device.simulatorName, logLine: logLine) {
+                // Between consecutive xcodebuild test runs on the same base device
+                // (each locale/appearance iteration, the warmup run, every retry),
+                // delete the previous run's clone and wait for CoreSimulator to
+                // settle before xcodebuild clones the base again. Without this the
+                // new clone's test-runner install races the old clone's teardown
+                // and SpringBoard rejects the launch ("Busy / Application failed
+                // preflight checks"). This is also what makes --retries recover.
+                if !device.isMacOS {
+                    logLine("Clearing leftover simulator clones...")
+                    try? await simulatorManager.settleClones(name: device.simulatorName, keepUDID: device.udid)
+                }
+                try? FileManager.default.removeItem(atPath: resultPath)
+                _ = try await buildRunner.testWithoutBuilding(
+                    xctestrunPath: xctestrunPath,
+                    destinationUDID: device.udid,
+                    resultBundlePath: resultPath,
+                    testTarget: testTarget,
+                    testClass: testClass,
+                    testSelectors: testSelectors,
+                    testLanguage: testLanguage,
+                    testRegion: testRegion,
+                    isMacOS: device.isMacOS
+                )
+            }
         }
         // Parse the xcresult for real pass/fail counts before we tell the user "done".
         // xcodebuild exits non-zero on assertion failures but still writes the xcresult,
@@ -981,10 +1019,10 @@ struct CaptureCommand: AsyncParsableCommand {
                             // Set appearance (no reboot needed)
                             try await simulatorManager.setAppearance(currentAppearance, udid: device.udid)
 
-                            // Override status bar if configured
-                            if config.statusBar != false {
-                                let defaultArgs = "--time 9:41 --dataNetwork lte --cellularMode active --cellularBars 4 --batteryState charging --batteryLevel 90 --operatorName TELUS"
-                                let statusBarArgs = config.statusBarArguments ?? defaultArgs
+                            // Override status bar if configured. Simple mode runs
+                            // the app on the base device itself, so no clone to
+                            // chase - the override applies directly.
+                            if let statusBarArgs = StatusBarKeeper.arguments(for: config) {
                                 try await simulatorManager.overrideStatusBar(device.udid, arguments: statusBarArgs)
                             }
 

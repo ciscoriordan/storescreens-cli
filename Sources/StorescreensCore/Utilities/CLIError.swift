@@ -37,6 +37,10 @@ package enum CLIError: LocalizedError {
     case localeSetFailed(reason: String)
     case appearanceSetFailed(reason: String)
     case statusBarFailed(reason: String)
+    /// The test runner never launched (CoreSimulator busy). Thrown rather than
+    /// letting the run continue to a bare "no screenshots", so `--retries` can
+    /// recover it.
+    case testRunnerLaunchFailed(reason: String)
     case noProjectOrWorkspace
     case noDevicesConfigured
     case preflightFailed(errorCount: Int, warningCount: Int)
@@ -116,6 +120,8 @@ package enum CLIError: LocalizedError {
             return "Failed to set simulator appearance: \(reason)"
         case .statusBarFailed(let reason):
             return "Failed to override status bar: \(reason)"
+        case .testRunnerLaunchFailed(let reason):
+            return "The test runner never launched: \(reason). CoreSimulator was still busy with a previous run's clone. Retry, or raise --retries."
         case .noProjectOrWorkspace:
             return "No .xcodeproj or .xcworkspace found. Specify 'project:' or 'workspace:' in config."
         case .noDevicesConfigured:

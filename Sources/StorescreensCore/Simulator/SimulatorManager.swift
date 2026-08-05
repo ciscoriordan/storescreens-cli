@@ -225,24 +225,47 @@ package actor SimulatorManager {
         return candidate.hasPrefix("Clone ") && candidate.hasSuffix(" of \(base)")
     }
 
-    /// Available simulator clones of `name`, excluding the base `keepUDID`.
-    private func currentClones(name: String, keepUDID: String) async throws -> [SimulatorDevice] {
-        let result = try await shell.xcrun("simctl", arguments: ["list", "devices", "available", "--json"])
-        guard result.succeeded, let data = result.stdout.data(using: .utf8),
+    /// Every device `simctl` lists as available in `set`, with its current
+    /// state, raw: no deduplication by name and no filtering.
+    /// `listAvailableDevices` is the device-resolution view (one entry per name,
+    /// latest runtime); callers that track xcodebuild clones need to see every
+    /// device, including the several that can share a name. Best-effort:
+    /// returns [] if the set doesn't exist or simctl fails.
+    package func availableDevices(in set: DeviceSet = .default) async -> [SimulatorDevice] {
+        guard set.exists else { return [] }
+        let arguments = set.simctlArguments + ["list", "devices", "available", "--json"]
+        guard let result = try? await shell.xcrun("simctl", arguments: arguments),
+              result.succeeded,
+              let data = result.stdout.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(SimulatorDeviceList.self, from: data)
         else { return [] }
 
-        return decoded.devices.values
-            .flatMap { $0 }
-            .filter { Self.isClone($0.name, of: name) && $0.udid != keepUDID && $0.isAvailable }
+        return decoded.devices.values.flatMap { $0 }
+    }
+
+    /// Every available device across every set storescreens touches, each tagged
+    /// with the set it lives in so callers can address it with the right
+    /// `--set` argument.
+    package func locatedDevices() async -> [LocatedDevice] {
+        var located: [LocatedDevice] = []
+        for set in DeviceSet.allCases {
+            located += await availableDevices(in: set).map { LocatedDevice(device: $0, set: set) }
+        }
+        return located
+    }
+
+    /// Simulator clones of `name` in any device set, excluding the base `keepUDID`.
+    private func currentClones(name: String, keepUDID: String) async -> [LocatedDevice] {
+        await locatedDevices()
+            .filter { Self.isClone($0.device.name, of: name) && $0.device.udid != keepUDID && $0.device.isAvailable }
     }
 
     /// Delete all simulator clones that share `name` but have a different UDID.
     /// xcodebuild test clones the target simulator on every run; this cleans up leftovers.
     package func deleteClonesOf(name: String, keepUDID: String) async throws {
-        for clone in try await currentClones(name: name, keepUDID: keepUDID) {
-            try? await shutdown(clone.udid)
-            _ = try? await shell.xcrun("simctl", arguments: ["delete", clone.udid])
+        for clone in await currentClones(name: name, keepUDID: keepUDID) {
+            try? await shutdown(clone.device.udid, in: clone.set)
+            _ = try? await shell.xcrun("simctl", arguments: clone.set.simctlArguments + ["delete", clone.device.udid])
         }
     }
 
@@ -254,6 +277,9 @@ package actor SimulatorManager {
     /// "Busy / Application failed preflight checks" (this is what makes the
     /// 2nd-and-later locale fail in a multi-locale capture). Waiting for the
     /// clones to fully disappear removes that race.
+    /// The base device is settled too before returning: a base caught
+    /// mid-transition (right after an `erase`, or a boot/shutdown cycle) is the
+    /// other half of the same race, and it can hit the very first iteration.
     package func settleClones(
         name: String,
         keepUDID: String,
@@ -262,7 +288,30 @@ package actor SimulatorManager {
         try await deleteClonesOf(name: name, keepUDID: keepUDID)
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
-            if try await currentClones(name: name, keepUDID: keepUDID).isEmpty { return }
+            if await currentClones(name: name, keepUDID: keepUDID).isEmpty { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        await waitUntilSettled(keepUDID, timeout: timeout)
+    }
+
+    /// simctl states that mean CoreSimulator is mid-transition on a device.
+    package static func isTransitional(_ state: String) -> Bool {
+        state == "Booting" || state == "Shutting Down" || state == "Creating"
+    }
+
+    /// Block until `udid` leaves a transitional state, or `timeout` elapses.
+    /// Unlike `waitUntilBooted` this never boots anything - a shut-down device
+    /// is already settled, and in the xctest path xcodebuild boots the clone it
+    /// creates. When the device is booted, this also waits out the rest of its
+    /// boot so SpringBoard is ready before a test runner is installed.
+    package func waitUntilSettled(_ udid: String, timeout: Duration = .seconds(30)) async {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            guard let device = await availableDevices().first(where: { $0.udid == udid }) else { return }
+            if !Self.isTransitional(device.state) {
+                if device.isBooted { await waitUntilBooted(udid) }
+                return
+            }
             try? await Task.sleep(for: .milliseconds(500))
         }
     }
@@ -283,8 +332,8 @@ package actor SimulatorManager {
         _ = try? await shell.xcrun("simctl", arguments: ["bootstatus", udid, "-b"])
     }
 
-    package func shutdown(_ udid: String) async throws {
-        let result = try await shell.xcrun("simctl", arguments: ["shutdown", udid])
+    package func shutdown(_ udid: String, in set: DeviceSet = .default) async throws {
+        let result = try await shell.xcrun("simctl", arguments: set.simctlArguments + ["shutdown", udid])
         if !result.succeeded && !result.stderr.contains("current state: Shutdown") {
             throw CLIError.simulatorShutdownFailed(reason: result.stderr)
         }
@@ -330,8 +379,9 @@ package actor SimulatorManager {
 
     /// Override the simulator status bar for clean screenshots.
     /// Uses `xcrun simctl status_bar <udid> override` with the given arguments.
-    package func overrideStatusBar(_ udid: String, arguments: String) async throws {
-        let args = ["status_bar", udid, "override"] + arguments.split(separator: " ").map(String.init)
+    package func overrideStatusBar(_ udid: String, arguments: String, in set: DeviceSet = .default) async throws {
+        let args = set.simctlArguments + ["status_bar", udid, "override"]
+            + arguments.split(separator: " ").map(String.init)
         let result = try await shell.xcrun("simctl", arguments: args)
         if !result.succeeded {
             throw CLIError.statusBarFailed(reason: result.stderr)

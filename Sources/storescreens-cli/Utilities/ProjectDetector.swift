@@ -1,3 +1,4 @@
+import StorescreensCore
 import Foundation
 
 struct ProjectDetector {

@@ -1,3 +1,4 @@
+import StorescreensCore
 import Foundation
 
 /// Scans Swift source files for iPad-unsafe patterns and device-assumption issues.

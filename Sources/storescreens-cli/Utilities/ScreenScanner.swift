@@ -1,3 +1,4 @@
+import StorescreensCore
 import Foundation
 
 /// Scans Swift source files to discover app screens from navigation patterns.

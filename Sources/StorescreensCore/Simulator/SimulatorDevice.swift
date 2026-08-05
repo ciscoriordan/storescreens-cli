@@ -15,6 +15,54 @@ package struct SimulatorDevice: Codable, Sendable {
     package var isBooted: Bool { state == "Booted" }
 }
 
+/// A CoreSimulator device set. `xcodebuild test` does not clone into the set
+/// Simulator.app shows: it creates `Clone N of <base>` in a private set under
+/// `~/Library/Developer/XCTestDevices`, and a simctl call only reaches a device
+/// there when it is passed `--set <path>`. Anything that tracks clones (status
+/// bar overrides, leftover-clone cleanup) has to cover both sets, or it silently
+/// operates on a device the tests never touch.
+package enum DeviceSet: Sendable, CaseIterable {
+    /// The set Simulator.app and a bare `simctl` use.
+    case `default`
+    /// Where `xcodebuild test` creates its test clones.
+    case xctest
+
+    /// Filesystem path of the set; nil for the default one.
+    package var path: String? {
+        switch self {
+        case .default:
+            return nil
+        case .xctest:
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Developer/XCTestDevices").path
+        }
+    }
+
+    /// The `--set <path>` prefix for simctl; empty for the default set.
+    package var simctlArguments: [String] {
+        guard let path else { return [] }
+        return ["--set", path]
+    }
+
+    /// False when the set has never been created on this machine. Listing a
+    /// missing set would have simctl create the directory as a side effect.
+    package var exists: Bool {
+        guard let path else { return true }
+        return FileManager.default.fileExists(atPath: path)
+    }
+}
+
+/// A device plus the set it lives in, so callers can address it correctly.
+package struct LocatedDevice: Sendable {
+    package let device: SimulatorDevice
+    package let set: DeviceSet
+
+    package init(device: SimulatorDevice, set: DeviceSet) {
+        self.device = device
+        self.set = set
+    }
+}
+
 package struct ResolvedDevice: Sendable {
     package let simulatorName: String
     package let udid: String

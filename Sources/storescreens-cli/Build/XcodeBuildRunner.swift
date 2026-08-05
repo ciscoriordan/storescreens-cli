@@ -1,3 +1,4 @@
+import StorescreensCore
 import Foundation
 
 actor XcodeBuildRunner {
@@ -114,6 +115,15 @@ actor XcodeBuildRunner {
         let shortUDID = String(destinationUDID.prefix(8))
         writeLog(name: "test-\(shortUDID)", result: result)
 
+        // The test runner failing to launch writes a result bundle like any
+        // other failure, so it has to be recognized from the output. Throwing
+        // lets the caller's retry settle the simulator and try again, instead
+        // of ending the whole capture with a bare "no screenshots".
+        if !result.succeeded,
+           let signature = TestRunDiagnostics.testRunnerLaunchFailure(in: result.stdout + result.stderr) {
+            throw CLIError.testRunnerLaunchFailed(reason: signature)
+        }
+
         // Tests may fail assertions but still produce screenshots
         guard FileManager.default.fileExists(atPath: resultBundlePath) else {
             throw CLIError.resultBundleNotFound(path: resultBundlePath)
@@ -174,6 +184,15 @@ actor XcodeBuildRunner {
         }
         let shortUDID = String(destinationUDID.prefix(8))
         writeLog(name: "test-\(shortUDID)", result: result)
+
+        // The test runner failing to launch writes a result bundle like any
+        // other failure, so it has to be recognized from the output. Throwing
+        // lets the caller's retry settle the simulator and try again, instead
+        // of ending the whole capture with a bare "no screenshots".
+        if !result.succeeded,
+           let signature = TestRunDiagnostics.testRunnerLaunchFailure(in: result.stdout + result.stderr) {
+            throw CLIError.testRunnerLaunchFailed(reason: signature)
+        }
 
         // Tests may fail assertions but still produce screenshots
         guard FileManager.default.fileExists(atPath: resultBundlePath) else {

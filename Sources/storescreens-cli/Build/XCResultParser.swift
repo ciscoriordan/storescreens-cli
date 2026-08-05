@@ -1,3 +1,4 @@
+import StorescreensCore
 import Foundation
 
 /// Summary of test results extracted from an .xcresult bundle. Mirrors the

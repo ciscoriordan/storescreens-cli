@@ -214,6 +214,13 @@ package actor XcodeBuildRunner {
             if hardFailurePatterns.contains(where: { result.stderr.contains($0) }) {
                 throw CLIError.buildFailed(output: result.stderr)
             }
+            // The test runner failing to launch writes a result bundle like any
+            // other failure, so it has to be recognized from the output.
+            // Throwing lets the caller's retry settle the simulator and try
+            // again, instead of ending the capture with a bare "no screenshots".
+            if let signature = TestRunDiagnostics.testRunnerLaunchFailure(in: result.stdout + result.stderr) {
+                throw CLIError.testRunnerLaunchFailed(reason: signature)
+            }
         }
 
         // Tests may fail assertions but still produce screenshots
