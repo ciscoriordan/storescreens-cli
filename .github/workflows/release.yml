@@ -156,6 +156,18 @@ jobs:
             cp "$TEMPLATE_SRC" "$TEMPLATE_DST"
             if ! git diff --quiet "$TEMPLATE_DST" 2>/dev/null; then
               git add "$TEMPLATE_DST"
+              # storescreens.skill bundles this template, so a sync that
+              # doesn't rebuild the archive leaves it serving the previous
+              # release's copy. Rebuild in the same commit.
+              if [ -x ./build-skill.sh ]; then
+                if ./build-skill.sh; then
+                  git add storescreens.skill
+                else
+                  echo "::warning::build-skill.sh failed; storescreens.skill still holds the previous template."
+                fi
+              else
+                echo "::warning::No build-skill.sh in storescreens-skill; storescreens.skill not rebuilt after template sync."
+              fi
               git commit -m "chore: sync ScreenshotTests.swift.template from storescreens-cli v${VERSION}"
               if ! git push origin main; then
                 echo "::warning::Template sync commit failed to push; continuing to tag."
