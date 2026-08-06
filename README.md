@@ -1651,6 +1651,14 @@ release scheduling: updated: releaseType, earliestReleaseDate
 
 For a version that already exists, `storescreens version-release schedule` sets the same two release attributes without a full submit run.
 
+### Reset Overview Rating (not supported)
+
+Clearing an app's star-rating summary on release ("Reset Overview Rating" on the version page, `reset_ratings` in fastlane `deliver`) is the one `deliver` option with no storescreens equivalent, and it's noted here so the gap isn't mistaken for an oversight.
+
+The three endpoints behind the checkbox (`GET appStoreVersions/{id}/resetRatingsRequest`, `POST resetRatingsRequests`, `DELETE resetRatingsRequests/{id}`) don't exist on `api.appstoreconnect.apple.com`. They live on Apple's internal Iris host, which answers `401 NOT_AUTHORIZED` to an API-key JWT even for a plain `GET /apps` - the same token that gets a 200 from the public host. So it isn't the endpoint or a missing CSRF header; Iris doesn't accept `.p8` credentials at all. fastlane gets through only because spaceship can hold an Apple ID web session, which means an interactive sign-in and 2FA flow, and a session to store and renew. That's a second auth mode and a much wider trust model than an app-scoped API key, which is not a trade storescreens makes for one boolean.
+
+Tick the box in App Store Connect before the version releases. It applies to every territory at once, leaves written reviews alone, and is reversible right up until the version ships.
+
 ### Categories, age rating, and review info
 
 Three more YAML blocks finish out what `submit` writes to App Store Connect, all optional:
