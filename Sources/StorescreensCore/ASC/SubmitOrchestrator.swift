@@ -114,6 +114,14 @@ package struct SubmitOrchestrator {
         /// ("updated: <fields>", "unchanged", or "skipped: ..."). Nil
         /// when no `age_rating:` block was supplied.
         package var ageRatingStatus: String?
+        /// Set when the IDFA / content-rights answers were applied this run
+        /// ("updated: usesIdfa", "unchanged", ...). Nil when no
+        /// `submission_info:` block was supplied.
+        package var submissionInfoStatus: String?
+        /// Set when release scheduling was applied this run
+        /// ("updated: releaseType", "unchanged", ...). Nil when no
+        /// `release:` block was supplied.
+        package var releaseStatus: String?
         /// Set when the orchestrator detected appInfo-level fields
         /// (name/subtitle/privacy URLs) but couldn't find an editable
         /// AppInfo to PATCH them onto. Common cause: the live version is
@@ -223,6 +231,8 @@ package struct SubmitOrchestrator {
             availabilityStatus: nil,
             categoriesStatus: nil,
             ageRatingStatus: nil,
+            submissionInfoStatus: nil,
+            releaseStatus: nil,
             appInfoSkipped: nil,
             errors: []
         )
@@ -247,6 +257,22 @@ package struct SubmitOrchestrator {
             await applyAppInfoMetadata(
                 appsAPI: appsAPI,
                 appID: app.id,
+                report: &report,
+                progress: progress
+            )
+        }
+
+        // 2d. Submission answers (IDFA, content rights) and release
+        // scheduling. Both are gated on their own config block. The
+        // content-rights half is app-level; the IDFA and release-type
+        // halves are version-level, so this has to run after step 2.
+        // Errors are non-fatal for the same reason as pricing: a bad
+        // answer here shouldn't cost the operator the screenshot upload.
+        if config.submissionInfo != nil || config.release != nil {
+            await applySubmissionAndRelease(
+                appsAPI: appsAPI,
+                app: app,
+                version: version,
                 report: &report,
                 progress: progress
             )
@@ -1410,6 +1436,189 @@ package struct SubmitOrchestrator {
             report.errors.append("categories: \(error)")
             report.categoriesStatus = "error"
         }
+    }
+
+    // MARK: - Submission info & release scheduling
+
+    /// Applies `submission_info:` (IDFA + content rights) and `release:`
+    /// (release type + scheduled date).
+    ///
+    /// Three attributes across two resources, but only two PATCHes: the
+    /// IDFA answer and both release fields live on the same
+    /// `appStoreVersions` record, so they are diffed together and sent in
+    /// one body. Content rights is app-level and gets its own PATCH.
+    ///
+    /// Everything pre-diffs against ASC's current values, because Apple
+    /// 409s a PATCH that sets an attribute to what it already holds.
+    private func applySubmissionAndRelease(
+        appsAPI: AppsAPI,
+        app: AppsAPI.App,
+        version: AppsAPI.Version,
+        report: inout Report,
+        progress: ((String) -> Void)?
+    ) async {
+        // Field names this run actually changed, per config block. Both
+        // lists are turned into report lines at the end so a block that
+        // touches two resources still reports as one status.
+        var submissionDirty: [String] = []
+        var submissionFailed = false
+
+        // Content rights (app-level). `resolveApp` already carries the
+        // current declaration, so no extra GET.
+        if let desired = config.submissionInfo?.containsThirdPartyContent {
+            let wanted = AppsAPI.ContentRightsDeclaration(containsThirdPartyContent: desired)
+            if app.attributes?.contentRightsDeclaration == wanted.rawValue {
+                progress?("content rights: unchanged (\(wanted.rawValue))")
+            } else {
+                do {
+                    try await appsAPI.setContentRightsDeclaration(appID: app.id, declaration: wanted)
+                    submissionDirty.append("contentRightsDeclaration")
+                    progress?("content rights: set \(wanted.rawValue)")
+                } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                    progress?("content rights: unchanged (ASC reported already-set)")
+                } catch {
+                    report.errors.append("content rights: \(error)")
+                    submissionFailed = true
+                }
+            }
+        }
+
+        let wantsIdfa = config.submissionInfo?.usesIdfa != nil
+        let wantsRelease = config.release?.type != nil || config.release?.earliestReleaseDate != nil
+
+        // Nothing version-level to do: settle the content-rights line and
+        // stop before the extra GET.
+        guard wantsIdfa || wantsRelease else {
+            if config.submissionInfo != nil {
+                report.submissionInfoStatus = submissionStatusLine(
+                    dirty: submissionDirty, failed: submissionFailed
+                )
+            }
+            return
+        }
+
+        // The version handed to us came from find-or-create, which for the
+        // "found" path came out of a list call. Re-read it so the diff sees
+        // every attribute Apple currently holds rather than whatever the
+        // list projection included.
+        let current: AppsAPI.Version.Attributes?
+        do {
+            current = try await appsAPI.getVersion(id: version.id).attributes
+        } catch {
+            report.errors.append("version attributes lookup (submission info / release): \(error)")
+            if config.submissionInfo != nil { report.submissionInfoStatus = "skipped: version lookup failed" }
+            if wantsRelease { report.releaseStatus = "skipped: version lookup failed" }
+            return
+        }
+
+        var dirty: [String] = []
+        var idfaPatch: Bool?
+        var releaseTypePatch: AppsAPI.ReleaseType?
+        var releaseDatePatch: String?
+
+        if let desired = config.submissionInfo?.usesIdfa, desired != current?.usesIdfa {
+            idfaPatch = desired
+            dirty.append("usesIdfa")
+        }
+
+        let desiredType = config.release?.type?.wireValue
+        if let desiredType, desiredType.rawValue != current?.releaseType {
+            releaseTypePatch = desiredType
+            dirty.append("releaseType")
+        }
+
+        if let desiredDate = config.release?.earliestReleaseDate,
+           !sameReleaseDate(desiredDate, current?.earliestReleaseDate) {
+            releaseDatePatch = desiredDate
+            dirty.append("earliestReleaseDate")
+        }
+
+        // Apple rejects a date on any release type other than SCHEDULED.
+        // The effective type is whatever we're about to set, falling back
+        // to what the version already carries.
+        let effectiveType = desiredType?.rawValue ?? current?.releaseType
+        if releaseDatePatch != nil, effectiveType != AppsAPI.ReleaseType.scheduled.rawValue {
+            report.errors.append("release: earliest_release_date requires `type: scheduled` (version is \(effectiveType ?? "unset"))")
+            report.releaseStatus = "error"
+            releaseDatePatch = nil
+            dirty.removeAll { $0 == "earliestReleaseDate" }
+        }
+        // Switching to SCHEDULED without a date leaves ASC with nothing to
+        // schedule against, which it rejects at submit time rather than
+        // here. Flag it now while it's still cheap to fix.
+        if releaseTypePatch == .scheduled,
+           config.release?.earliestReleaseDate == nil,
+           current?.earliestReleaseDate == nil {
+            report.errors.append("release: `type: scheduled` needs an earliest_release_date")
+            report.releaseStatus = "error"
+            return
+        }
+
+        var releaseFailed = false
+        if !dirty.isEmpty {
+            do {
+                _ = try await appsAPI.updateVersionAttributes(
+                    versionID: version.id,
+                    usesIdfa: idfaPatch,
+                    releaseType: releaseTypePatch,
+                    earliestReleaseDate: releaseDatePatch
+                )
+                progress?("version attributes: updated \(dirty.joined(separator: ", "))")
+            } catch let e as ASCClient.APIError where e.isAlreadySetConflict {
+                progress?("version attributes: unchanged (ASC reported already-set)")
+                dirty.removeAll()
+            } catch {
+                // One PATCH carries both blocks' fields, so a failure
+                // fails whichever blocks contributed to it.
+                report.errors.append("submission info / release: \(error)")
+                if idfaPatch != nil { submissionFailed = true }
+                if releaseTypePatch != nil || releaseDatePatch != nil { releaseFailed = true }
+                dirty.removeAll()
+            }
+        }
+
+        if config.submissionInfo != nil {
+            if dirty.contains("usesIdfa") { submissionDirty.append("usesIdfa") }
+            report.submissionInfoStatus = submissionStatusLine(
+                dirty: submissionDirty, failed: submissionFailed
+            )
+        }
+        if wantsRelease {
+            let releaseFields = dirty.filter { $0 != "usesIdfa" }
+            // A validation error earlier (date without SCHEDULED) already
+            // wrote "error"; don't overwrite it with "unchanged".
+            if releaseFailed {
+                report.releaseStatus = "error"
+            } else if report.releaseStatus != "error" {
+                report.releaseStatus = releaseFields.isEmpty
+                    ? "unchanged"
+                    : "updated: \(releaseFields.joined(separator: ", "))"
+            }
+            if report.releaseStatus == "unchanged" { progress?("release: unchanged") }
+        }
+    }
+
+    /// Renders the one-line `submission_info:` report status from the
+    /// fields that changed. Both halves of the block (content rights on
+    /// the app, IDFA on the version) collapse into this single line.
+    private func submissionStatusLine(dirty: [String], failed: Bool) -> String {
+        if failed { return "error" }
+        return dirty.isEmpty ? "unchanged" : "updated: \(dirty.joined(separator: ", "))"
+    }
+
+    /// True when a desired `earliestReleaseDate` string and ASC's current
+    /// value denote the same instant. Compares as dates when both parse so
+    /// `2026-08-10T12:00:00-07:00` and `2026-08-10T19:00:00Z` don't look
+    /// like a change; falls back to exact string equality otherwise.
+    private func sameReleaseDate(_ desired: String, _ current: String?) -> Bool {
+        guard let current else { return false }
+        if desired == current { return true }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let a = parser.date(from: desired), let b = parser.date(from: current) else {
+            return false
+        }
+        return a == b
     }
 
     /// Applies the `age_rating:` block to the editable AppInfo's auto-

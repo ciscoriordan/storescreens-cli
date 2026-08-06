@@ -144,6 +144,19 @@ struct MetadataInitCommand: AsyncParsableCommand {
         `.translations.json` (commit it); `storescreens translate status` shows
         what is still raw machine output.
 
+        ## Precheck
+
+        Before uploading, scan this directory for what App Review rejects
+        listings over:
+
+            storescreens precheck               # offline rules
+            storescreens precheck --check-urls  # also confirm every link resolves
+
+        It flags references to other platforms (Android, Google Play),
+        placeholder text, profanity, pre-release framing ("beta"), fields
+        over Apple's character limits, malformed URLs, and empty files.
+        `submit --dry-run` runs the same offline rules automatically.
+
         ## Upload
 
         After filling in the files you want:

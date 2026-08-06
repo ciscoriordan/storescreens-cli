@@ -212,6 +212,34 @@ struct StorescreensMCP {
             ])
         ),
         Tool(
+            name: "precheck",
+            description: """
+            Scan metadata/<locale>/*.txt for App Review guideline problems before submitting. \
+            Errors: references to other platforms (Android, Google Play), placeholder text, \
+            profanity, fields over Apple's character limits, malformed URLs. Warnings: \
+            "coming soon" promises, pre-release framing, disparaging Apple, wasteful keyword \
+            formatting, and empty files (which blank the live field). Needs no App Store \
+            Connect credentials. Distinct from `check`, which reads Swift source.
+            """,
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "metadata_dir": .object([
+                        "type": .string("string"),
+                        "description": .string("Metadata directory (default: app_store_connect.metadata_dir, else ./metadata)"),
+                    ]),
+                    "config_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Path to storescreens.yml (default: storescreens.yml). Optional - precheck works on a metadata directory alone."),
+                    ]),
+                    "check_urls": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Also request every support / marketing / privacy URL to confirm it resolves. Makes network calls to third-party hosts; default false."),
+                    ]),
+                ]),
+            ])
+        ),
+        Tool(
             name: "list_simulators",
             description: """
             List available iOS simulators that can be used for App Store screenshot capture. \
@@ -467,6 +495,7 @@ struct StorescreensMCP {
             case "get_capture_status":  return await handleGetCaptureStatus(params)
             case "get_capture_result":  return try await handleGetCaptureResult(params)
             case "check":             return try await handleCheck(params)
+            case "precheck":          return try await handlePrecheck(params)
             case "list_simulators":   return try await handleListSimulators()
             case "list_screenshots":  return try handleListScreenshots(params)
             case "get_screenshot":    return try handleGetScreenshot(params)
@@ -914,6 +943,67 @@ struct StorescreensMCP {
         let json = String(data: try encoder.encode(findings), encoding: .utf8) ?? "[]"
         let summary = "\(scanResult.errors.count) error(s), \(scanResult.warnings.count + (findings.count - scanResult.findings.count)) warning(s)\n\n\(json)"
         return .init(content: [.text(summary)], isError: scanResult.hasErrors)
+    }
+
+    // MARK: - precheck
+
+    static func handlePrecheck(_ params: CallTool.Parameters) async throws -> CallTool.Result {
+        let configPath = params.arguments?["config_path"]?.stringValue ?? "storescreens.yml"
+        let checkURLs = params.arguments?["check_urls"]?.boolValue ?? false
+
+        // The YAML is optional: precheck is useful on a metadata directory
+        // alone, so a missing config falls back to ./metadata rather than
+        // erroring out.
+        let captureConfig = try? ConfigLoader().load(from: configPath)
+        let baseDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().standardized
+        let root: URL = {
+            if let override = params.arguments?["metadata_dir"]?.stringValue, !override.isEmpty {
+                return URL(fileURLWithPath: override)
+            }
+            if let configured = captureConfig?.appStoreConnect?.metadataDir {
+                return URL(fileURLWithPath: configured, relativeTo: baseDir).standardized
+            }
+            return baseDir.appendingPathComponent("metadata")
+        }()
+
+        guard FileManager.default.fileExists(atPath: root.path) else {
+            return .init(
+                content: [.text("No metadata directory at \(root.path). Run `storescreens metadata init` or pass metadata_dir.")],
+                isError: true
+            )
+        }
+
+        let scanner = MetadataPrecheck()
+        let offline = scanner.scan(dir: root)
+        var findings = offline.findings
+        if checkURLs {
+            findings.append(contentsOf: await scanner.checkURLs(dir: root))
+        }
+
+        struct FindingOutput: Encodable {
+            let severity: String
+            let rule: String
+            let locale: String
+            let file: String
+            let line: Int?
+            let message: String
+            let excerpt: String?
+        }
+        let output = findings.map {
+            FindingOutput(
+                severity: $0.severity.rawValue, rule: $0.rule,
+                locale: $0.locale, file: $0.file, line: $0.line,
+                message: $0.message, excerpt: $0.excerpt
+            )
+        }
+        let errorCount = findings.filter { $0.severity == .error }.count
+        let warningCount = findings.count - errorCount
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let json = String(data: try encoder.encode(output), encoding: .utf8) ?? "[]"
+        let summary = "\(offline.localesScanned) locale(s) scanned: \(errorCount) error(s), \(warningCount) warning(s)\n\n\(json)"
+        return .init(content: [.text(summary)], isError: errorCount > 0)
     }
 
     // MARK: - list_simulators

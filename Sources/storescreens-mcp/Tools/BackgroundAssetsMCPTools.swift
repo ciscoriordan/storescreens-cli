@@ -101,6 +101,14 @@ package enum BackgroundAssetsMCPTools {
         )
     }
 
+    /// Client-side rejection (bad enum value, missing conditional
+    /// parameter, failed static validation) as distinct from an error
+    /// Apple returned. Matches the helper of the same name in the other
+    /// tool files.
+    static func errorResult(_ message: String) -> CallTool.Result {
+        .init(content: [.text(message)], isError: true)
+    }
+
     static func requireString(
         _ params: CallTool.Parameters, _ key: String
     ) -> Either<String, CallTool.Result> {
@@ -356,6 +364,38 @@ package enum BackgroundAssetsMCPTools {
             ],
             required: ["app_id"]
         ),
+
+        // Release scheduling: sets the policy BEFORE approval, unlike the
+        // four resources above, which act on an already-approved version.
+        makeTool(
+            name: "version_schedule_get",
+            description: "GET /appStoreVersions/{id} - read a version's release policy: releaseType (MANUAL / AFTER_APPROVAL / SCHEDULED), earliestReleaseDate, and the IDFA answer (usesIdfa).",
+            properties: [
+                ("version_id", "string", "appStoreVersion id"),
+            ],
+            required: ["version_id"]
+        ),
+        makeTool(
+            name: "version_schedule_set",
+            description: "PATCH /appStoreVersions/{id} - set when an approved version reaches customers. release_type MANUAL holds it in PENDING_DEVELOPER_RELEASE until version_release_request_create; AFTER_APPROVAL (Apple's default) ships on approval; SCHEDULED ships at earliest_release_date. The date must be ISO 8601 on an exact hour, in the future, and is only valid with SCHEDULED.",
+            properties: [
+                ("version_id", "string", "appStoreVersion id"),
+                ("release_type", "string", "MANUAL | AFTER_APPROVAL | SCHEDULED"),
+                ("earliest_release_date", "string", "ISO 8601 on an exact hour, e.g. 2026-08-10T12:00:00-07:00. Only with SCHEDULED."),
+            ],
+            required: ["version_id"]
+        ),
+        makeTool(
+            name: "version_submission_info_set",
+            description: "Answer the two submission questions that aren't export compliance. uses_idfa PATCHes appStoreVersions.usesIdfa (per version); contains_third_party_content PATCHes apps.contentRightsDeclaration (per app, carries across releases). Pass app_id only when setting content rights.",
+            properties: [
+                ("version_id", "string", "appStoreVersion id (required for uses_idfa)"),
+                ("app_id", "string", "numeric ASC app id (required for contains_third_party_content)"),
+                ("uses_idfa", "boolean", "does the app use the Advertising Identifier?"),
+                ("contains_third_party_content", "boolean", "does the app contain, show, or access third-party content?"),
+            ],
+            required: []
+        ),
     ]
 
     // MARK: - Dispatch
@@ -398,6 +438,10 @@ package enum BackgroundAssetsMCPTools {
         case "version_release_request_create":
             return await versionReleaseRequestCreate(params)
         case "end_preorder_create":         return await endPreorderCreate(params)
+        // Release scheduling + submission answers
+        case "version_schedule_get":        return await versionScheduleGet(params)
+        case "version_schedule_set":        return await versionScheduleSet(params)
+        case "version_submission_info_set": return await versionSubmissionInfoSet(params)
         default:
             return .init(
                 content: [.text("Unknown background-assets / release tool: \(params.name)")],
@@ -914,6 +958,112 @@ package enum BackgroundAssetsMCPTools {
         } catch {
             return emitAPIError(error, context: "end_preorder_create failed")
         }
+    }
+
+    // MARK: - Handlers: release scheduling + submission answers
+
+    static func versionScheduleGet(_ p: CallTool.Parameters) async -> CallTool.Result {
+        let creds = makeClient(); guard case .left(let client) = creds else {
+            if case .right(let r) = creds { return r }; return .init(isError: true)
+        }
+        let v = requireString(p, "version_id"); guard case .left(let versionID) = v else {
+            if case .right(let r) = v { return r }; return .init(isError: true)
+        }
+        do {
+            let version = try await AppsAPI(client: client).getVersion(id: versionID)
+            return emitJSON(version, header: "appStoreVersion \(versionID) release policy")
+        } catch {
+            return emitAPIError(error, context: "version_schedule_get failed")
+        }
+    }
+
+    static func versionScheduleSet(_ p: CallTool.Parameters) async -> CallTool.Result {
+        let creds = makeClient(); guard case .left(let client) = creds else {
+            if case .right(let r) = creds { return r }; return .init(isError: true)
+        }
+        let v = requireString(p, "version_id"); guard case .left(let versionID) = v else {
+            if case .right(let r) = v { return r }; return .init(isError: true)
+        }
+        let rawType = p.arguments?["release_type"]?.stringValue
+        let date = p.arguments?["earliest_release_date"]?.stringValue
+        guard rawType != nil || date != nil else {
+            return errorResult("version_schedule_set needs release_type, earliest_release_date, or both")
+        }
+
+        var releaseType: AppsAPI.ReleaseType?
+        if let rawType {
+            guard let parsed = AppsAPI.ReleaseType(rawValue: rawType.uppercased()) else {
+                return errorResult("release_type must be one of \(AppsAPI.ReleaseType.allCases.map(\.rawValue).joined(separator: ", ")); got \"\(rawType)\"")
+            }
+            releaseType = parsed
+        }
+
+        // Same static checks the CLI runs, so a bad date fails here rather
+        // than as an opaque 422 from Apple.
+        let setting: ReleaseTypeSetting? = releaseType.map {
+            switch $0 {
+            case .manual:        return .manual
+            case .afterApproval: return .afterApproval
+            case .scheduled:     return .scheduled
+            }
+        }
+        var problems = ReleaseConfig(type: setting, earliestReleaseDate: date).validate()
+        // A date with no explicit type is legitimate when the version is
+        // already SCHEDULED; only its own shape is checked then.
+        if setting == nil { problems.removeAll { $0.contains("only valid with") } }
+        if !problems.isEmpty { return errorResult(problems.joined(separator: "; ")) }
+
+        do {
+            let updated = try await AppsAPI(client: client).updateVersionAttributes(
+                versionID: versionID,
+                releaseType: releaseType,
+                earliestReleaseDate: date
+            )
+            return emitJSON(updated, header: "Updated release policy on version \(versionID)")
+        } catch {
+            return emitAPIError(error, context: "version_schedule_set failed")
+        }
+    }
+
+    static func versionSubmissionInfoSet(_ p: CallTool.Parameters) async -> CallTool.Result {
+        let creds = makeClient(); guard case .left(let client) = creds else {
+            if case .right(let r) = creds { return r }; return .init(isError: true)
+        }
+        let usesIdfa = p.arguments?["uses_idfa"]?.boolValue
+        let thirdParty = p.arguments?["contains_third_party_content"]?.boolValue
+        guard usesIdfa != nil || thirdParty != nil else {
+            return errorResult("version_submission_info_set needs uses_idfa, contains_third_party_content, or both")
+        }
+
+        let api = AppsAPI(client: client)
+        var applied: [String] = []
+
+        if let usesIdfa {
+            guard let versionID = p.arguments?["version_id"]?.stringValue else {
+                return errorResult("uses_idfa is a per-version attribute; pass version_id")
+            }
+            do {
+                _ = try await api.updateVersionAttributes(versionID: versionID, usesIdfa: usesIdfa)
+                applied.append("usesIdfa=\(usesIdfa) on version \(versionID)")
+            } catch {
+                return emitAPIError(error, context: "version_submission_info_set (usesIdfa) failed")
+            }
+        }
+
+        if let thirdParty {
+            guard let appID = p.arguments?["app_id"]?.stringValue else {
+                return errorResult("contains_third_party_content is a per-app attribute; pass app_id")
+            }
+            let declaration = AppsAPI.ContentRightsDeclaration(containsThirdPartyContent: thirdParty)
+            do {
+                _ = try await api.setContentRightsDeclaration(appID: appID, declaration: declaration)
+                applied.append("contentRightsDeclaration=\(declaration.rawValue) on app \(appID)")
+            } catch {
+                return emitAPIError(error, context: "version_submission_info_set (content rights) failed")
+            }
+        }
+
+        return .init(content: [.text("Set \(applied.joined(separator: "; "))")], isError: false)
     }
 }
 

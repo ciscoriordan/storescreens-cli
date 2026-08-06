@@ -35,8 +35,104 @@ struct VersionReleaseControlCommand: AsyncParsableCommand {
             VersionPromotionCreateCommand.self,
             VersionReleaseRequestCommand.self,
             EndPreOrderCommand.self,
+            VersionScheduleCommand.self,
         ]
     )
+}
+
+/// Lets `--release-type` take the same snake_case spellings the YAML
+/// `release.type` field uses. CaseIterable gives ArgumentParser the value
+/// list for `--help` and shell completions.
+extension ReleaseTypeSetting: ExpressibleByArgument {}
+
+// MARK: - storescreens version-release schedule
+
+/// Sets the *policy* for when an approved version ships, as opposed to the
+/// rest of this command tree, which acts on a version that is already
+/// approved. `storescreens submit` sets the same two attributes from the
+/// `release:` block in storescreens.yml; this is the ad-hoc equivalent for
+/// a version that already exists.
+struct VersionScheduleCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "schedule",
+        abstract: "Set releaseType / earliestReleaseDate on a version (PATCH /appStoreVersions).",
+        discussion: """
+            `--release-type manual` holds the version in PENDING_DEVELOPER_RELEASE after \
+            approval until you run `version-release release-request`. `after_approval` \
+            (Apple's default) ships it the moment review passes. `scheduled` ships it at \
+            `--earliest-release-date`, which must be ISO 8601 on an exact hour, e.g. \
+            2026-08-10T12:00:00-07:00.
+
+            Call with neither option to read the version's current settings.
+            """
+    )
+
+    @Option(name: .long, help: "appStoreVersion id.") var versionId: String
+
+    @Option(
+        name: .long,
+        help: "manual | after_approval | scheduled."
+    )
+    var releaseType: ReleaseTypeSetting?
+
+    @Option(
+        name: .long,
+        help: "ISO 8601 publish time on an exact hour. Only valid with --release-type scheduled."
+    )
+    var earliestReleaseDate: String?
+
+    @Flag(name: .long, help: "Emit JSON.") var json: Bool = false
+
+    func run() async throws {
+        let logger = Logger()
+        let client = try VersionReleaseCLIHelpers.loadClient(logger: logger)
+        let api = AppsAPI(client: client)
+
+        // Read-only when nothing was asked for.
+        guard releaseType != nil || earliestReleaseDate != nil else {
+            do {
+                let version = try await api.getVersion(id: versionId)
+                if json { try VersionReleaseCLIHelpers.emitJSON(version); return }
+                logger.header("appStoreVersion \(version.id)")
+                print("  versionString:       \(version.attributes?.versionString ?? "?")")
+                print("  appStoreState:       \(version.attributes?.appStoreState ?? "?")")
+                print("  releaseType:         \(version.attributes?.releaseType ?? "(unset)")")
+                print("  earliestReleaseDate: \(version.attributes?.earliestReleaseDate ?? "(unset)")")
+                return
+            } catch {
+                throw VersionReleaseCLIHelpers.failAPI(error, logger: logger, context: "schedule read")
+            }
+        }
+
+        let problems = ReleaseConfig(
+            type: releaseType, earliestReleaseDate: earliestReleaseDate
+        ).validate()
+        // A bare `--earliest-release-date` with no `--release-type` is
+        // legitimate when the version is already SCHEDULED, so only the
+        // date's own shape is checked in that case.
+        let applicable = releaseType == nil
+            ? problems.filter { !$0.contains("only valid with") }
+            : problems
+        if !applicable.isEmpty {
+            for p in applicable { logger.log(p, level: .error) }
+            throw ExitCode(1)
+        }
+
+        do {
+            let updated = try await api.updateVersionAttributes(
+                versionID: versionId,
+                releaseType: releaseType?.wireValue,
+                earliestReleaseDate: earliestReleaseDate
+            )
+            if json { try VersionReleaseCLIHelpers.emitJSON(updated); return }
+            var applied: [String] = []
+            if let releaseType { applied.append("releaseType=\(releaseType.wireValue.rawValue)") }
+            if let earliestReleaseDate { applied.append("earliestReleaseDate=\(earliestReleaseDate)") }
+            logger.log("updated version \(versionId): \(applied.joined(separator: ", "))", level: .success)
+        } catch {
+            throw VersionReleaseCLIHelpers.failAPI(error, logger: logger, context: "schedule")
+        }
+    }
 }
 
 // MARK: - Shared helpers

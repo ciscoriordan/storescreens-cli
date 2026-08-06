@@ -246,4 +246,96 @@ final class AppStoreConnectConfigTests: XCTestCase {
         XCTAssertEqual(config.pricing?.territoryPrices?["JPN"], "600")
         XCTAssertEqual(config.pricing?.territoryPrices?.count, 2)
     }
+
+    // MARK: - Submission info (IDFA + content rights)
+
+    func testSubmissionInfo_bothAnswers() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        submission_info:
+          uses_idfa: false
+          contains_third_party_content: true
+        """
+        let config = try decode(yaml)
+        XCTAssertEqual(config.submissionInfo?.usesIdfa, false)
+        XCTAssertEqual(config.submissionInfo?.containsThirdPartyContent, true)
+    }
+
+    func testSubmissionInfo_partialLeavesOtherNil() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        submission_info:
+          uses_idfa: true
+        """
+        let config = try decode(yaml)
+        XCTAssertEqual(config.submissionInfo?.usesIdfa, true)
+        XCTAssertNil(config.submissionInfo?.containsThirdPartyContent)
+    }
+
+    func testContentRightsDeclaration_wireValues() {
+        XCTAssertEqual(
+            AppsAPI.ContentRightsDeclaration(containsThirdPartyContent: true).rawValue,
+            "USES_THIRD_PARTY_CONTENT"
+        )
+        XCTAssertEqual(
+            AppsAPI.ContentRightsDeclaration(containsThirdPartyContent: false).rawValue,
+            "DOES_NOT_USE_THIRD_PARTY_CONTENT"
+        )
+    }
+
+    // MARK: - Release scheduling
+
+    func testRelease_scheduledWithDate() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        release:
+          type: scheduled
+          earliest_release_date: "2026-08-10T12:00:00-07:00"
+        """
+        let config = try decode(yaml)
+        XCTAssertEqual(config.release?.type, .scheduled)
+        XCTAssertEqual(config.release?.earliestReleaseDate, "2026-08-10T12:00:00-07:00")
+        XCTAssertEqual(config.release?.type?.wireValue, .scheduled)
+    }
+
+    func testRelease_manualAndAfterApprovalWireValues() throws {
+        let manual = try decode("""
+        bundle_id: com.example.app
+        release:
+          type: manual
+        """)
+        XCTAssertEqual(manual.release?.type?.wireValue.rawValue, "MANUAL")
+        XCTAssertNil(manual.release?.earliestReleaseDate)
+
+        let auto = try decode("""
+        bundle_id: com.example.app
+        release:
+          type: after_approval
+        """)
+        XCTAssertEqual(auto.release?.type?.wireValue.rawValue, "AFTER_APPROVAL")
+    }
+
+    func testRelease_unknownTypeRejected() {
+        let yaml = """
+        bundle_id: com.example.app
+        release:
+          type: whenever
+        """
+        XCTAssertThrowsError(try decode(yaml))
+    }
+
+    /// An unquoted ISO date is a real YAML trap: Yams parses it into a
+    /// timestamp scalar rather than a string. Decoding it into our
+    /// `String?` field has to keep working, otherwise anyone who forgets
+    /// the quotes gets a confusing type error instead of a release date.
+    func testRelease_unquotedDateStillDecodes() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        release:
+          type: scheduled
+          earliest_release_date: 2026-08-10T12:00:00-07:00
+        """
+        let config = try decode(yaml)
+        XCTAssertNotNil(config.release?.earliestReleaseDate)
+    }
 }

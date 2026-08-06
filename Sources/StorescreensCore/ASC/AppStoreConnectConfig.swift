@@ -38,6 +38,14 @@ package struct AppStoreConnectConfig: Codable, Sendable {
     /// is fine. When both are set, this YAML block wins (it's more
     /// scoped). Unset leaves the existing review-detail untouched.
     package var reviewInfo: ReviewInfoConfig?
+    /// Answers to the two submission questions Apple asks outside the
+    /// export-compliance flow: IDFA usage and third-party content rights.
+    /// Unset leaves both untouched.
+    package var submissionInfo: SubmissionInfoConfig?
+    /// When an approved version reaches customers (immediately, manually,
+    /// or on a schedule). Unset leaves ASC's default (`AFTER_APPROVAL`)
+    /// or whatever the version already carries.
+    package var release: ReleaseConfig?
 
     package init(
         appID: String? = nil,
@@ -49,7 +57,9 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         availability: AvailabilityConfig? = nil,
         categories: CategoriesConfig? = nil,
         ageRating: AgeRatingConfig? = nil,
-        reviewInfo: ReviewInfoConfig? = nil
+        reviewInfo: ReviewInfoConfig? = nil,
+        submissionInfo: SubmissionInfoConfig? = nil,
+        release: ReleaseConfig? = nil
     ) {
         self.appID = appID
         self.bundleID = bundleID
@@ -61,6 +71,8 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         self.categories = categories
         self.ageRating = ageRating
         self.reviewInfo = reviewInfo
+        self.submissionInfo = submissionInfo
+        self.release = release
     }
 
     package enum CodingKeys: String, CodingKey {
@@ -74,6 +86,136 @@ package struct AppStoreConnectConfig: Codable, Sendable {
         case categories
         case ageRating = "age_rating"
         case reviewInfo = "review_info"
+        case submissionInfo = "submission_info"
+        case release
+    }
+}
+
+/// The submission questions App Store Connect asks that aren't export
+/// compliance (which lives on `submit.export_compliance`, because Apple
+/// hangs it off the build rather than the version).
+///
+/// Both fields answer a yes/no question in the ASC web UI and both are
+/// sticky: once answered they persist until changed. Omit either one to
+/// leave the current answer alone.
+///
+/// ```yaml
+/// submission_info:
+///   uses_idfa: false
+///   contains_third_party_content: true
+/// ```
+package struct SubmissionInfoConfig: Codable, Sendable {
+    /// Does the app use the Advertising Identifier? Lands on
+    /// `appStoreVersions.usesIdfa`, so it is answered per version.
+    /// fastlane calls this
+    /// `submission_information[add_id_info_uses_idfa]`.
+    ///
+    /// Answering `true` obliges you to complete the rest of Apple's IDFA
+    /// questionnaire (attribution, ad serving, limit-ad-tracking) in the
+    /// ASC web UI - the API exposes only this boolean.
+    package var usesIdfa: Bool?
+
+    /// Does the app contain, show, or access third-party content? Lands on
+    /// `apps.contentRightsDeclaration`, so it is answered once per app and
+    /// carries across releases. fastlane calls this
+    /// `submission_information[content_rights_contains_third_party_content]`.
+    package var containsThirdPartyContent: Bool?
+
+    package init(usesIdfa: Bool? = nil, containsThirdPartyContent: Bool? = nil) {
+        self.usesIdfa = usesIdfa
+        self.containsThirdPartyContent = containsThirdPartyContent
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case usesIdfa = "uses_idfa"
+        case containsThirdPartyContent = "contains_third_party_content"
+    }
+}
+
+/// Release scheduling for the version `submit` targets. Covers fastlane's
+/// `automatic_release` + `auto_release_date` pair.
+///
+/// ```yaml
+/// release:
+///   type: scheduled
+///   earliest_release_date: "2026-08-10T12:00:00-07:00"
+/// ```
+///
+/// `storescreens version-release` manages what happens *after* a version is
+/// approved (phased rollout, releasing a manual version now). This block
+/// sets the policy *before* approval.
+package struct ReleaseConfig: Codable, Sendable {
+    /// `manual`, `after_approval` (Apple's default), or `scheduled`.
+    /// Omitted leaves the version's current release type alone.
+    package var type: ReleaseTypeSetting?
+
+    /// Publish date for `type: scheduled`. ISO 8601 on an exact hour, e.g.
+    /// `"2026-08-10T12:00:00-07:00"`. Apple rejects a date that isn't on
+    /// the hour, and rejects any date at all when the release type isn't
+    /// `SCHEDULED`. Quote it in YAML so it stays a string rather than
+    /// being parsed into a timestamp.
+    package var earliestReleaseDate: String?
+
+    package init(type: ReleaseTypeSetting? = nil, earliestReleaseDate: String? = nil) {
+        self.type = type
+        self.earliestReleaseDate = earliestReleaseDate
+    }
+
+    package enum CodingKeys: String, CodingKey {
+        case type
+        case earliestReleaseDate = "earliest_release_date"
+    }
+
+    /// Static checks on this block, returned as operator-facing messages.
+    /// Empty means nothing is obviously wrong. App Store Connect validates
+    /// all of this server-side too, but a 422 mid-submit costs a round trip
+    /// and says less about which field is at fault.
+    ///
+    /// `now` is injectable so the past-date rule is testable.
+    package func validate(now: Date = Date()) -> [String] {
+        var problems: [String] = []
+
+        if type == .scheduled && earliestReleaseDate == nil {
+            problems.append("release: `type: scheduled` requires an earliest_release_date")
+        }
+        if let type, type != .scheduled, earliestReleaseDate != nil {
+            problems.append("release: earliest_release_date is only valid with `type: scheduled` (got `\(type.rawValue)`)")
+        }
+
+        guard let raw = earliestReleaseDate else { return problems }
+
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let date = parser.date(from: raw) else {
+            problems.append("release: earliest_release_date \"\(raw)\" is not ISO 8601 (expected e.g. 2026-08-10T12:00:00-07:00)")
+            return problems
+        }
+        // Apple only accepts release times on an exact hour.
+        let parts = Calendar(identifier: .gregorian).dateComponents([.minute, .second], from: date)
+        if parts.minute != 0 || parts.second != 0 {
+            problems.append("release: earliest_release_date must fall on an exact hour (got \(raw))")
+        }
+        if date <= now {
+            problems.append("release: earliest_release_date \(raw) is in the past")
+        }
+        return problems
+    }
+}
+
+/// YAML spelling of `AppsAPI.ReleaseType`. Kept separate so the config
+/// surface stays snake_case like every other block while the wire values
+/// stay Apple's uppercase enum.
+package enum ReleaseTypeSetting: String, Codable, Sendable, CaseIterable {
+    case manual
+    case afterApproval = "after_approval"
+    case scheduled
+
+    package var wireValue: AppsAPI.ReleaseType {
+        switch self {
+        case .manual:        return .manual
+        case .afterApproval: return .afterApproval
+        case .scheduled:     return .scheduled
+        }
     }
 }
 

@@ -185,6 +185,12 @@ struct SubmitCommand: AsyncParsableCommand {
         if let ageRatingStatus = report.ageRatingStatus {
             print("  age rating: \(ageRatingStatus)")
         }
+        if let submissionInfoStatus = report.submissionInfoStatus {
+            print("  submission info (IDFA / content rights): \(submissionInfoStatus)")
+        }
+        if let releaseStatus = report.releaseStatus {
+            print("  release scheduling: \(releaseStatus)")
+        }
         if let pricingStatus = report.pricingStatus {
             print("  pricing: \(pricingStatus)")
         }
@@ -327,6 +333,30 @@ struct SubmitCommand: AsyncParsableCommand {
             // section was picked up.
             print("  ✓ age_rating: parsed (\(countSetAgeRatingFields(ascConfig.ageRating!)) field(s) set)")
         }
+        if let submissionInfo = ascConfig.submissionInfo {
+            var answered: [String] = []
+            if let idfa = submissionInfo.usesIdfa { answered.append("uses_idfa=\(idfa)") }
+            if let tpc = submissionInfo.containsThirdPartyContent {
+                answered.append("contains_third_party_content=\(tpc)")
+            }
+            if answered.isEmpty {
+                problems.append("submission_info: block is present but neither uses_idfa nor contains_third_party_content is set")
+            } else {
+                print("  ✓ submission_info: \(answered.joined(separator: ", "))")
+            }
+        }
+        if let release = ascConfig.release {
+            let releaseProblems = release.validate()
+            problems.append(contentsOf: releaseProblems)
+            // Only claim the block is good when it actually validated -
+            // a checkmark above the errors it just produced reads as a
+            // contradiction.
+            if releaseProblems.isEmpty, release.type != nil || release.earliestReleaseDate != nil {
+                let typeLabel = release.type?.rawValue ?? "(unchanged)"
+                let dateLabel = release.earliestReleaseDate.map { " at \($0)" } ?? ""
+                print("  ✓ release: \(typeLabel)\(dateLabel)")
+            }
+        }
 
         // 5. Every rendered PNG maps to a known ASC displayType + file size OK.
         if !skipScreenshots {
@@ -363,6 +393,23 @@ struct SubmitCommand: AsyncParsableCommand {
             print("  ✓ screenshots: \(slotCount) PNG(s) map to valid ASC display types" + (sizeProblems > 0 ? " (\(sizeProblems) too large)" : ""))
         }
 
+        // 6. Metadata guideline scan. The offline rules only - the URL
+        // reachability pass belongs to `storescreens precheck`, where the
+        // operator has opted into third-party network calls.
+        if !skipMetadata, let metadataRoot {
+            let result = MetadataPrecheck().scan(dir: metadataRoot)
+            for finding in result.findings {
+                print("    \(finding.severity == .error ? "✗" : "warn:") [\(finding.rule)] \(finding.locale)/\(finding.file): \(finding.message)")
+            }
+            if result.hasErrors {
+                problems.append("precheck found \(result.errors.count) guideline error(s); run `storescreens precheck` for detail")
+            } else if result.findings.isEmpty {
+                print("  ✓ precheck: no guideline issues")
+            } else {
+                print("  ✓ precheck: \(result.warnings.count) warning(s), no errors")
+            }
+        }
+
         print("")
         if problems.isEmpty {
             logger.log("dry run OK", level: .success)
@@ -372,6 +419,7 @@ struct SubmitCommand: AsyncParsableCommand {
             throw ExitCode(1)
         }
     }
+
 }
 
 /// Counts how many YAML age-rating fields the user actually supplied. Used

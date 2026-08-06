@@ -22,7 +22,53 @@ package struct AppsAPI {
             package let bundleId: String?
             package let primaryLocale: String?
             package let sku: String?
+            /// Answer to the "does your app contain, show, or access
+            /// third-party content?" question in the App Store Connect
+            /// "Content Rights" panel. `USES_THIRD_PARTY_CONTENT` or
+            /// `DOES_NOT_USE_THIRD_PARTY_CONTENT`; nil when never answered.
+            package let contentRightsDeclaration: String?
         }
+    }
+
+    /// The two values Apple accepts for `apps.contentRightsDeclaration`.
+    /// Maps to fastlane's
+    /// `submission_information[content_rights_contains_third_party_content]`.
+    package enum ContentRightsDeclaration: String, Codable, Sendable, CaseIterable {
+        case usesThirdPartyContent = "USES_THIRD_PARTY_CONTENT"
+        case doesNotUseThirdPartyContent = "DOES_NOT_USE_THIRD_PARTY_CONTENT"
+
+        /// `true` when the developer is declaring that third-party content
+        /// is present, which is how the question reads in the ASC web UI
+        /// and in our YAML (`contains_third_party_content:`).
+        package init(containsThirdPartyContent: Bool) {
+            self = containsThirdPartyContent ? .usesThirdPartyContent : .doesNotUseThirdPartyContent
+        }
+    }
+
+    /// PATCH `/v1/apps/{id}` to answer the Content Rights question. This is
+    /// an app-level answer, not per-version: once set it carries forward
+    /// across releases. ASC 409s an unchanged value, so callers pre-diff
+    /// against `App.Attributes.contentRightsDeclaration`.
+    @discardableResult
+    package func setContentRightsDeclaration(
+        appID: String,
+        declaration: ContentRightsDeclaration
+    ) async throws -> App {
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "apps"
+                let id: String
+                let attributes: Attrs
+            }
+            struct Attrs: Encodable { let contentRightsDeclaration: String }
+            let data: Data
+        }
+        let body = Body(data: .init(
+            id: appID, attributes: .init(contentRightsDeclaration: declaration.rawValue)
+        ))
+        struct Resp: Decodable { let data: App }
+        let resp: Resp = try await client.patch(path: "apps/\(appID)", body: body, as: Resp.self)
+        return resp.data
     }
 
     /// Looks up an app by its numeric ID. Returns the app or throws on 404.
@@ -54,7 +100,85 @@ package struct AppsAPI {
             package let versionString: String?
             package let appStoreState: String?
             package let createdDate: Date?
+            /// Answer to Apple's "does this app use the Advertising
+            /// Identifier (IDFA)?" question. Nil when unanswered. Maps to
+            /// fastlane's `submission_information[add_id_info_uses_idfa]`.
+            package let usesIdfa: Bool?
+            /// When the approved version reaches customers: `MANUAL`,
+            /// `AFTER_APPROVAL`, or `SCHEDULED`.
+            package let releaseType: String?
+            /// Publish date for `SCHEDULED` releases. Kept as a raw string
+            /// rather than a `Date` so a value read back from ASC compares
+            /// byte-for-byte against what the user wrote in YAML; the diff
+            /// falls back to instant-comparison when both sides parse.
+            package let earliestReleaseDate: String?
         }
+    }
+
+    /// Values Apple accepts for `appStoreVersions.releaseType`. Covers
+    /// fastlane's `automatic_release` / `auto_release_date` pair: `false`
+    /// there is `MANUAL` here, `true` is `AFTER_APPROVAL`, and a date is
+    /// `SCHEDULED`.
+    package enum ReleaseType: String, Codable, Sendable, CaseIterable {
+        /// Version sits in PENDING_DEVELOPER_RELEASE after approval until
+        /// someone releases it (`storescreens version-release
+        /// release-request`).
+        case manual = "MANUAL"
+        /// Goes live as soon as Apple approves it. Apple's default.
+        case afterApproval = "AFTER_APPROVAL"
+        /// Goes live at `earliestReleaseDate`, provided Apple has approved
+        /// it by then.
+        case scheduled = "SCHEDULED"
+    }
+
+    /// PATCH `/v1/appStoreVersions/{id}` attributes that aren't part of the
+    /// localization or build-attachment flows: the IDFA answer and the two
+    /// release-scheduling fields. Nil arguments are omitted from the wire
+    /// body so they stay untouched on App Store Connect.
+    ///
+    /// `earliestReleaseDate` is only meaningful alongside
+    /// `releaseType: SCHEDULED`; Apple 422s a date on any other release
+    /// type. Its format is ISO 8601 on an exact hour, e.g.
+    /// `2026-08-10T12:00:00-07:00`.
+    @discardableResult
+    package func updateVersionAttributes(
+        versionID: String,
+        usesIdfa: Bool? = nil,
+        releaseType: ReleaseType? = nil,
+        earliestReleaseDate: String? = nil
+    ) async throws -> Version {
+        struct Attrs: Encodable {
+            var usesIdfa: Bool?
+            var releaseType: String?
+            var earliestReleaseDate: String?
+        }
+        struct Body: Encodable {
+            struct Data: Encodable {
+                let type = "appStoreVersions"
+                let id: String
+                let attributes: Attrs
+            }
+            let data: Data
+        }
+        let body = Body(data: .init(id: versionID, attributes: Attrs(
+            usesIdfa: usesIdfa,
+            releaseType: releaseType?.rawValue,
+            earliestReleaseDate: earliestReleaseDate
+        )))
+        struct Resp: Decodable { let data: Version }
+        let resp: Resp = try await client.patch(
+            path: "appStoreVersions/\(versionID)", body: body, as: Resp.self
+        )
+        return resp.data
+    }
+
+    /// GET `/v1/appStoreVersions/{id}`. Used to re-read attributes after a
+    /// find-or-create so a diff sees the current `usesIdfa` / `releaseType`
+    /// values rather than whatever the create response carried.
+    package func getVersion(id: String) async throws -> Version {
+        struct Resp: Decodable { let data: Version }
+        let resp: Resp = try await client.get(path: "appStoreVersions/\(id)", as: Resp.self)
+        return resp.data
     }
 
     /// Lists versions for an app, optionally filtered to a platform

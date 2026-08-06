@@ -433,6 +433,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens setup` | Set up screenshot UI tests (interactive wizard) |
 | `storescreens capture` | Capture screenshots on all configured devices |
 | `storescreens check` | Scan source for iPad-unsafe patterns and device assumptions |
+| `storescreens precheck` | Scan metadata for App Review guideline problems before submitting |
 | `storescreens list` | Show available simulators and App Store size mappings |
 | `storescreens screenshot` | Take a quick screenshot of a running simulator |
 | `storescreens render` | Render captioned/framed screenshots from an existing capture |
@@ -464,7 +465,7 @@ This boots each simulator, installs and launches your app, and takes a single sc
 | `storescreens build-uploads ...` | API-native .ipa upload (alternative to altool): buildUploads + buildUploadFiles, chunked PUT, high-level `upload-ipa` convenience |
 | `storescreens accessibility ...` | Accessibility Nutrition Labels: per-device-family declaration of VoiceOver / captions / contrast / motion / etc. support |
 | `storescreens background-assets ...` | Background Assets: large post-install asset download (200GB/app); upload chunks, version + state per build channel |
-| `storescreens version-release ...` | Version release control: phased releases, promo carousels, manual release requests, end-of-pre-order |
+| `storescreens version-release ...` | Version release control: phased releases, promo carousels, manual release requests, end-of-pre-order, release scheduling |
 | `storescreens game-center-v2 ...` | Game Center Activities + Challenges (+ images + localizations + versions), V2 versioning for achievements / leaderboards / sets, sandbox-only score and achievement submissions |
 | `storescreens beta-feedback / beta-recruitment / beta-app-clip ...` | Modern TestFlight: feedback crash + screenshot submissions, beta crash logs, automatic-recruitment criteria, App Clip invocation configs |
 | `storescreens iap-offer-codes ...` | One-time-IAP offer codes (custom + one-time-use variants); distinct from subscription offer codes covered by `subscriptions` |
@@ -593,6 +594,57 @@ iPad-specific rules only fire when an iPad is in your configured device list. Th
 | `--config PATH` | Config file path (default: `storescreens.yml`) |
 | `--directory DIR` | Directory to scan (default: `.`) |
 | `--verbose` | Show verbose output |
+
+### `storescreens precheck`
+
+Scans your `metadata/<locale>/*.txt` files for what App Review rejects listings over, before the upload rather than after. Nothing here talks to App Store Connect, so it needs no credentials. `check` reads Swift source; `precheck` reads metadata - they don't overlap.
+
+```
+$ storescreens precheck
+
+Precheck
+  metadata: /path/to/metadata
+  locales:  2
+
+  en-US
+✗ description.txt:1  [other-platform]
+      mentions Android. App Review rejects listings that reference other platforms (guideline 2.3.10).
+      > …reek. Also available on Android and Google Play. Cloud…
+! keywords.txt  [keyword-format]
+      repeats "greek". Duplicates spend the budget without adding reach.
+✗ name.txt  [field-length]
+      48 characters, over Apple's 30-character limit for this field
+
+✗ 2 error(s), 1 warning(s)
+```
+
+Rules:
+
+| Rule | Severity | What it catches |
+|------|----------|-----------------|
+| `other-platform` | Error | Android, Google Play, BlackBerry, Windows Phone, Kindle Fire (guideline 2.3.10) |
+| `placeholder-text` | Error | Lorem ipsum, TODO, FIXME, TBD shipped in copy |
+| `profanity` | Error | Obviously objectionable language (guideline 1.1.1) |
+| `field-length` | Error | Over Apple's hard limits - name/subtitle 30, keywords 100, promotional text 170, description and release notes 4000 |
+| `url-format` | Error | Support / marketing / privacy URLs that aren't absolute http(s) |
+| `url-unreachable` | Error | Links that don't answer (only with `--check-urls`) |
+| `future-functionality` | Warning | "Coming soon", "in a future update" (guideline 2.1) |
+| `test-word` | Warning | "Beta", "trial version", "pre-release" framing |
+| `apple-sentiment` | Warning | Disparaging Apple in metadata (guideline 3.2.2) |
+| `keyword-format` | Warning | Spaces after commas, duplicates, empty entries - all waste the 100-char budget |
+| `empty-file` | Warning | An empty file blanks the live App Store field instead of leaving it alone |
+
+Matching is word-bounded against Latin letters rather than regex `\b`, so `androgynous` doesn't match but `Androidにもあります` does - unspaced scripts would otherwise slip through. Each phrase reports once per file, not once per occurrence.
+
+`submit --dry-run` runs these same rules automatically and fails on errors. Use the standalone command when you want the detail or the URL check.
+
+| Flag | Description |
+|------|-------------|
+| `--config PATH` | Config file path (default: `storescreens.yml`; optional here) |
+| `--metadata-dir DIR` | Override the metadata directory |
+| `--check-urls` | Also request every support / marketing / privacy URL to confirm it resolves |
+| `--strict` | Exit non-zero on warnings as well as errors |
+| `--json` | Emit findings as JSON |
 
 ### `storescreens list`
 
@@ -1569,6 +1621,36 @@ storescreens pricing price-points --app-id 1234567890 --territory USA --around 4
 
 `release_notes.txt` (`whatsNew`) is also handled intelligently: ASC rejects release notes on the first version of a brand-new app, so `submit` detects that case (no prior released version on the app) and drops `whatsNew` from the metadata PATCH with a `skipping whatsNew` progress line. Leave your `release_notes.txt` in place - it'll be picked up automatically on subsequent submissions.
 
+### Submission answers and release scheduling
+
+Two more optional blocks cover the questions App Store Connect asks outside the metadata panels:
+
+```yaml
+app_store_connect:
+  bundle_id: com.example.app
+
+  submission_info:
+    uses_idfa: false                    # appStoreVersions.usesIdfa
+    contains_third_party_content: true  # apps.contentRightsDeclaration
+
+  release:
+    type: scheduled                     # manual | after_approval | scheduled
+    earliest_release_date: "2026-08-10T12:00:00-07:00"
+```
+
+`submission_info` answers the two questions that aren't export compliance (that one lives on `submit.export_compliance`, because Apple hangs it off the build rather than the version). `uses_idfa` is per-version; `contains_third_party_content` is per-app and carries across releases. Answering `uses_idfa: true` obliges you to finish the rest of Apple's IDFA questionnaire (attribution, ad serving, limit-ad-tracking) in the web UI - the API exposes only the boolean.
+
+`release` sets what happens once Apple approves the version. `manual` holds it in `PENDING_DEVELOPER_RELEASE` until you run `storescreens version-release release-request`; `after_approval` is Apple's default and ships on approval; `scheduled` ships at `earliest_release_date`. That date must be ISO 8601 on an exact hour, must be in the future, and is only valid with `type: scheduled` - `submit --dry-run` checks all three before the upload. Quote it in YAML, or it parses as a timestamp instead of a string.
+
+Both blocks diff against ASC before writing, and `uses_idfa` shares a single PATCH with the release fields since they live on the same `appStoreVersions` record:
+
+```
+submission info (IDFA / content rights): updated: contentRightsDeclaration, usesIdfa
+release scheduling: updated: releaseType, earliestReleaseDate
+```
+
+For a version that already exists, `storescreens version-release schedule` sets the same two release attributes without a full submit run.
+
 ### Categories, age rating, and review info
 
 Three more YAML blocks finish out what `submit` writes to App Store Connect, all optional:
@@ -1642,6 +1724,9 @@ Quick map of what each YAML block sends to which App Store Connect resource:
 | `availability.territories` | `appAvailabilities` (v2) | POST | Diffs against current; skips if unchanged. |
 | `categories.{primary,secondary,...}` | `appInfos` (relationships) | PATCH | All six slots in one body. |
 | `age_rating.*` | `ageRatingDeclarations` | PATCH | Diffed before write; skips empty diffs. |
+| `submission_info.uses_idfa` | `appStoreVersions.usesIdfa` | PATCH | Per-version. Shares one body with `release.*`. |
+| `submission_info.contains_third_party_content` | `apps.contentRightsDeclaration` | PATCH | Per-app; carries across releases. |
+| `release.type` / `release.earliest_release_date` | `appStoreVersions.{releaseType,earliestReleaseDate}` | PATCH | Date requires `type: scheduled`. |
 | Rendered PNGs in `render.output_dir` | `appScreenshotSets` + `appScreenshots` | DELETE-then-POST | Idempotent via MD5 checksum; reorders are wipe + reupload. |
 | `submit.attach_build` | `appStoreVersions.build` (relationship) | PATCH | Latest VALID build for the marketing version. |
 | `submit.export_compliance` | `builds.usesNonExemptEncryption` | PATCH | On the attached build. |
@@ -4922,6 +5007,12 @@ Each resource maps to a different release-timeline point; the parent
 (`appStoreVersion`, or `app` for pre-orders) is set by relationship at
 create time.
 
+`version-release schedule` sits alongside these but works the other way
+round: the four resources above act on a version Apple has already
+approved, while `schedule` sets the `releaseType` / `earliestReleaseDate`
+policy beforehand. It's the ad-hoc equivalent of the `release:` YAML block
+that `submit` applies.
+
 ### MCP tools
 
 | Tool | Description |
@@ -4934,6 +5025,9 @@ create time.
 | `version_promotion_create` | Opt the version into editorial promo carousels |
 | `version_release_request_create` | Release a manually-released version now |
 | `end_preorder_create` | End an app's pre-order period early |
+| `version_schedule_get` | Read a version's releaseType / earliestReleaseDate / usesIdfa |
+| `version_schedule_set` | Set releaseType and earliestReleaseDate before approval |
+| `version_submission_info_set` | Answer the IDFA and content-rights questions |
 
 ### CLI examples
 
@@ -4964,6 +5058,16 @@ storescreens version-release release-request --version-id 7001
 
 # End pre-orders early
 storescreens version-release end-preorder --app-id 12345
+
+# Read a version's current release policy
+storescreens version-release schedule --version-id 7001
+
+# Hold the version after approval until you release it by hand
+storescreens version-release schedule --version-id 7001 --release-type manual
+
+# Ship it at a specific time (ISO 8601, exact hour, future)
+storescreens version-release schedule --version-id 7001 \
+  --release-type scheduled --earliest-release-date 2026-08-10T12:00:00-07:00
 ```
 
 ### Workflow: start a phased release
@@ -6032,6 +6136,7 @@ storescreens check --directory ./MyApp      # scan a specific directory
 | `get_capture_result` | Fetch the full manifest once a capture is complete. |
 | `take_screenshot` | Capture the current simulator screen and return the image inline in under a second. No build or test run. |
 | `check` | Run the preflight scan for iPad-unsafe patterns and device assumptions without starting a capture. |
+| `precheck` | Scan `metadata/<locale>/*.txt` for App Review guideline problems. Optional `check_urls` also confirms every link resolves. |
 | `list_simulators` | List available simulators grouped by App Store size slot. |
 | `list_screenshots` | List screenshots from the last capture. |
 | `get_screenshot` | Load a saved PNG as an inline image. |

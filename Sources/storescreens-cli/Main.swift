@@ -18,7 +18,8 @@ struct StoreScreensCLI: AsyncParsableCommand {
         subcommands: [
             // Capture / render / setup
             ListCommand.self, InitCommand.self, SetupCommand.self, CaptureCommand.self,
-            CheckCommand.self, ScreenshotCommand.self, BezelsCommand.self, RenderCommand.self,
+            CheckCommand.self, PrecheckCommand.self, ScreenshotCommand.self,
+            BezelsCommand.self, RenderCommand.self,
             SearchPreviewCommand.self, TemplatesCommand.self, ThemesCommand.self,
             // App Store Connect: submit + binary upload + state
             AuthCommand.self, SubmitCommand.self, MetadataCommand.self, TranslateCommand.self,
