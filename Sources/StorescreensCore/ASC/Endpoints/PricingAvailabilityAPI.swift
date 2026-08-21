@@ -140,18 +140,25 @@ package struct PricingAvailabilityAPI {
         package let attributes: Attributes?
 
         package struct Attributes: Codable, Sendable {
-            /// Customer-facing price in the territory's currency. For a free
-            /// app this is "0" / "0.00".
+            /// Customer-facing price in the territory's currency, as Apple
+            /// formats it - the free tier comes back as "0.0", not "0.00", so
+            /// compare these numerically rather than by string.
             package let customerPrice: String?
             /// Developer's take in the territory's currency. Same "0" for free.
             package let proceeds: String?
         }
     }
 
-    /// Lists app-specific price points for a single territory, sorted by
-    /// price ascending. For a free-tier lookup we only need the cheapest
-    /// record ("0"), so the default `limit=5` is plenty. The ID returned is
-    /// what `appPriceSchedules` expects in its `manualPrices` relationship.
+    /// Lists app-specific price points for a single territory, cheapest
+    /// first. For a free-tier lookup we only need the cheapest record ("0"),
+    /// so the default `limit=5` is plenty. The ID returned is what
+    /// `appPriceSchedules` expects in its `manualPrices` relationship.
+    ///
+    /// Apple rejects `sort` on this relationship endpoint with a 400
+    /// (PARAMETER_ERROR.ILLEGAL) even though it accepts it on other
+    /// price-point collections, so the ladder is ordered client-side instead.
+    /// Apple already hands it back ascending by tier; re-sorting keeps the
+    /// "cheapest first" contract from resting on undocumented ordering.
     ///
     /// For resolving an arbitrary amount to the nearest tier, use the paged
     /// `findPricePoint(appID:territoryID:targetPrice:)` instead - a single
@@ -166,7 +173,6 @@ package struct PricingAvailabilityAPI {
         struct Resp: Decodable { let data: [PricePoint]; let links: Links? }
         var query = [
             "filter[territory]": territoryID,
-            "sort": "priceTier",
             "limit": String(limit),
         ]
         if let cursor { query["cursor"] = cursor }
@@ -178,7 +184,20 @@ package struct PricingAvailabilityAPI {
         let next = resp.links?.next.flatMap {
             URLComponents(string: $0)?.queryItems?.first { $0.name == "cursor" }?.value
         }
-        return (resp.data, next)
+        return (Self.sortedByPrice(resp.data), next)
+    }
+
+    /// Orders one page of price points by customer price ascending. Pure (no
+    /// network) so the "cheapest first" ordering can be unit-tested directly.
+    /// Tiers whose customerPrice will not parse sort last in their original
+    /// order rather than being dropped, and equal prices keep their incoming
+    /// order so the ladder stays deterministic.
+    package static func sortedByPrice(_ points: [PricePoint]) -> [PricePoint] {
+        points.enumerated().sorted { l, r in
+            let lp = Double(l.element.attributes?.customerPrice ?? "") ?? .greatestFiniteMagnitude
+            let rp = Double(r.element.attributes?.customerPrice ?? "") ?? .greatestFiniteMagnitude
+            return lp == rp ? l.offset < r.offset : lp < rp
+        }.map(\.element)
     }
 
     /// The outcome of resolving a requested amount (in a territory's local
