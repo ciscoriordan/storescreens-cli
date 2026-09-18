@@ -101,43 +101,64 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
 
 package struct DeviceMapping {
 
-    /// Read screen dimensions from a device type's CoreSimulator profile.plist.
-    /// Returns (width, height, productFamily) or nil if the profile can't be read.
+    /// Read screen dimensions from a device type's CoreSimulator bundle.
+    /// Returns (width, height, productFamily) or nil if the bundle can't be read.
+    ///
+    /// Older CoreSimulator releases put the main screen's pixel size in
+    /// profile.plist as `mainScreenWidth` / `mainScreenHeight`. The release
+    /// that shipped alongside Xcode 27 (September 2026) removed both keys from
+    /// every device type and describes the screens in capabilities.plist
+    /// instead, under `capabilities.displays`, one entry per screen. Reading
+    /// only the old keys made every device unresolvable ("Could not determine
+    /// App Store size"), so both layouts are read.
     package static func readProfile(bundlePath: String) -> (width: Int, height: Int, productFamily: Int)? {
-        let profilePath = (bundlePath as NSString)
-            .appendingPathComponent("Contents/Resources/profile.plist")
-
-        guard let data = FileManager.default.contents(atPath: profilePath),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
-            return nil
-        }
-
-        // mainScreenWidth/Height can be Int or Double in the plist
-        let width: Int
-        let height: Int
-        if let w = plist["mainScreenWidth"] as? Int {
-            width = w
-        } else if let w = plist["mainScreenWidth"] as? Double {
-            width = Int(w)
-        } else {
-            return nil
-        }
-        if let h = plist["mainScreenHeight"] as? Int {
-            height = h
-        } else if let h = plist["mainScreenHeight"] as? Double {
-            height = Int(h)
-        } else {
+        let resources = (bundlePath as NSString).appendingPathComponent("Contents/Resources")
+        guard let plist = readPlist(atPath: (resources as NSString).appendingPathComponent("profile.plist")) else {
             return nil
         }
 
         // supportedProductFamilyIDs: 1=iPhone, 2=iPad, 3=Apple TV, 4=Watch, 7=Vision
-        let family: Int
-        if let families = plist["supportedProductFamilyIDs"] as? [Int], let first = families.first {
-            family = first
-        } else {
+        guard let families = plist["supportedProductFamilyIDs"] as? [Int], let family = families.first else {
             return nil
         }
 
-        return (width, height, family)
+        if let width = intValue(plist["mainScreenWidth"]), let height = intValue(plist["mainScreenHeight"]) {
+            return (width, height, family)
+        }
+
+        guard let capabilities = readPlist(atPath: (resources as NSString).appendingPathComponent("capabilities.plist")),
+              let screen = mainDisplay(in: capabilities) else {
+            return nil
+        }
+        return (screen.width, screen.height, family)
+    }
+
+    /// The device's own screen from capabilities.plist: screenID 1, which is
+    /// the built-in touch display. The other entries are external displays
+    /// (CarPlay at 720x480, an 8K monitor), and taking the first or the
+    /// largest would pick one of those on some devices.
+    static func mainDisplay(in capabilities: [String: Any]) -> (width: Int, height: Int)? {
+        guard let inner = capabilities["capabilities"] as? [String: Any],
+              let displays = inner["displays"] as? [[String: Any]] else {
+            return nil
+        }
+        let main = displays.first { intValue($0["screenID"]) == 1 }
+            ?? displays.first { ($0["hasDigitizer"] as? Bool) == true }
+        guard let main, let width = intValue(main["width"]), let height = intValue(main["height"]) else {
+            return nil
+        }
+        return (width, height)
+    }
+
+    private static func readPlist(atPath path: String) -> [String: Any]? {
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+    }
+
+    /// Plist numbers can decode as Int or Double.
+    private static func intValue(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let d = value as? Double { return Int(d) }
+        return nil
     }
 }
