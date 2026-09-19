@@ -170,6 +170,17 @@ struct SubmitCommand: AsyncParsableCommand {
                 print("    \(s.locale) / \(s.displayType): \(s.count) file(s)")
             }
         }
+        if !report.screenshotsSkipped.isEmpty {
+            print("  screenshots skipped (not errors):")
+            for s in report.screenshotsSkipped {
+                switch s.reason {
+                case .awaitingUploadSupport(let screens):
+                    print("    \(s.locale) / \(s.device): \(s.count) file(s), \(screens.joined(separator: ", ")) not accepted by App Store Connect yet")
+                case .sameSizeClass(let displayType, let uploadedDevice):
+                    print("    \(s.locale) / \(s.device): \(s.count) file(s), \(displayType) set filled from \(uploadedDevice)")
+                }
+            }
+        }
         if let buildNumber = report.attachedBuildNumber {
             print("  build attached: \(buildNumber)")
         }
@@ -359,38 +370,43 @@ struct SubmitCommand: AsyncParsableCommand {
         }
 
         // 5. Every rendered PNG maps to a known ASC displayType + file size OK.
+        // Uses the same plan as the live upload, so sizes App Store Connect
+        // does not accept yet and devices that share a set with another
+        // device are reported as skipped here too, not as problems.
         if !skipScreenshots {
+            let plan = SubmitOrchestrator.planScreenshotUploads(
+                manifest: manifest, renderRoot: renderRoot
+            )
+            for problem in plan.problems {
+                switch problem {
+                case .missingFile(_, let path):
+                    problems.append("missing rendered file: \(path)")
+                case .unreadable(let filename):
+                    problems.append("can't read dims of \(filename)")
+                case .noDisplayType(let filename, let w, let h):
+                    problems.append("no ASC display type for \(filename) (\(w)x\(h))")
+                case .tooManyForOneSet:
+                    problems.append(problem.message)
+                }
+            }
             var slotCount = 0
             var sizeProblems = 0
-            for device in manifest.devices {
-                let pf = RenderPipeline.productFamilyFromDeviceType(device.deviceType)
-                for shot in device.screenshots {
-                    let url = renderRoot.appendingPathComponent(shot.filename)
-                    guard FileManager.default.fileExists(atPath: url.path) else {
-                        problems.append("missing rendered file: \(url.path)")
-                        continue
-                    }
-                    guard let dims = ImageDims.read(at: url) else {
-                        problems.append("can't read dims of \(shot.filename)")
-                        continue
-                    }
-                    guard let dt = ScreenshotDisplayType.resolve(
-                        productFamily: pf, width: dims.w, height: dims.h
-                    ) else {
-                        problems.append("no ASC display type for \(shot.filename) (\(dims.w)x\(dims.h))")
-                        continue
-                    }
+            for group in plan.groups {
+                for file in group.files {
                     // Apple caps screenshots at 8 MB.
-                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: file.url.path)[.size] as? Int) ?? 0
                     if fileSize > 8 * 1024 * 1024 {
                         sizeProblems += 1
-                        problems.append("\(shot.filename) is \(fileSize / 1024)KB, exceeds Apple's 8MB limit")
+                        problems.append("\(file.filename) is \(fileSize / 1024)KB, exceeds Apple's 8MB limit")
                     }
                     slotCount += 1
-                    _ = dt
                 }
             }
             print("  ✓ screenshots: \(slotCount) PNG(s) map to valid ASC display types" + (sizeProblems > 0 ? " (\(sizeProblems) too large)" : ""))
+            for line in plan.notices { print("    note: \(line)") }
+            if !plan.problems.isEmpty, ascConfig.submit?.submitForReview == true {
+                print("    note: the live run skips submit-for-review until these screenshot problems are fixed")
+            }
         }
 
         // 6. Metadata guideline scan. The offline rules only - the URL
@@ -445,27 +461,3 @@ private func countSetAgeRatingFields(_ a: AgeRatingConfig) -> Int {
     if a.ageRatingOverride != nil { n += 1 }
     return n
 }
-
-/// Tiny helper to avoid re-importing ImageIO inline across this file.
-private enum ImageDims {
-    static func read(at url: URL) -> (w: Int, h: Int)? {
-        #if canImport(ImageIO)
-        return readIO(url: url)
-        #else
-        return nil
-        #endif
-    }
-}
-
-#if canImport(ImageIO)
-import ImageIO
-
-private func readIO(url: URL) -> (w: Int, h: Int)? {
-    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-          let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-          let w = props[kCGImagePropertyPixelWidth] as? Int,
-          let h = props[kCGImagePropertyPixelHeight] as? Int
-    else { return nil }
-    return (w, h)
-}
-#endif

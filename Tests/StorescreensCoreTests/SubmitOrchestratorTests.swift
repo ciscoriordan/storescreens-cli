@@ -89,6 +89,20 @@ private final class Counter: @unchecked Sendable {
     }
 }
 
+/// Collects `progress` lines from the orchestrator.
+private final class LineCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func append(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        lines.append(line)
+    }
+    var all: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return lines
+    }
+}
+
 final class SubmitOrchestratorTests: XCTestCase {
 
     private func makeClient() -> (ASCClient, AppStoreConnectConfig) {
@@ -137,6 +151,25 @@ final class SubmitOrchestratorTests: XCTestCase {
 
     // MARK: - Fixture helpers
 
+    /// Stubs `POST /v1/appScreenshotSets` the way App Store Connect behaves:
+    /// a `screenshotDisplayType` outside the OpenAPI enum gets a 409
+    /// ENTITY_ERROR.ATTRIBUTE.TYPE, so an invalid value can never pass a
+    /// test silently. `setID` names the created set from its display type.
+    private func addScreenshotSetCreateStub(setID: @escaping @Sendable (String) -> String = { "SET-\($0)" }) {
+        ASCStub.add(method: "POST", suffix: "/v1/appScreenshotSets") { _ in
+            let body = ASCStub.requestBodies.last ?? Data()
+            let parsed = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            let attrs = (parsed?["data"] as? [String: Any])?["attributes"] as? [String: Any]
+            let displayType = attrs?["screenshotDisplayType"] as? String ?? ""
+            guard ASCOpenAPIScreenshotDisplayTypes.all.contains(displayType) else {
+                let error = #"{"errors":[{"status":"409","code":"ENTITY_ERROR.ATTRIBUTE.TYPE","title":"An attribute value has an invalid type.","detail":"'\#(displayType)' is not a valid value for the attribute 'screenshotDisplayType'.","source":{"pointer":"/data/attributes/screenshotDisplayType"}}]}"#
+                return (409, Data(error.utf8))
+            }
+            let json = #"{"data":{"id":"\#(setID(displayType))","type":"appScreenshotSets","attributes":{"screenshotDisplayType":"\#(displayType)"}}}"#
+            return (201, Data(json.utf8))
+        }
+    }
+
     private func writeFixture(_ content: String, to path: URL) throws {
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
@@ -158,7 +191,8 @@ final class SubmitOrchestratorTests: XCTestCase {
         let renderRoot = tmp.appendingPathComponent("render")
         try FileManager.default.createDirectory(at: renderRoot, withIntermediateDirectories: true)
 
-        // Write 2 iPhone 6.9 PNGs at 1320x2868 (matches APP_IPHONE_69).
+        // Write 2 iPhone 6.9 PNGs at 1320x2868 (the 6.9" class, which App
+        // Store Connect calls APP_IPHONE_67).
         let iPhonePNG = makePNG(w: 1320, h: 2868)
         try iPhonePNG.write(to: renderRoot.appendingPathComponent("iPhone_6.9_01.png"))
         try iPhonePNG.write(to: renderRoot.appendingPathComponent("iPhone_6.9_02.png"))
@@ -228,9 +262,7 @@ final class SubmitOrchestratorTests: XCTestCase {
         ASCStub.add(method: "GET", suffix: "/appStoreVersionLocalizations/LOC-en-US/appScreenshotSets") { _ in
             (200, Data(#"{"data":[]}"#.utf8))
         }
-        ASCStub.add(method: "POST", suffix: "/v1/appScreenshotSets") { _ in
-            (201, Data(#"{"data":{"id":"SET-1","type":"appScreenshotSets","attributes":{"screenshotDisplayType":"APP_IPHONE_69"}}}"#.utf8))
-        }
+        addScreenshotSetCreateStub(setID: { _ in "SET-1" })
         // Existing screenshots in the set: empty, so no deletes.
         ASCStub.add(method: "GET", suffix: "/appScreenshotSets/SET-1/appScreenshots") { _ in
             (200, Data(#"{"data":[]}"#.utf8))
@@ -271,8 +303,8 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertEqual(report.versionID, "VER-1")
         XCTAssertEqual(report.versionString, "1.2.0")
         XCTAssertEqual(report.metadataUpdates.count, 2, "expected en-US + ja metadata updates, got \(report.metadataUpdates)")
-        // 1320x2868 iPhone 17 Pro Max routes to APP_IPHONE_67 until
-        // Apple ships a native APP_IPHONE_69 enum value.
+        // 1320x2868 (iPhone 18 Pro Max / 17 Pro Max) is the 6.9" class,
+        // APP_IPHONE_67 in the API.
         XCTAssertTrue(report.screenshotUploads.contains { $0.locale == "en-US" && $0.displayType == "APP_IPHONE_67" && $0.count == 2 })
         XCTAssertTrue(report.errors.isEmpty, "expected no errors, got: \(report.errors)")
 
@@ -3005,5 +3037,714 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertTrue(bodyStr.contains("\"notes\":\"Hi reviewer.\""))
         XCTAssertTrue(report.reviewDetailUpdated)
         XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+    }
+
+    // MARK: - Screenshot sets: display types, iPhone Duo, one device per set
+
+    /// Stubs everything a screenshots-only submit touches for an existing
+    /// app (APP-1), version (VER-1) and one localization per locale
+    /// (LOC-<locale>), with no screenshot sets yet. Sets are created through
+    /// `addScreenshotSetCreateStub` (id SET-<displayType>), and up to
+    /// `maxUploads` screenshots can go through reserve, chunk upload and
+    /// confirm.
+    private func stubScreenshotOnlySubmit(locales: [String], maxUploads: Int) {
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.2.0","platform":"IOS"}}]}"#.utf8))
+        }
+        let localizations = locales
+            .map { #"{"id":"LOC-\#($0)","type":"appStoreVersionLocalizations","attributes":{"locale":"\#($0)"}}"# }
+            .joined(separator: ",")
+        ASCStub.add(method: "GET", suffix: "/v1/appStoreVersions/VER-1/appStoreVersionLocalizations") { _ in
+            (200, Data(#"{"data":[\#(localizations)]}"#.utf8))
+        }
+        for locale in locales {
+            ASCStub.add(method: "GET", suffix: "/appStoreVersionLocalizations/LOC-\(locale)/appScreenshotSets") { _ in
+                (200, Data(#"{"data":[]}"#.utf8))
+            }
+        }
+        addScreenshotSetCreateStub()
+        // Every new set starts empty.
+        ASCStub.add(method: "GET", suffix: "/appScreenshots") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        let shotCounter = Counter()
+        ASCStub.add(method: "POST", suffix: "/v1/appScreenshots") { _ in
+            let n = shotCounter.increment()
+            let body = """
+            {"data":{"id":"SHOT-\(n)","type":"appScreenshots","attributes":{"fileSize":1,"fileName":"x.png","uploadOperations":[{"method":"PUT","url":"https://upload.example.com/chunk-\(n)","length":0,"offset":0,"requestHeaders":[]}]}}}
+            """
+            return (201, Data(body.utf8))
+        }
+        for n in 1...max(maxUploads, 1) {
+            ASCStub.add(method: "PUT", suffix: "chunk-\(n)") { _ in (200, Data()) }
+            ASCStub.add(method: "PATCH", suffix: "/v1/appScreenshots/SHOT-\(n)") { _ in
+                (200, Data(#"{"data":{"id":"SHOT-\#(n)","type":"appScreenshots","attributes":{}}}"#.utf8))
+            }
+        }
+    }
+
+    /// (set id, file name) of every screenshot reservation, in request order.
+    private func reservedUploads() -> [(set: String, fileName: String)] {
+        zip(ASCStub.requests, ASCStub.requestBodies).compactMap { request, body in
+            guard request.httpMethod == "POST",
+                  request.url?.path.hasSuffix("/v1/appScreenshots") == true,
+                  let parsed = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                  let data = parsed["data"] as? [String: Any],
+                  let attrs = data["attributes"] as? [String: Any],
+                  let fileName = attrs["fileName"] as? String,
+                  let rels = data["relationships"] as? [String: Any],
+                  let setRel = rels["appScreenshotSet"] as? [String: Any],
+                  let setData = setRel["data"] as? [String: Any],
+                  let setID = setData["id"] as? String
+            else { return nil }
+            return (setID, fileName)
+        }
+    }
+
+    /// Display types sent to `POST /v1/appScreenshotSets`, in request order.
+    private func createdSetDisplayTypes() -> [String] {
+        zip(ASCStub.requests, ASCStub.requestBodies).compactMap { request, body in
+            guard request.httpMethod == "POST",
+                  request.url?.path.hasSuffix("/v1/appScreenshotSets") == true,
+                  let parsed = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                  let data = parsed["data"] as? [String: Any],
+                  let attrs = data["attributes"] as? [String: Any]
+            else { return nil }
+            return attrs["screenshotDisplayType"] as? String
+        }
+    }
+
+    private func makeRenderRoot(_ label: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(label)-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    /// Writes `png` under `root` at each relative path, creating folders.
+    private func writePNGs(_ png: Data, to root: URL, _ paths: [String]) throws {
+        for path in paths {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: url)
+        }
+    }
+
+    private func device(
+        _ deviceType: String, _ simulatorName: String,
+        locale: String = "en-US", appearance: String? = nil, files: [String]
+    ) -> CaptureManifest.DeviceCapture {
+        CaptureManifest.DeviceCapture(
+            deviceType: deviceType, simulatorName: simulatorName,
+            locale: locale, appearance: appearance,
+            screenshots: files.map { .init(name: $0, filename: $0, capturedAt: Date()) }
+        )
+    }
+
+    private func manifest(_ devices: [CaptureManifest.DeviceCapture]) -> CaptureManifest {
+        CaptureManifest(
+            version: 2, generatedAt: Date(), generatedBy: "t",
+            appName: "App", displayName: nil, scheme: "App", devices: devices
+        )
+    }
+
+    private func screenshotsOnly(_ client: ASCClient, _ config: AppStoreConnectConfig, manifest: CaptureManifest, renderRoot: URL, progress: ((String) -> Void)? = nil) async throws -> SubmitOrchestrator.Report {
+        try await SubmitOrchestrator(client: client, config: config).submit(
+            manifest: manifest,
+            renderRoot: renderRoot,
+            metadataRoot: nil,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: false,
+            progress: progress
+        )
+    }
+
+    /// The stub itself must reject values App Store Connect rejects, or the
+    /// tests below prove nothing.
+    func testScreenshotSetStub_rejectsValuesOutsideTheEnum() async throws {
+        let (client, _) = makeClient()
+        addScreenshotSetCreateStub()
+        let api = ScreenshotsAPI(client: client)
+        do {
+            _ = try await api.createScreenshotSet(localizationID: "LOC-en-US", displayType: "APP_IPHONE_63")
+            XCTFail("APP_IPHONE_63 is not an App Store Connect value; the stub must answer 409")
+        } catch let error as ASCClient.APIError {
+            XCTAssertEqual(error.statusCode, 409)
+            XCTAssertEqual(error.details.first?.code, "ENTITY_ERROR.ATTRIBUTE.TYPE")
+        }
+        let set = try await api.createScreenshotSet(localizationID: "LOC-en-US", displayType: "APP_IPHONE_61")
+        XCTAssertEqual(set.id, "SET-APP_IPHONE_61")
+    }
+
+    /// iPhone 18 Pro (1206x2622) is in the 6.3" class, APP_IPHONE_61. The
+    /// old table sent APP_IPHONE_63, which App Store Connect rejects.
+    func testSubmit_iPhone18Pro_uploadsUnderAPP_IPHONE_61() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-18pro")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1206, h: 2622), to: renderRoot, ["en-US/18pro_01.png", "en-US/18pro_02.png"])
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 2)
+
+        let report = try await screenshotsOnly(client, config, manifest: manifest([
+            device("iPhone 6.3\"", "iPhone 18 Pro", files: ["en-US/18pro_01.png", "en-US/18pro_02.png"]),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(createdSetDisplayTypes(), ["APP_IPHONE_61"])
+        XCTAssertEqual(report.screenshotUploads.map(\.displayType), ["APP_IPHONE_61"])
+        XCTAssertEqual(report.screenshotUploads.first?.count, 2)
+        XCTAssertEqual(reservedUploads().map(\.set), ["SET-APP_IPHONE_61", "SET-APP_IPHONE_61"])
+        XCTAssertTrue(report.screenshotsSkipped.isEmpty)
+    }
+
+    /// iPhone Duo sizes are on Apple's specifications page but the API has
+    /// no display type for them yet. They are skipped with one line per
+    /// device and locale, the rest of the upload goes ahead, and nothing
+    /// lands in `errors` (so the CLI exits 0 and submit-for-review still
+    /// runs).
+    func testSubmit_iPhoneDuoSkippedWithNotice_69SetStillUploads() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-duo")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let proMax = makePNG(w: 1320, h: 2868)
+        let duoInner = makePNG(w: 2007, h: 2853)
+        let duoInnerLandscape = makePNG(w: 2853, h: 2007)
+        for locale in ["en-US", "ja"] {
+            try writePNGs(proMax, to: renderRoot, ["\(locale)/max_01.png", "\(locale)/max_02.png"])
+            try writePNGs(duoInner, to: renderRoot, ["\(locale)/duo_01.png", "\(locale)/duo_02.png"])
+            try writePNGs(duoInnerLandscape, to: renderRoot, ["\(locale)/duo_03.png"])
+        }
+        stubScreenshotOnlySubmit(locales: ["en-US", "ja"], maxUploads: 4)
+
+        let lines = LineCollector()
+        let report = try await screenshotsOnly(client, config, manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: ["en-US/max_01.png", "en-US/max_02.png"]),
+            device("iPhone 2007x2853", "iPhone Duo", files: ["en-US/duo_01.png", "en-US/duo_02.png", "en-US/duo_03.png"]),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", locale: "ja", files: ["ja/max_01.png", "ja/max_02.png"]),
+            device("iPhone 2007x2853", "iPhone Duo", locale: "ja", files: ["ja/duo_01.png", "ja/duo_02.png", "ja/duo_03.png"]),
+        ]), renderRoot: renderRoot, progress: { lines.append($0) })
+
+        XCTAssertTrue(report.errors.isEmpty, "Duo screenshots must not be errors: \(report.errors)")
+        XCTAssertEqual(createdSetDisplayTypes(), ["APP_IPHONE_67", "APP_IPHONE_67"])
+        XCTAssertEqual(report.screenshotUploads.map(\.locale), ["en-US", "ja"])
+        XCTAssertEqual(report.screenshotUploads.map(\.count), [2, 2])
+        XCTAssertFalse(reservedUploads().contains { $0.fileName.hasPrefix("duo_") }, "Duo files must not be uploaded")
+
+        XCTAssertEqual(report.screenshotsSkipped, [
+            .init(locale: "en-US", device: "iPhone Duo", count: 3, reason: .awaitingUploadSupport(screens: ["iPhone Duo inner display"])),
+            .init(locale: "ja", device: "iPhone Duo", count: 3, reason: .awaitingUploadSupport(screens: ["iPhone Duo inner display"])),
+        ])
+        // One line per device and locale, not one per file.
+        let duoLines = lines.all.filter { $0.contains("iPhone Duo") }
+        XCTAssertEqual(duoLines.count, 2, "got: \(duoLines)")
+        XCTAssertTrue(duoLines.allSatisfy { $0.contains("does not accept iPhone Duo screenshots yet") && $0.contains("later this year") }, "got: \(duoLines)")
+        XCTAssertTrue(duoLines[0].hasPrefix("en-US iPhone Duo:"), "got: \(duoLines[0])")
+        XCTAssertTrue(duoLines[1].hasPrefix("ja iPhone Duo:"), "got: \(duoLines[1])")
+    }
+
+    /// iPhone 17 Pro and iPhone 18 Pro both land in APP_IPHONE_61, at the
+    /// same pixel size (1206x2622). The set is wiped and refilled, so merging
+    /// both devices would upload two copies of every screen. With equal
+    /// screens the device listed first is uploaded (with all of its
+    /// appearances, in manifest order), and one notice names the device left
+    /// out and says why.
+    func testSubmit_twoSameSizeDevicesInOneSet_uploadsOnlyTheOneListedFirst() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-same-slot")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1206, h: 2622), to: renderRoot, [
+            "en-US/light/17pro_01.png", "en-US/light/17pro_02.png", "en-US/dark/17pro_01.png",
+            "en-US/light/18pro_01.png", "en-US/light/18pro_02.png",
+        ])
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 5)
+
+        let lines = LineCollector()
+        // Order as a sequential capture writes it: every device's light
+        // entry, then every device's dark entry.
+        let report = try await screenshotsOnly(client, config, manifest: manifest([
+            device("iPhone 6.3\"", "iPhone 17 Pro", appearance: "light", files: ["en-US/light/17pro_01.png", "en-US/light/17pro_02.png"]),
+            device("iPhone 6.3\"", "iPhone 18 Pro", appearance: "light", files: ["en-US/light/18pro_01.png", "en-US/light/18pro_02.png"]),
+            device("iPhone 6.3\"", "iPhone 17 Pro", appearance: "dark", files: ["en-US/dark/17pro_01.png"]),
+        ]), renderRoot: renderRoot, progress: { lines.append($0) })
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(createdSetDisplayTypes(), ["APP_IPHONE_61"])
+        XCTAssertEqual(reservedUploads().map(\.fileName), ["17pro_01.png", "17pro_02.png", "17pro_01.png"])
+        let uploadedPaths = lines.all.filter { $0.hasPrefix("en-US APP_IPHONE_61: uploading ") }
+        XCTAssertEqual(uploadedPaths, [
+            "en-US APP_IPHONE_61: uploading en-US/light/17pro_01.png",
+            "en-US APP_IPHONE_61: uploading en-US/light/17pro_02.png",
+            "en-US APP_IPHONE_61: uploading en-US/dark/17pro_01.png",
+        ])
+        XCTAssertEqual(report.screenshotUploads.first?.count, 3)
+        XCTAssertEqual(report.screenshotsSkipped, [
+            .init(locale: "en-US", device: "iPhone 18 Pro", count: 2,
+                  reason: .sameSizeClass(displayType: "APP_IPHONE_61", uploadedDevice: "iPhone 17 Pro")),
+        ])
+        let notices = lines.all.filter { $0.contains("left out") }
+        XCTAssertEqual(notices.count, 1, "got: \(lines.all)")
+        XCTAssertEqual(notices.first, "APP_IPHONE_61 (en-US): uploading iPhone 17 Pro screenshots only (tied for the largest screen in the class, listed first); left out iPhone 18 Pro (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).")
+    }
+
+    /// App Store Connect keeps at most 10 screenshots per set. A group over
+    /// the limit is an error before any call touches the set, instead of
+    /// wiping the set and failing on the 11th upload.
+    func testSubmit_moreThanTenInOneSet_errorsWithoutTouchingTheSet() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-too-many")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let files = (1...11).map { String(format: "en-US/max_%02d.png", $0) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, files)
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 11)
+
+        let report = try await screenshotsOnly(client, config, manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: files),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(report.errors.count, 1, "got: \(report.errors)")
+        XCTAssertTrue(report.errors.first?.contains("11 screenshots from iPhone 18 Pro Max") == true, "got: \(report.errors)")
+        XCTAssertTrue(report.screenshotUploads.isEmpty)
+        let setCalls = ASCStub.requests.filter { $0.url?.path.contains("appScreenshot") == true }
+        XCTAssertTrue(setCalls.isEmpty, "no screenshot set call expected, got \(setCalls.map { "\($0.httpMethod ?? "") \($0.url?.path ?? "")" })")
+    }
+
+    // MARK: - Upload plan
+
+    /// iPhone Air (1260x2736) and iPhone 18 Pro Max (1320x2868) are different
+    /// device types in the same 6.9" class. The set takes the Pro Max, which
+    /// has the larger screen, in every locale, even though en-US lists the
+    /// Air first; the Air is reported, per locale, as left out, in one
+    /// folded notice.
+    func testPlan_airAnd18ProMax_shareAPP_IPHONE_67_largestScreenWins() throws {
+        let renderRoot = try makeRenderRoot("plan-air")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1260, h: 2736), to: renderRoot, ["en-US/air_01.png", "ja/air_01.png"])
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["en-US/max_01.png", "ja/max_01.png"])
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 1260x2736", "iPhone Air", files: ["en-US/air_01.png"]),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: ["en-US/max_01.png"]),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", locale: "ja", files: ["ja/max_01.png"]),
+            device("iPhone 1260x2736", "iPhone Air", locale: "ja", files: ["ja/air_01.png"]),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertTrue(plan.problems.isEmpty, "got: \(plan.problems)")
+        XCTAssertEqual(plan.groups.map { "\($0.locale) \($0.displayType) \($0.device)" }, [
+            "en-US APP_IPHONE_67 iPhone 18 Pro Max",
+            "ja APP_IPHONE_67 iPhone 18 Pro Max",
+        ])
+        XCTAssertEqual(plan.groups.map(\.choice), [.largestScreen, .largestScreen])
+        XCTAssertEqual(plan.groups.map { $0.files.map(\.filename) }, [["en-US/max_01.png"], ["ja/max_01.png"]])
+        XCTAssertEqual(plan.skipped, [
+            .init(locale: "en-US", device: "iPhone Air", count: 1,
+                  reason: .sameSizeClass(displayType: "APP_IPHONE_67", uploadedDevice: "iPhone 18 Pro Max")),
+            .init(locale: "ja", device: "iPhone Air", count: 1,
+                  reason: .sameSizeClass(displayType: "APP_IPHONE_67", uploadedDevice: "iPhone 18 Pro Max")),
+        ])
+        XCTAssertEqual(plan.notices, [
+            "APP_IPHONE_67 (en-US, ja): uploading iPhone 18 Pro Max screenshots only (largest screen in the class); left out iPhone Air (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).",
+        ])
+    }
+
+    /// Unknown sizes stay errors (no ASC display type), unlike Duo sizes.
+    func testPlan_unknownSize_isStillAProblem() throws {
+        let renderRoot = try makeRenderRoot("plan-unknown")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 828, h: 1792), to: renderRoot, ["en-US/xr_01.png"])
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 6.1\"", "iPhone 11", files: ["en-US/xr_01.png", "en-US/missing.png"]),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(plan.problems, [
+            .noDisplayType(filename: "en-US/xr_01.png", width: 828, height: 1792),
+            .missingFile(filename: "en-US/missing.png", path: renderRoot.appendingPathComponent("en-US/missing.png").path),
+        ])
+        XCTAssertEqual(plan.problems.map(\.message), [
+            "no ASC display type for 828x1792 in en-US/xr_01.png",
+            "cannot read dims of en-US/missing.png",
+        ])
+        XCTAssertTrue(plan.groups.isEmpty)
+        XCTAssertTrue(plan.skipped.isEmpty)
+        XCTAssertTrue(plan.notices.isEmpty)
+    }
+
+    /// A device over the 10-per-set limit is refused, and the set falls back
+    /// to the next device in the ranking that fits. In en-US the Pro Max (11
+    /// screenshots) gives way to the 16 Plus (next largest screen), which
+    /// leaves out the Air. In ja the Pro Max has 12 (its light and dark
+    /// captures count together) and the Air fills the set alone. No notice or
+    /// skip row names the refused Pro Max.
+    func testPlan_overLimitDevice_fallsBackToTheNextDeviceThatFits() throws {
+        let renderRoot = try makeRenderRoot("plan-fallback")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let maxEnUS = (1...11).map { String(format: "en-US/max_%02d.png", $0) }
+        let maxJaLight = (1...6).map { String(format: "ja/light/max_%02d.png", $0) }
+        let maxJaDark = (1...6).map { String(format: "ja/dark/max_%02d.png", $0) }
+        let plusEnUS = ["en-US/plus_01.png", "en-US/plus_02.png"]
+        let airEnUS = ["en-US/air_01.png", "en-US/air_02.png"]
+        let airJa = (1...5).map { String(format: "ja/light/air_%02d.png", $0) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, maxEnUS + maxJaLight + maxJaDark)
+        try writePNGs(makePNG(w: 1290, h: 2796), to: renderRoot, plusEnUS)
+        try writePNGs(makePNG(w: 1260, h: 2736), to: renderRoot, airEnUS + airJa)
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: maxEnUS),
+            device("iPhone 1260x2736", "iPhone Air", files: airEnUS),
+            device("iPhone 1290x2796", "iPhone 16 Plus", files: plusEnUS),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", locale: "ja", appearance: "light", files: maxJaLight),
+            device("iPhone 1260x2736", "iPhone Air", locale: "ja", appearance: "light", files: airJa),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", locale: "ja", appearance: "dark", files: maxJaDark),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(plan.groups.map { "\($0.locale) \($0.displayType) \($0.device) \($0.files.count)" }, [
+            "en-US APP_IPHONE_67 iPhone 16 Plus 2",
+            "ja APP_IPHONE_67 iPhone Air 5",
+        ])
+        XCTAssertEqual(plan.groups.map(\.choice), [.largestThatFits, .largestThatFits])
+        XCTAssertEqual(plan.problems, [
+            .tooManyForOneSet(locale: "en-US", displayType: "APP_IPHONE_67", device: "iPhone 18 Pro Max", count: 11, filledFrom: "iPhone 16 Plus"),
+            .tooManyForOneSet(locale: "ja", displayType: "APP_IPHONE_67", device: "iPhone 18 Pro Max", count: 12, filledFrom: "iPhone Air"),
+        ])
+        XCTAssertEqual(plan.problems.last?.message, "screenshots ja/APP_IPHONE_67: 12 screenshots from iPhone 18 Pro Max, more than the 10 App Store Connect allows in one set; the set is filled from iPhone Air instead (the light and dark captures of one device go into the same set)")
+        XCTAssertEqual(plan.skipped, [
+            .init(locale: "en-US", device: "iPhone Air", count: 2,
+                  reason: .sameSizeClass(displayType: "APP_IPHONE_67", uploadedDevice: "iPhone 16 Plus")),
+        ])
+        XCTAssertEqual(plan.notices, [
+            "APP_IPHONE_67 (en-US): uploading iPhone 16 Plus screenshots only (largest screen in the class with at most 10 screenshots); left out iPhone Air (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).",
+        ])
+        XCTAssertFalse(plan.notices.contains { $0.contains("iPhone 18 Pro Max") }, "got: \(plan.notices)")
+    }
+
+    /// When every device in the class is over the limit, the set is left
+    /// alone: only problems, and no skip row or notice that claims a device
+    /// was uploaded to it.
+    func testPlan_noDeviceFits_onlyProblems() throws {
+        let renderRoot = try makeRenderRoot("plan-none-fit")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let maxFiles = (1...11).map { String(format: "en-US/max_%02d.png", $0) }
+        let airFiles = (1...11).map { String(format: "en-US/air_%02d.png", $0) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, maxFiles)
+        try writePNGs(makePNG(w: 1260, h: 2736), to: renderRoot, airFiles)
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 1260x2736", "iPhone Air", files: airFiles),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: maxFiles),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertTrue(plan.groups.isEmpty)
+        XCTAssertEqual(plan.problems, [
+            .tooManyForOneSet(locale: "en-US", displayType: "APP_IPHONE_67", device: "iPhone 18 Pro Max", count: 11, filledFrom: nil),
+            .tooManyForOneSet(locale: "en-US", displayType: "APP_IPHONE_67", device: "iPhone Air", count: 11, filledFrom: nil),
+        ])
+        XCTAssertTrue(plan.problems.allSatisfy { $0.message.contains("nothing is uploaded to this set") }, "got: \(plan.problems.map(\.message))")
+        XCTAssertTrue(plan.skipped.isEmpty, "got: \(plan.skipped)")
+        XCTAssertTrue(plan.notices.isEmpty, "got: \(plan.notices)")
+    }
+
+    /// The device is chosen once per display type, not per locale. An older
+    /// parallel capture wrote each locale's devices in the order they
+    /// finished, so the locales below list them in different orders. Every
+    /// locale still gets the same device: the iPad Pro 11" (1668x2420) over
+    /// the iPad Air 11" (1640x2360), and, between the equal iPhone 17 Pro and
+    /// iPhone 18 Pro, the one the manifest lists first overall.
+    func testPlan_deviceChoiceIsPerDisplayType_sameInEveryLocale() throws {
+        let renderRoot = try makeRenderRoot("plan-locales")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        for locale in ["en-US", "ja", "de-DE"] {
+            try writePNGs(makePNG(w: 1668, h: 2420), to: renderRoot, ["\(locale)/ipadpro_01.png"])
+            try writePNGs(makePNG(w: 1640, h: 2360), to: renderRoot, ["\(locale)/ipadair_01.png"])
+            try writePNGs(makePNG(w: 1206, h: 2622), to: renderRoot, ["\(locale)/17pro_01.png", "\(locale)/18pro_01.png"])
+        }
+        func iPadPro(_ locale: String) -> CaptureManifest.DeviceCapture {
+            device("iPad Pro 11\"", "iPad Pro 11-inch (M5)", locale: locale, files: ["\(locale)/ipadpro_01.png"])
+        }
+        func iPadAir(_ locale: String) -> CaptureManifest.DeviceCapture {
+            device("iPad 1640x2360", "iPad Air 11-inch (M4)", locale: locale, files: ["\(locale)/ipadair_01.png"])
+        }
+        func pro17(_ locale: String) -> CaptureManifest.DeviceCapture {
+            device("iPhone 6.3\"", "iPhone 17 Pro", locale: locale, files: ["\(locale)/17pro_01.png"])
+        }
+        func pro18(_ locale: String) -> CaptureManifest.DeviceCapture {
+            device("iPhone 6.3\"", "iPhone 18 Pro", locale: locale, files: ["\(locale)/18pro_01.png"])
+        }
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            pro17("en-US"), iPadAir("en-US"), pro18("en-US"), iPadPro("en-US"),
+            pro18("ja"), iPadPro("ja"), pro17("ja"), iPadAir("ja"),
+            iPadAir("de-DE"), pro18("de-DE"), iPadPro("de-DE"), pro17("de-DE"),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertTrue(plan.problems.isEmpty, "got: \(plan.problems)")
+        XCTAssertEqual(plan.groups.map { "\($0.locale) \($0.displayType) \($0.device)" }, [
+            "de-DE APP_IPAD_PRO_3GEN_11 iPad Pro 11-inch (M5)",
+            "de-DE APP_IPHONE_61 iPhone 17 Pro",
+            "en-US APP_IPAD_PRO_3GEN_11 iPad Pro 11-inch (M5)",
+            "en-US APP_IPHONE_61 iPhone 17 Pro",
+            "ja APP_IPAD_PRO_3GEN_11 iPad Pro 11-inch (M5)",
+            "ja APP_IPHONE_61 iPhone 17 Pro",
+        ])
+        XCTAssertEqual(plan.notices, [
+            "APP_IPAD_PRO_3GEN_11 (de-DE, en-US, ja): uploading iPad Pro 11-inch (M5) screenshots only (largest screen in the class); left out iPad Air 11-inch (M4) (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).",
+            "APP_IPHONE_61 (de-DE, en-US, ja): uploading iPhone 17 Pro screenshots only (tied for the largest screen in the class, listed first); left out iPhone 18 Pro (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).",
+        ])
+    }
+
+    /// Capture labels iPhone Duo screenshots by the screen they show, so one
+    /// simulator can produce an "iPhone Duo outer" and an "iPhone Duo inner"
+    /// entry per locale. They fold into one skip row and one notice line per
+    /// locale that names both screens, with the counts summed.
+    func testPlan_duoBothPoses_oneSkipRowPerLocale() throws {
+        let renderRoot = try makeRenderRoot("plan-duo-poses")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        var entries: [CaptureManifest.DeviceCapture] = []
+        for locale in ["en-US", "ja"] {
+            let outer = ["\(locale)/duo_outer_01.png", "\(locale)/duo_outer_02.png"]
+            let inner = ["\(locale)/duo_inner_01.png"]
+            try writePNGs(makePNG(w: 1398, h: 2034), to: renderRoot, outer)
+            try writePNGs(makePNG(w: 2007, h: 2853), to: renderRoot, inner)
+            entries.append(device("iPhone Duo outer", "iPhone Duo", locale: locale, files: outer))
+            entries.append(device("iPhone Duo inner", "iPhone Duo", locale: locale, files: inner))
+        }
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest(entries), renderRoot: renderRoot)
+
+        XCTAssertTrue(plan.problems.isEmpty, "got: \(plan.problems)")
+        XCTAssertTrue(plan.groups.isEmpty)
+        let bothScreens = ["iPhone Duo outer display", "iPhone Duo inner display"]
+        XCTAssertEqual(plan.skipped, [
+            .init(locale: "en-US", device: "iPhone Duo", count: 3, reason: .awaitingUploadSupport(screens: bothScreens)),
+            .init(locale: "ja", device: "iPhone Duo", count: 3, reason: .awaitingUploadSupport(screens: bothScreens)),
+        ])
+        XCTAssertEqual(plan.notices.count, 2, "got: \(plan.notices)")
+        XCTAssertTrue(plan.notices[0].hasPrefix("en-US iPhone Duo: skipped 3 screenshot(s) (iPhone Duo outer display, iPhone Duo inner display). "), "got: \(plan.notices[0])")
+        XCTAssertTrue(plan.notices[1].hasPrefix("ja iPhone Duo: skipped 3 screenshot(s) (iPhone Duo outer display, iPhone Duo inner display). "), "got: \(plan.notices[1])")
+    }
+
+    /// iPhone Air and iPhone 17 Pro share the label `iPhone 6.3"`, so capture
+    /// saves both under the same file names and the files on disk hold one
+    /// capture. Submit counts those files once: one upload per file, no
+    /// "left out" claim about either device, and one notice per device pair
+    /// across all locales that does not say which device the pixels are from.
+    func testSubmit_devicesSavedUnderSameFileNames_uploadOnceWithNotice() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-shared-files")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let names = ["iPhone_6.3_Home.png", "iPhone_6.3_Settings.png"]
+        for locale in ["en-US", "ja"] {
+            try writePNGs(makePNG(w: 1206, h: 2622), to: renderRoot, names.map { "\(locale)/\($0)" })
+        }
+        stubScreenshotOnlySubmit(locales: ["en-US", "ja"], maxUploads: 4)
+        let shotManifest = manifest([
+            device("iPhone 6.3\"", "iPhone Air", files: names.map { "en-US/\($0)" }),
+            device("iPhone 6.3\"", "iPhone 17 Pro", files: names.map { "en-US/\($0)" }),
+            device("iPhone 6.3\"", "iPhone Air", locale: "ja", files: names.map { "ja/\($0)" }),
+            device("iPhone 6.3\"", "iPhone 17 Pro", locale: "ja", files: names.map { "ja/\($0)" }),
+        ])
+
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: shotManifest, renderRoot: renderRoot)
+        XCTAssertEqual(plan.sharedFiles, [.init(device: "iPhone Air", otherDevice: "iPhone 17 Pro", label: "iPhone 6.3\"")])
+
+        let lines = LineCollector()
+        let report = try await screenshotsOnly(client, config, manifest: shotManifest, renderRoot: renderRoot, progress: { lines.append($0) })
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(createdSetDisplayTypes(), ["APP_IPHONE_61", "APP_IPHONE_61"])
+        XCTAssertEqual(reservedUploads().map(\.fileName), names + names)
+        XCTAssertEqual(report.screenshotUploads.map(\.count), [2, 2])
+        XCTAssertTrue(report.screenshotsSkipped.isEmpty, "got: \(report.screenshotsSkipped)")
+        XCTAssertEqual(lines.all.filter { $0.contains("same file names") }, [
+            "iPhone Air and iPhone 17 Pro were saved under the same file names (label iPhone 6.3\"), so only one capture is on disk; submit counts it once, not once per device. Capture them in separate runs with different output_dir values to upload both.",
+        ])
+        XCTAssertFalse(lines.all.contains { $0.contains("left out") || $0.contains("same App Store size class") }, "got: \(lines.all)")
+    }
+
+    /// Ownership of a shared file follows the device's first appearance in
+    /// the whole manifest, not the entry order inside each locale. Manifests
+    /// written in capture completion order flip that order per locale; the
+    /// same device must own the files everywhere and the pair gets one notice.
+    func testPlan_sharedFiles_ownerFollowsWholeManifestOrder() throws {
+        let renderRoot = try makeRenderRoot("plan-shared-order")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let names = ["iPhone_6.3_Home.png", "iPhone_6.3_Settings.png"]
+        for locale in ["en-US", "ja"] {
+            try writePNGs(makePNG(w: 1206, h: 2622), to: renderRoot, names.map { "\(locale)/\($0)" })
+        }
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 6.3\"", "iPhone Air", files: names.map { "en-US/\($0)" }),
+            device("iPhone 6.3\"", "iPhone 17 Pro", files: names.map { "en-US/\($0)" }),
+            // ja lists the devices the other way round.
+            device("iPhone 6.3\"", "iPhone 17 Pro", locale: "ja", files: names.map { "ja/\($0)" }),
+            device("iPhone 6.3\"", "iPhone Air", locale: "ja", files: names.map { "ja/\($0)" }),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(plan.sharedFiles, [.init(device: "iPhone Air", otherDevice: "iPhone 17 Pro", label: "iPhone 6.3\"")])
+        XCTAssertEqual(plan.groups.map(\.locale), ["en-US", "ja"])
+        XCTAssertEqual(plan.groups.map(\.device), ["iPhone Air", "iPhone Air"])
+        XCTAssertEqual(plan.groups.map { $0.files.map(\.filename) }, [
+            names.map { "en-US/\($0)" }, names.map { "ja/\($0)" },
+        ])
+        XCTAssertTrue(plan.problems.isEmpty, "got: \(plan.problems)")
+    }
+
+    /// A same-size-class row says which device filled the set, so it must
+    /// not be reported for a set whose upload failed.
+    func testSubmit_failedSetUpload_recordsNoFilledFromRow() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-failed-filled-from")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1260, h: 2736), to: renderRoot, ["en-US/air_01.png"])
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["en-US/max_01.png", "en-US/max_02.png"])
+        // Only the first upload is stubbed, so the Pro Max's second file fails.
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 1)
+
+        let report = try await screenshotsOnly(client, config, manifest: manifest([
+            device("iPhone 6.3\"", "iPhone Air", files: ["en-US/air_01.png"]),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: ["en-US/max_01.png", "en-US/max_02.png"]),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(report.errors.count, 1, "got: \(report.errors)")
+        XCTAssertTrue(report.errors.first?.hasPrefix("screenshots en-US/APP_IPHONE_67: ") == true, "got: \(report.errors)")
+        XCTAssertTrue(report.screenshotUploads.isEmpty, "got: \(report.screenshotUploads)")
+        XCTAssertTrue(report.screenshotsSkipped.isEmpty, "no 'filled from' row for a failed set, got: \(report.screenshotsSkipped)")
+    }
+
+    // MARK: - Submit-for-review after screenshot errors
+
+    /// A clean reviewSubmissions flow: no prior submissions, then create,
+    /// attach and finalize to WAITING_FOR_REVIEW.
+    private func stubReviewSubmissionFlow() {
+        ASCStub.add(method: "GET", suffix: "/v1/reviewSubmissions") { _ in
+            (200, Data(#"{"data":[]}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissions") { _ in
+            (201, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"READY_FOR_REVIEW","platform":"IOS"}}}"#.utf8))
+        }
+        ASCStub.add(method: "POST", suffix: "/v1/reviewSubmissionItems") { _ in
+            (201, Data(#"{"data":{"id":"RITEM-1","type":"reviewSubmissionItems"}}"#.utf8))
+        }
+        ASCStub.add(method: "PATCH", suffix: "/v1/reviewSubmissions/RSUB-1") { _ in
+            (200, Data(#"{"data":{"id":"RSUB-1","type":"reviewSubmissions","attributes":{"state":"WAITING_FOR_REVIEW"}}}"#.utf8))
+        }
+    }
+
+    /// Every review-submission request, as "METHOD path", in request order.
+    private func reviewSubmissionRequests() -> [String] {
+        ASCStub.requests.compactMap { request in
+            guard let path = request.url?.path, path.contains("/reviewSubmission") else { return nil }
+            return "\(request.httpMethod ?? "") \(path)"
+        }
+    }
+
+    /// Screenshots-only submit with `submit_for_review: true`.
+    private func screenshotsAndReview(_ client: ASCClient, manifest: CaptureManifest, renderRoot: URL) async throws -> SubmitOrchestrator.Report {
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0",
+                screenshots: true,
+                metadata: false,
+                submitForReview: true,
+                attachBuild: false  // test stub doesn't model /v1/builds
+            )
+        )
+        return try await SubmitOrchestrator(
+            client: client, config: config,
+            settlePollInterval: 0, settlePollMaxAttempts: 0
+        ).submit(
+            manifest: manifest,
+            renderRoot: renderRoot,
+            metadataRoot: nil,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: false
+        )
+    }
+
+    /// A set refused for going over the limit keeps the previous version's
+    /// screenshots, so the version must not go to App Review: submit makes
+    /// no review-submission call and adds an error saying why. Six screens
+    /// in the default light and dark appearances are enough to hit this.
+    func testSubmit_refusedSet_skipsSubmitForReview() async throws {
+        let (client, _) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-refused-review")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let light = (1...6).map { String(format: "en-US/light/max_%02d.png", $0) }
+        let dark = (1...6).map { String(format: "en-US/dark/max_%02d.png", $0) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, light + dark)
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 12)
+        stubReviewSubmissionFlow()
+
+        let report = try await screenshotsAndReview(client, manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", appearance: "light", files: light),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", appearance: "dark", files: dark),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(report.errors.count, 2, "got: \(report.errors)")
+        XCTAssertTrue(report.errors.first?.contains("12 screenshots from iPhone 18 Pro Max") == true, "got: \(report.errors)")
+        XCTAssertEqual(report.errors.last, "submit for review: skipped because the screenshot step reported errors (see above); fix them and re-run")
+        XCTAssertEqual(reviewSubmissionRequests(), [], "no review submission call expected")
+        XCTAssertNil(report.reviewSubmissionID)
+        XCTAssertNil(report.reviewSubmissionState)
+    }
+
+    /// Same when a set's upload fails partway: the set is left half-filled.
+    func testSubmit_failedSetUpload_skipsSubmitForReview() async throws {
+        let (client, _) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-failed-review")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        let files = ["en-US/max_01.png", "en-US/max_02.png"]
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, files)
+        // Only the first upload is stubbed, so the second one fails.
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 1)
+        stubReviewSubmissionFlow()
+
+        let report = try await screenshotsAndReview(client, manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: files),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertEqual(report.errors.count, 2, "got: \(report.errors)")
+        XCTAssertTrue(report.errors.first?.hasPrefix("screenshots en-US/APP_IPHONE_67: ") == true, "got: \(report.errors)")
+        XCTAssertEqual(report.errors.last, "submit for review: skipped because the screenshot step reported errors (see above); fix them and re-run")
+        XCTAssertEqual(reviewSubmissionRequests(), [], "no review submission call expected")
+    }
+
+    /// Skipped screenshots are not errors: with only an iPhone Duo skip and a
+    /// device left out of a shared set, the review submission still goes
+    /// ahead.
+    func testSubmit_onlySkippedScreenshots_stillSubmitsForReview() async throws {
+        let (client, _) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-skips-review")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["en-US/max_01.png", "en-US/max_02.png"])
+        try writePNGs(makePNG(w: 1260, h: 2736), to: renderRoot, ["en-US/air_01.png", "en-US/air_02.png"])
+        try writePNGs(makePNG(w: 2007, h: 2853), to: renderRoot, ["en-US/duo_01.png"])
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 2)
+        stubReviewSubmissionFlow()
+
+        let report = try await screenshotsAndReview(client, manifest: manifest([
+            device("iPhone 1260x2736", "iPhone Air", files: ["en-US/air_01.png", "en-US/air_02.png"]),
+            device("iPhone 6.9\"", "iPhone 18 Pro Max", files: ["en-US/max_01.png", "en-US/max_02.png"]),
+            device("iPhone Duo inner", "iPhone Duo", files: ["en-US/duo_01.png"]),
+        ]), renderRoot: renderRoot)
+
+        XCTAssertTrue(report.errors.isEmpty, "unexpected errors: \(report.errors)")
+        XCTAssertEqual(report.screenshotUploads.map(\.count), [2])
+        XCTAssertEqual(report.screenshotsSkipped, [
+            .init(locale: "en-US", device: "iPhone Duo", count: 1, reason: .awaitingUploadSupport(screens: ["iPhone Duo inner display"])),
+            .init(locale: "en-US", device: "iPhone Air", count: 2,
+                  reason: .sameSizeClass(displayType: "APP_IPHONE_67", uploadedDevice: "iPhone 18 Pro Max")),
+        ])
+        XCTAssertEqual(reviewSubmissionRequests(), [
+            "GET /v1/reviewSubmissions",
+            "POST /v1/reviewSubmissions",
+            "POST /v1/reviewSubmissionItems",
+            "PATCH /v1/reviewSubmissions/RSUB-1",
+        ])
+        XCTAssertEqual(report.reviewSubmissionID, "RSUB-1")
+        XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
     }
 }

@@ -7,9 +7,10 @@ import Foundation
 ///   2. Find-or-create the target App Store Version
 ///   3. For every locale in `metadata/` - find-or-create localization and
 ///      PATCH any fields present
-///   4. For every (locale, device) in the manifest - find-or-create a
-///      screenshot set, wipe its existing screenshots, upload fresh PNGs
-///      in manifest order, confirm each with MD5
+///   4. For every (locale, screenshotDisplayType) the rendered PNGs map to -
+///      find-or-create a screenshot set, wipe its existing screenshots,
+///      upload fresh PNGs from one device in manifest order, confirm each
+///      with MD5 (see `planScreenshotUploads`)
 package struct SubmitOrchestrator {
 
     package let client: ASCClient
@@ -69,6 +70,14 @@ package struct SubmitOrchestrator {
         /// no editable AppInfo could be located.
         package var appInfoUpdates: [MetadataUpdate]
         package var screenshotUploads: [ScreenshotUpload]
+        /// Rendered PNGs deliberately not uploaded, one entry per locale and
+        /// device. Not errors: they add nothing to `errors`, so on their own
+        /// they neither make submit exit 1 nor stop submit-for-review.
+        /// Screenshot errors are different: a file that cannot be placed in
+        /// a set, a set refused for holding more than
+        /// `maxScreenshotsPerSet`, or a set whose upload failed each add to
+        /// `errors` and make submit skip submit-for-review.
+        package var screenshotsSkipped: [SkippedScreenshots] = []
         /// Locales where the privacy policy URL was successfully PATCHed
         /// onto `appInfoLocalizations`. Kept for backwards-compatibility
         /// with earlier report consumers; same data is also reflected in
@@ -140,6 +149,30 @@ package struct SubmitOrchestrator {
             package let locale: String
             package let displayType: String
             package let count: Int
+        }
+
+        package struct SkippedScreenshots: Sendable, Equatable {
+            package let locale: String
+            /// Manifest device the files came from (its simulator name). The
+            /// entries of one simulator share a row even when capture split
+            /// them by screen, such as the two iPhone Duo displays.
+            package let device: String
+            package let count: Int
+            package let reason: Reason
+
+            package enum Reason: Sendable, Equatable {
+                /// Apple lists these sizes (named in `screens`, e.g. "iPhone
+                /// Duo inner display") but App Store Connect cannot take them
+                /// through the API yet.
+                case awaitingUploadSupport(screens: [String])
+                /// `uploadedDevice`'s screenshots fill the same set: both
+                /// devices are in the size class `displayType` stands for,
+                /// and `uploadedDevice` ranks first (larger screen, or the
+                /// same screen and listed first). Only recorded when the
+                /// plan fills the set from `uploadedDevice`, never for a set
+                /// it refuses.
+                case sameSizeClass(displayType: String, uploadedDevice: String)
+            }
         }
 
         package enum AppInfoSkipReason: Sendable {
@@ -219,6 +252,7 @@ package struct SubmitOrchestrator {
             metadataUpdates: [],
             appInfoUpdates: [],
             screenshotUploads: [],
+            screenshotsSkipped: [],
             privacyURLUpdates: [],
             attachedBuildNumber: nil,
             exportComplianceSet: false,
@@ -307,6 +341,11 @@ package struct SubmitOrchestrator {
         // render + preview gallery. The manifest is still alpha-sorted
         // from the capture step; applyOrder reshuffles to match the
         // config list, with anything unlisted appended at the end.
+        //
+        // `screenshotsIncomplete` records whether this step added any
+        // error (a file it could not place, a set refused or failed),
+        // which blocks step 5.
+        var screenshotsIncomplete = false
         if shouldUploadScreenshots {
             let orderedManifest: CaptureManifest = {
                 guard let order = screenshotOrder, !order.isEmpty else { return manifest }
@@ -329,7 +368,7 @@ package struct SubmitOrchestrator {
                     devices: reorderedDevices
                 )
             }()
-            try await uploadScreenshots(
+            screenshotsIncomplete = try await uploadScreenshots(
                 appsAPI: appsAPI,
                 versionID: version.id,
                 manifest: orderedManifest,
@@ -352,14 +391,16 @@ package struct SubmitOrchestrator {
         // unattached version leaves an empty draft reviewSubmission
         // behind that's hard to recover from on the next run, so we'd
         // rather wait the (usually 5-15 min) processing window than
-        // ship that state.
+        // ship that state. No wait when step 5 is going to be skipped
+        // anyway because the screenshots are incomplete.
         let attachBuildEnabled = config.submit?.attachBuild ?? true
         let submitForReviewEnabled = config.submit?.submitForReview == true
+        let waitForBuild = submitForReviewEnabled && !screenshotsIncomplete
         if attachBuildEnabled {
             let buildsAPI = BuildsAPI(client: client)
             do {
                 let resolvedBuild: BuildsAPI.Build?
-                if submitForReviewEnabled {
+                if waitForBuild {
                     resolvedBuild = try await waitForLatestValidBuild(
                         buildsAPI: buildsAPI,
                         appID: app.id,
@@ -405,8 +446,7 @@ package struct SubmitOrchestrator {
                         report.exportComplianceSet = true
                     }
                 } else {
-                    let waited = submitForReviewEnabled
-                    let context = waited
+                    let context = waitForBuild
                         ? "waited for Apple's processing and gave up"
                         : "Apple's processing usually finishes 10-30 min after upload-build"
                     report.errors.append("attach build: no VALID build found for \(createVersion) (\(context)); re-run submit once `storescreens testflight builds list` reports the build as VALID")
@@ -423,9 +463,21 @@ package struct SubmitOrchestrator {
         // landed on the version: creating a reviewSubmission against a
         // build-less version leaves an empty draft behind that Apple
         // refuses to cancel programmatically.
+        //
+        // Also skip when step 4 added a screenshot error (a file it could
+        // not place, a set refused for holding too many screenshots, a
+        // failed upload): the set still holds the previous version's
+        // screenshots, nothing, or only part of the new ones, and the
+        // version would go to App Review with them.
+        // Skipped screenshots (iPhone Duo, devices another device's
+        // screenshots stand in for) are not errors and don't block this.
         if submitForReviewEnabled {
             let buildExpectedButMissing = attachBuildEnabled && report.attachedBuildNumber == nil
-            if buildExpectedButMissing {
+            if screenshotsIncomplete {
+                // Checked first: step 4b did not wait for the build in this
+                // case, so a missing build is not the reason to report.
+                report.errors.append("submit for review: skipped because the screenshot step reported errors (see above); fix them and re-run")
+            } else if buildExpectedButMissing {
                 report.errors.append("submit for review: skipped because no VALID build was attached to \(createVersion); re-run submit once the build is processed")
             } else {
                 await runSubmitForReview(
@@ -1758,6 +1810,10 @@ package struct SubmitOrchestrator {
 
     // MARK: - Screenshots
 
+    /// Uploads the sets `planScreenshotUploads` works out. Returns true when
+    /// it added any error to `report.errors`: a plan problem (a file that
+    /// cannot be placed, a set refused for holding too many screenshots) or
+    /// a set whose API calls failed. Skipped screenshots are not errors.
     private func uploadScreenshots(
         appsAPI: AppsAPI,
         versionID: String,
@@ -1765,47 +1821,39 @@ package struct SubmitOrchestrator {
         renderRoot: URL,
         report: inout Report,
         progress: ((String) -> Void)?
-    ) async throws {
+    ) async throws -> Bool {
         let screenshotsAPI = ScreenshotsAPI(client: client)
+        let errorCountBefore = report.errors.count
 
-        // Group manifest entries by (locale, device) so we can open one
-        // screenshot set per pair.
-        struct Key: Hashable { let locale: String; let displayType: String }
-        var byKey: [Key: [(URL, String, Int)]] = [:]
-
-        for device in manifest.devices {
-            let pf = productFamilyFromDeviceType(device.deviceType)
-            // Each device/locale combo: resolve displayType using the FIRST
-            // screenshot's pixel dims (all screenshots in the same device
-            // are assumed to share dimensions).
-            for shot in device.screenshots {
-                let fileURL = renderRoot.appendingPathComponent(shot.filename)
-                guard let (w, h) = readPixelDims(at: fileURL) else {
-                    report.errors.append("cannot read dims of \(shot.filename)")
-                    continue
-                }
-                guard let displayType = ScreenshotDisplayType.resolve(
-                    productFamily: pf, width: w, height: h
-                ) else {
-                    report.errors.append("no ASC display type for \(w)x\(h) in \(shot.filename)")
-                    continue
-                }
-                let locale = device.locale ?? "en-US"
-                byKey[Key(locale: locale, displayType: displayType), default: []]
-                    .append((fileURL, shot.filename, manifest.devices.firstIndex(where: { $0.deviceType == device.deviceType }) ?? 0))
-            }
+        let plan = Self.planScreenshotUploads(manifest: manifest, renderRoot: renderRoot)
+        report.errors.append(contentsOf: plan.problems.map(\.message))
+        for line in plan.notices { progress?(line) }
+        // A same-size-class row says the set was filled from another device,
+        // so it is only recorded once that set has really been uploaded (or
+        // found unchanged). A set whose upload fails keeps just its error.
+        func isSameSizeClass(_ skipped: Report.SkippedScreenshots) -> Bool {
+            if case .sameSizeClass = skipped.reason { return true }
+            return false
+        }
+        report.screenshotsSkipped.append(contentsOf: plan.skipped.filter { !isSameSizeClass($0) })
+        func recordSameSizeClassSkips(for group: ScreenshotUploadPlan.Group) {
+            report.screenshotsSkipped.append(contentsOf: plan.skipped.filter { skipped in
+                guard skipped.locale == group.locale,
+                      case .sameSizeClass(let displayType, _) = skipped.reason else { return false }
+                return displayType == group.displayType
+            })
         }
 
         // Upload per (locale, displayType) group. Reuse existing localization
         // if present, else create it.
-        for (key, items) in byKey.sorted(by: { ($0.key.locale, $0.key.displayType) < ($1.key.locale, $1.key.displayType) }) {
+        for group in plan.groups {
             do {
                 let localization = try await appsAPI.findOrCreateLocalization(
-                    versionID: versionID, locale: key.locale
+                    versionID: versionID, locale: group.locale
                 )
                 let set = try await screenshotsAPI.findOrCreateSet(
                     localizationID: localization.id,
-                    displayType: key.displayType
+                    displayType: group.displayType
                 )
 
                 let existing = try await screenshotsAPI.listScreenshots(setID: set.id)
@@ -1814,8 +1862,8 @@ package struct SubmitOrchestrator {
                 // in content + order, skip the whole wipe+reupload. ASC
                 // stores MD5 of the file bytes in sourceFileChecksum, the
                 // same shape we compute here from the local render PNG.
-                let localChecksums = items.map { (fileURL, _, _) -> String in
-                    let data = (try? Data(contentsOf: fileURL)) ?? Data()
+                let localChecksums = group.files.map { file -> String in
+                    let data = (try? Data(contentsOf: file.url)) ?? Data()
                     return ScreenshotsAPI.md5Hex(data: data)
                 }
                 let existingChecksums = existing.map { $0.attributes?.sourceFileChecksum ?? "" }
@@ -1825,10 +1873,11 @@ package struct SubmitOrchestrator {
                     && !existingChecksums.contains("")
 
                 if unchanged {
-                    progress?("\(key.locale) \(key.displayType): unchanged (\(items.count) screenshot(s))")
+                    progress?("\(group.locale) \(group.displayType): unchanged (\(group.files.count) screenshot(s))")
                     report.screenshotUploads.append(.init(
-                        locale: key.locale, displayType: key.displayType, count: 0
+                        locale: group.locale, displayType: group.displayType, count: 0
                     ))
+                    recordSameSizeClassSkips(for: group)
                     continue
                 }
 
@@ -1836,38 +1885,368 @@ package struct SubmitOrchestrator {
                 // become the source of truth.
                 for e in existing { try await screenshotsAPI.deleteScreenshot(id: e.id) }
 
-                // Upload in manifest order (key.items were appended in
-                // manifest order earlier).
+                // Upload in manifest order (the plan keeps each device's
+                // files in the order the manifest lists them).
                 var count = 0
-                for (fileURL, filename, _) in items {
-                    progress?("\(key.locale) \(key.displayType): uploading \(filename)")
-                    _ = try await screenshotsAPI.uploadScreenshot(setID: set.id, fileURL: fileURL)
+                for file in group.files {
+                    progress?("\(group.locale) \(group.displayType): uploading \(file.filename)")
+                    _ = try await screenshotsAPI.uploadScreenshot(setID: set.id, fileURL: file.url)
                     count += 1
                 }
                 report.screenshotUploads.append(.init(
-                    locale: key.locale, displayType: key.displayType, count: count
+                    locale: group.locale, displayType: group.displayType, count: count
                 ))
+                recordSameSizeClassSkips(for: group)
             } catch {
-                report.errors.append("screenshots \(key.locale)/\(key.displayType): \(error)")
+                report.errors.append("screenshots \(group.locale)/\(group.displayType): \(error)")
             }
+        }
+        return report.errors.count > errorCountBefore
+    }
+
+    /// Most screenshots App Store Connect keeps in one screenshot set.
+    package static let maxScreenshotsPerSet = 10
+
+    /// Which rendered PNGs go into which App Store Connect screenshot set,
+    /// worked out from the manifest and the PNGs' pixel sizes before any
+    /// API call. The live upload and `submit --dry-run` both build it, so
+    /// the dry run reports exactly what the upload would do.
+    package struct ScreenshotUploadPlan: Sendable {
+        package struct File: Sendable, Equatable {
+            package let url: URL
+            /// Path relative to the render directory, as the manifest lists it.
+            package let filename: String
+        }
+
+        /// Why a group's device fills its set instead of the other devices
+        /// that have files for it. Only worth reporting when there are such
+        /// devices.
+        package enum Choice: Sendable, Equatable {
+            /// No other device with files for the set has a screen as large.
+            case largestScreen
+            /// A device left out has a screen just as large; this one is
+            /// listed first in the manifest (config order).
+            case listedFirst
+            /// Every device ranked above it has more than
+            /// `maxScreenshotsPerSet` screenshots for the set and was
+            /// refused; this is the highest-ranked device that fits.
+            case largestThatFits
+
+            /// Why the device was chosen, as the notices word it.
+            package var reason: String {
+                switch self {
+                case .largestScreen:
+                    return "largest screen in the class"
+                case .listedFirst:
+                    return "tied for the largest screen in the class, listed first"
+                case .largestThatFits:
+                    return "largest screen in the class with at most \(SubmitOrchestrator.maxScreenshotsPerSet) screenshots"
+                }
+            }
+        }
+
+        /// One screenshot set to fill. Every file comes from `device`, in
+        /// manifest order (all of that device's appearances, one after the
+        /// other, as the manifest lists them).
+        package struct Group: Sendable {
+            package let locale: String
+            package let displayType: String
+            package let device: String
+            package let files: [File]
+            package let choice: Choice
+        }
+
+        /// Two devices whose manifest entries list the same rendered files.
+        /// Capture names files by the device's label, so two devices with
+        /// one label (iPhone Air and iPhone 17 Pro are both `iPhone 6.3"`)
+        /// write the same paths and the last one to finish overwrites the
+        /// other. The files hold one capture, so they are counted once, for
+        /// `device`. Which of the two devices the pixels came from is not
+        /// recorded anywhere.
+        package struct SharedFiles: Sendable, Equatable {
+            /// Device whose entry listed the files first.
+            package let device: String
+            /// Device whose entry listed them again.
+            package let otherDevice: String
+            /// Label both devices were saved under (the manifest `deviceType`).
+            package let label: String
+        }
+
+        package enum Problem: Sendable, Equatable {
+            /// The manifest lists a file that is not in the render directory.
+            case missingFile(filename: String, path: String)
+            /// The file exists but its pixel size could not be read.
+            case unreadable(filename: String)
+            /// No App Store Connect size class takes this pixel size.
+            case noDisplayType(filename: String, width: Int, height: Int)
+            /// `device` has more screenshots for the set than one set holds.
+            /// Uploading them would wipe the set and then fail partway
+            /// through, so none of them are uploaded. `filledFrom` names the
+            /// device whose screenshots fill the set instead; nil means
+            /// nothing is uploaded to the set and it is left alone.
+            case tooManyForOneSet(locale: String, displayType: String, device: String, count: Int, filledFrom: String?)
+
+            /// Wording used in `Report.errors`. The dry run words the
+            /// per-file kinds its own way.
+            package var message: String {
+                switch self {
+                case .missingFile(let filename, _), .unreadable(let filename):
+                    return "cannot read dims of \(filename)"
+                case .noDisplayType(let filename, let w, let h):
+                    return "no ASC display type for \(w)x\(h) in \(filename)"
+                case .tooManyForOneSet(let locale, let displayType, let device, let count, let filledFrom):
+                    let outcome = filledFrom.map { "the set is filled from \($0) instead" }
+                        ?? "nothing is uploaded to this set"
+                    return "screenshots \(locale)/\(displayType): \(count) screenshots from \(device), more than the \(SubmitOrchestrator.maxScreenshotsPerSet) App Store Connect allows in one set; \(outcome) (the light and dark captures of one device go into the same set)"
+                }
+            }
+        }
+
+        /// Sets to fill, sorted by (locale, displayType).
+        package var groups: [Group] = []
+        /// Files deliberately not uploaded; not errors.
+        package var skipped: [Report.SkippedScreenshots] = []
+        /// Files and sets that cannot be uploaded; submit reports these as
+        /// errors.
+        package var problems: [Problem] = []
+        /// Device pairs saved under the same file names, one entry per pair
+        /// across all locales.
+        package var sharedFiles: [SharedFiles] = []
+
+        /// One line per pair of devices saved under the same file names,
+        /// then one line per device and locale for sizes App Store Connect
+        /// does not accept yet, then one line per set that left devices out.
+        /// Printed by both the live upload and the dry run, instead of one
+        /// line per file.
+        package var notices: [String] {
+            var lines: [String] = []
+            for shared in sharedFiles {
+                lines.append("\(shared.device) and \(shared.otherDevice) were saved under the same file names (label \(shared.label)), so only one capture is on disk; submit counts it once, not once per device. Capture them in separate runs with different output_dir values to upload both.")
+            }
+
+            for skip in skipped {
+                guard case .awaitingUploadSupport(let screens) = skip.reason else { continue }
+                lines.append("\(skip.locale) \(skip.device): skipped \(skip.count) screenshot(s) (\(screens.joined(separator: ", "))). \(ScreenshotDisplayType.awaitingUploadSupportReason).")
+            }
+
+            // Same-class notices are folded across locales: the ranking is
+            // made once per display type, so the same device usually fills
+            // the set in every locale.
+            struct GroupKey: Hashable { let locale: String; let displayType: String }
+            var choices: [GroupKey: Choice] = [:]
+            for group in groups {
+                choices[GroupKey(locale: group.locale, displayType: group.displayType)] = group.choice
+            }
+            struct SlotKey: Hashable { let displayType: String; let uploadedDevice: String; let choice: Choice? }
+            var order: [SlotKey] = []
+            var leftOut: [SlotKey: (devices: [String], locales: [String])] = [:]
+            for skip in skipped {
+                guard case .sameSizeClass(let displayType, let uploadedDevice) = skip.reason else { continue }
+                let choice = choices[GroupKey(locale: skip.locale, displayType: displayType)]
+                let key = SlotKey(displayType: displayType, uploadedDevice: uploadedDevice, choice: choice)
+                if leftOut[key] == nil { order.append(key) }
+                var entry = leftOut[key] ?? ([], [])
+                if !entry.devices.contains(skip.device) { entry.devices.append(skip.device) }
+                if !entry.locales.contains(skip.locale) { entry.locales.append(skip.locale) }
+                leftOut[key] = entry
+            }
+            for key in order {
+                guard let entry = leftOut[key] else { continue }
+                let why = key.choice.map { " (\($0.reason))" } ?? ""
+                lines.append("\(key.displayType) (\(entry.locales.joined(separator: ", "))): uploading \(key.uploadedDevice) screenshots only\(why); left out \(entry.devices.joined(separator: ", ")) (same App Store size class, and App Store Connect keeps one screenshot set per size class and locale).")
+            }
+            return lines
         }
     }
 
-    // MARK: - Helpers
+    /// Builds the upload plan. Each PNG is classified by its pixel size:
+    /// a size with a `screenshotDisplayType` joins that (locale,
+    /// displayType) group; a size Apple lists but the API cannot take yet
+    /// (`ScreenshotDisplayType.awaitingUploadSupport`) is skipped, one entry
+    /// per locale and device name; any other size is a problem.
+    ///
+    /// Different devices can share a group because App Store Connect sorts
+    /// by size class, not by device (iPhone Air and iPhone 18 Pro Max are
+    /// both 6.9"; iPhone 17 Pro and iPhone 18 Pro are both 6.3"). The upload
+    /// wipes and refills each set, so merging them would mix two devices'
+    /// screenshots in one set. Each group therefore takes its files from one
+    /// device only, chosen like this:
+    ///
+    ///   1. For each displayType, the devices with files for it anywhere in
+    ///      the manifest are ranked once, by the portrait pixel size of
+    ///      those files, largest first (width, then height: 1320x2868 before
+    ///      1290x2796 before 1260x2736). Devices of the same size keep
+    ///      manifest order, which is config order for current captures.
+    ///      Ranking once keeps every locale on the same device even when an
+    ///      older manifest lists devices in a different order per locale.
+    ///   2. Each (locale, displayType) group takes the first device in that
+    ///      ranking that has files in the locale and no more than
+    ///      `maxScreenshotsPerSet` of them. Devices ranked above it are
+    ///      `tooManyForOneSet` problems; devices ranked below it are skipped
+    ///      as `sameSizeClass`. When no device fits, the group gets only the
+    ///      problems and the set is left alone.
+    ///
+    /// A device is a (deviceType, simulatorName) pair, so the light and dark
+    /// entries of one simulator stay together. When a second device's entry
+    /// lists files a first device already listed (see `SharedFiles`), those
+    /// files count for the first device only.
+    package static func planScreenshotUploads(
+        manifest: CaptureManifest,
+        renderRoot: URL
+    ) -> ScreenshotUploadPlan {
+        struct Device: Hashable {
+            let deviceType: String
+            let simulatorName: String
+            var name: String { simulatorName.isEmpty ? deviceType : simulatorName }
+        }
+        /// Portrait pixel size; larger sorts later.
+        struct PixelSize: Comparable {
+            let width: Int
+            let height: Int
+            static func < (a: PixelSize, b: PixelSize) -> Bool {
+                (a.width, a.height) < (b.width, b.height)
+            }
+        }
+        struct GroupKey: Hashable { let locale: String; let displayType: String }
+        struct SkipKey: Hashable { let locale: String; let deviceName: String }
+        struct DevicePair: Hashable { let first: Device; let other: Device }
 
-    private func productFamilyFromDeviceType(_ deviceType: String) -> Int {
-        RenderPipeline.productFamilyFromDeviceType(deviceType)
-    }
+        var plan = ScreenshotUploadPlan()
+        var filesByGroup: [GroupKey: [Device: [ScreenshotUploadPlan.File]]] = [:]
+        var sizesByDisplayType: [String: [Device: PixelSize]] = [:]
+        var manifestOrder: [Device: Int] = [:]
+        var claimedBy: [String: Device] = [:]
+        var sharedPairs: Set<DevicePair> = []
+        var awaitingOrder: [SkipKey] = []
+        var awaiting: [SkipKey: (screens: [String], count: Int)] = [:]
 
-    /// Reads the pixel dimensions of a PNG without fully decoding it.
-    private func readPixelDims(at url: URL) -> (Int, Int)? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        // Image I/O is the cheapest way to get dims without a full decode.
-        #if canImport(ImageIO)
-        let sourceClass = NSClassFromString("CGImageSource") as AnyObject?
-        _ = sourceClass
-        #endif
-        return readPixelDimsImageIO(url: url)
+        for entry in manifest.devices {
+            let device = Device(deviceType: entry.deviceType, simulatorName: entry.simulatorName)
+            if manifestOrder[device] == nil { manifestOrder[device] = manifestOrder.count }
+        }
+        // A file two devices list (they share a label, so they wrote the same
+        // path) belongs to the device that appears first in the whole
+        // manifest. Deciding it per entry would follow the order inside each
+        // locale, which manifests written in capture completion order vary,
+        // handing the same screen to different devices in different locales.
+        for entry in manifest.devices {
+            let device = Device(deviceType: entry.deviceType, simulatorName: entry.simulatorName)
+            for shot in entry.screenshots {
+                let path = renderRoot.appendingPathComponent(shot.filename).standardizedFileURL.path
+                if let owner = claimedBy[path], manifestOrder[owner, default: 0] <= manifestOrder[device, default: 0] {
+                    continue
+                }
+                claimedBy[path] = device
+            }
+        }
+
+        for entry in manifest.devices {
+            let pf = RenderPipeline.productFamilyFromDeviceType(entry.deviceType)
+            let device = Device(deviceType: entry.deviceType, simulatorName: entry.simulatorName)
+            let locale = entry.locale ?? "en-US"
+            for shot in entry.screenshots {
+                let fileURL = renderRoot.appendingPathComponent(shot.filename)
+                let path = fileURL.standardizedFileURL.path
+                if let owner = claimedBy[path], owner != device {
+                    // Same file on disk as another device's entry: count it
+                    // once, for its owner. The owner always ranks first, so
+                    // each pair of devices produces one notice.
+                    let pair = DevicePair(first: owner, other: device)
+                    if sharedPairs.insert(pair).inserted {
+                        plan.sharedFiles.append(.init(device: owner.name, otherDevice: device.name, label: owner.deviceType))
+                    }
+                    continue
+                }
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    plan.problems.append(.missingFile(filename: shot.filename, path: fileURL.path))
+                    continue
+                }
+                guard let (w, h) = readPixelDimsImageIO(url: fileURL) else {
+                    plan.problems.append(.unreadable(filename: shot.filename))
+                    continue
+                }
+                if let displayType = ScreenshotDisplayType.resolve(productFamily: pf, width: w, height: h) {
+                    let key = GroupKey(locale: locale, displayType: displayType)
+                    filesByGroup[key, default: [:]][device, default: []]
+                        .append(.init(url: fileURL, filename: shot.filename))
+                    let size = PixelSize(width: min(w, h), height: max(w, h))
+                    if sizesByDisplayType[displayType]?[device].map({ $0 < size }) ?? true {
+                        sizesByDisplayType[displayType, default: [:]][device] = size
+                    }
+                } else if let screen = ScreenshotDisplayType.awaitingUploadSupport(productFamily: pf, width: w, height: h) {
+                    // Keyed by name, so the per-screen entries capture
+                    // writes for one simulator (the two iPhone Duo displays)
+                    // fold into one row.
+                    let key = SkipKey(locale: locale, deviceName: device.name)
+                    if awaiting[key] == nil { awaitingOrder.append(key) }
+                    var entry = awaiting[key] ?? ([], 0)
+                    if !entry.screens.contains(screen) { entry.screens.append(screen) }
+                    entry.count += 1
+                    awaiting[key] = entry
+                } else {
+                    plan.problems.append(.noDisplayType(filename: shot.filename, width: w, height: h))
+                }
+            }
+        }
+
+        for key in awaitingOrder {
+            guard let entry = awaiting[key] else { continue }
+            plan.skipped.append(.init(
+                locale: key.locale,
+                device: key.deviceName,
+                count: entry.count,
+                reason: .awaitingUploadSupport(screens: entry.screens)
+            ))
+        }
+
+        // One ranking per display type for the whole manifest: largest
+        // screen first, manifest order among devices of the same size.
+        var rankingByDisplayType: [String: [Device]] = [:]
+        for (displayType, sizes) in sizesByDisplayType {
+            rankingByDisplayType[displayType] = sizes.sorted { a, b in
+                if a.value != b.value { return a.value > b.value }
+                return (manifestOrder[a.key] ?? 0) < (manifestOrder[b.key] ?? 0)
+            }.map(\.key)
+        }
+
+        let sortedKeys = filesByGroup.keys.sorted { ($0.locale, $0.displayType) < ($1.locale, $1.displayType) }
+        for key in sortedKeys {
+            guard let filesByDevice = filesByGroup[key] else { continue }
+            let sizes = sizesByDisplayType[key.displayType] ?? [:]
+            let candidates = (rankingByDisplayType[key.displayType] ?? []).filter { filesByDevice[$0] != nil }
+            let chosenIndex = candidates.firstIndex { (filesByDevice[$0]?.count ?? 0) <= maxScreenshotsPerSet }
+            let chosen = chosenIndex.map { candidates[$0] }
+            for refused in candidates[..<(chosenIndex ?? candidates.endIndex)] {
+                plan.problems.append(.tooManyForOneSet(
+                    locale: key.locale, displayType: key.displayType,
+                    device: refused.name, count: filesByDevice[refused]?.count ?? 0,
+                    filledFrom: chosen?.name
+                ))
+            }
+            guard let chosenIndex, let chosen, let files = filesByDevice[chosen] else { continue }
+            let leftOut = candidates[(chosenIndex + 1)...]
+            for other in leftOut {
+                plan.skipped.append(.init(
+                    locale: key.locale,
+                    device: other.name,
+                    count: filesByDevice[other]?.count ?? 0,
+                    reason: .sameSizeClass(displayType: key.displayType, uploadedDevice: chosen.name)
+                ))
+            }
+            let choice: ScreenshotUploadPlan.Choice
+            if chosenIndex > 0 {
+                choice = .largestThatFits
+            } else if leftOut.contains(where: { sizes[$0] == sizes[chosen] }) {
+                choice = .listedFirst
+            } else {
+                choice = .largestScreen
+            }
+            plan.groups.append(.init(
+                locale: key.locale, displayType: key.displayType,
+                device: chosen.name, files: files, choice: choice
+            ))
+        }
+        return plan
     }
 }
 
