@@ -32,6 +32,7 @@ final class StatusBarKeeperTests: XCTestCase {
     private func targets(
         _ devices: [LocatedDevice],
         base: String = "iPhone 17 Pro Max",
+        baseUDID: String = "base",
         progress: [String: StatusBarKeeper.Progress] = [:],
         applicationsPerDevice: Int = 3,
         failureLimit: Int = 3
@@ -39,6 +40,7 @@ final class StatusBarKeeperTests: XCTestCase {
         StatusBarKeeper.devicesNeedingOverride(
             devices: devices,
             baseName: base,
+            baseUDID: baseUDID,
             progress: progress,
             applicationsPerDevice: applicationsPerDevice,
             failureLimit: failureLimit
@@ -53,12 +55,33 @@ final class StatusBarKeeperTests: XCTestCase {
         XCTAssertEqual(targets(devices).sorted(), ["base", "clone-1"])
     }
 
+    func testLeavesTheUsersOtherSameNamedSimulatorsAlone() {
+        // Xcode creates a simulator of the same name for every installed
+        // runtime. The one the capture resolved is the base (matched by UDID);
+        // a booted copy on another runtime is the user's and must not get the
+        // override, even though its name is identical.
+        let devices = [
+            device("iPhone 17 Pro Max", udid: "base", set: .default),
+            device("iPhone 17 Pro Max", udid: "other-runtime", set: .default),
+            device("Clone 1 of iPhone 17 Pro Max", udid: "clone-1"),
+        ]
+        XCTAssertEqual(targets(devices).sorted(), ["base", "clone-1"])
+    }
+
+    func testTargetsALegacyExactNameCloneInTheTestSet() {
+        // Older toolchains named the clone exactly like the base, but only in
+        // xcodebuild's own set.
+        let devices = [device("iPhone 17 Pro Max", udid: "legacy-clone", set: .xctest)]
+        XCTAssertEqual(targets(devices), ["legacy-clone"])
+    }
+
     func testCloneKeepsTheDeviceSetItWasFoundIn() {
         // The override must be applied with the clone's own `--set`; addressing
         // an XCTestDevices clone through the default set finds nothing.
         let selected = StatusBarKeeper.devicesNeedingOverride(
             devices: [device("Clone 1 of iPhone 17 Pro Max", udid: "clone-1", set: .xctest)],
             baseName: "iPhone 17 Pro Max",
+            baseUDID: "base",
             progress: [:],
             applicationsPerDevice: 3,
             failureLimit: 3

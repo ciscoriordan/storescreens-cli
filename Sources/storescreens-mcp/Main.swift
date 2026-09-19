@@ -292,7 +292,7 @@ struct StorescreensMCP {
                 "properties": .object([
                     "simulator": .object([
                         "type": .string("string"),
-                        "description": .string("Simulator name (e.g. \"iPhone 17 Pro\"). Ignored if udid is given."),
+                        "description": .string("Simulator name (e.g. \"iPhone 18 Pro\"). Ignored if udid is given."),
                     ]),
                     "udid": .object([
                         "type": .string("string"),
@@ -398,7 +398,7 @@ struct StorescreensMCP {
                     "workspace": .object(["type": .string("string"), "description": .string(".xcworkspace path")]),
                     "devices": .object([
                         "type": .string("array"),
-                        "description": .string("Array of {simulator: \"Name\"} objects"),
+                        "description": .string("Array of device objects: {simulator: \"iPhone 18 Pro Max\"}, optionally with platform (\"macOS\" for a native Mac target) and tests (per-device test selectors). Replaces the existing devices list."),
                     ]),
                     "output_dir": .object(["type": .string("string"), "description": .string("Output directory")]),
                     "test_target": .object(["type": .string("string"), "description": .string("UI test target name")]),
@@ -1112,8 +1112,11 @@ struct StorescreensMCP {
         if !device.isBooted {
             if shouldBoot {
                 try await manager.boot(device.udid)
-                // Brief pause for the simulator to finish booting
-                try await Task.sleep(nanoseconds: 2_000_000_000)
+                // `boot` returns while the Apple logo is still up; wait for
+                // the boot to finish, then give the home screen a moment to
+                // draw.
+                await manager.waitUntilBooted(device.udid)
+                try await Task.sleep(nanoseconds: 3_000_000_000)
             } else {
                 return .init(content: [.text("Simulator '\(device.name)' is not booted. Pass boot: true to boot it automatically, or use list_simulators to find a booted simulator.")], isError: true)
             }
@@ -1268,9 +1271,18 @@ struct StorescreensMCP {
         if let v = args["upload"]?.boolValue             { config.upload = v }
 
         if let devArray = args["devices"]?.arrayValue {
+            // Pass every DeviceConfig field through. Rebuilding entries from
+            // the name alone dropped platform ("macOS" targets turned back
+            // into simulator lookups) and per-device tests.
             config.devices = devArray.compactMap { item -> DeviceConfig? in
-                guard let name = item.objectValue?["simulator"]?.stringValue else { return nil }
-                return DeviceConfig(simulator: name)
+                guard let object = item.objectValue,
+                      let name = object["simulator"]?.stringValue else { return nil }
+                return DeviceConfig(
+                    simulator: name,
+                    size: object["size"]?.stringValue,
+                    platform: object["platform"]?.stringValue,
+                    tests: object["tests"]?.arrayValue?.compactMap { $0.stringValue }
+                )
             }
         }
         if let appArray = args["appearances"]?.arrayValue {

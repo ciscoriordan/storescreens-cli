@@ -1,7 +1,11 @@
 import Foundation
 
 /// Represents an App Store screenshot size, derived from actual screen dimensions.
-/// New devices are automatically supported - no code changes needed.
+///
+/// The pixel size comes from the simulator's CoreSimulator device type, so a
+/// device Apple adds later is captured without code changes. What needs a
+/// code change is the human-readable label (see `friendlyNames`): until a
+/// size is listed there, its screenshots are labeled "iPhone WxH".
 package struct AppStoreScreenSize: Codable, Hashable, Sendable {
     package let width: Int
     package let height: Int
@@ -16,12 +20,29 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
     /// Human-readable display name.
     /// Known resolutions get friendly names like "iPhone 6.7\"".
     /// Unknown resolutions get auto-generated names like "iPhone 1320x2868".
+    /// The lookup ignores orientation (a landscape capture of a known size
+    /// gets the same name as the portrait one); the auto-generated name keeps
+    /// the width and height as given.
     package var displayName: String {
-        let key = "\(productFamily)-\(width)x\(height)"
-        if let friendly = Self.friendlyNames[key] {
+        if let friendly = Self.friendlyNamesByPortraitSize[portraitKey] {
             return friendly
         }
         return "\(familyPrefix) \(width)x\(height)"
+    }
+
+    /// True when `friendlyNames` lists this size (in either orientation),
+    /// i.e. it is a screen size storescreens knows by name.
+    package var hasFriendlyName: Bool {
+        Self.friendlyNamesByPortraitSize[portraitKey] != nil
+    }
+
+    /// App Store Connect's `screenshotDisplayType` for this size, or nil when
+    /// App Store Connect has no screenshot slot for it (the iPhone Duo, Apple
+    /// Watch, or a size storescreens does not know). `ScreenshotDisplayType`
+    /// is the source of truth for which App Store size class a pixel size
+    /// belongs to; the label in `displayName` is not.
+    package var screenshotDisplayType: String? {
+        ScreenshotDisplayType.resolve(productFamily: productFamily, width: width, height: height)
     }
 
     /// Value written to manifest.json deviceType field.
@@ -51,17 +72,49 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
 
     // MARK: - Friendly names for known resolutions
 
+    /// `friendlyNames` keyed by the portrait form of each size, which is what
+    /// `displayName` looks up. The table itself lists each size the way Apple
+    /// quotes it (Mac sizes are landscape).
+    private static let friendlyNamesByPortraitSize: [String: String] = Dictionary(
+        friendlyNames.map { key, name in (portraitKey(forTableKey: key), name) },
+        uniquingKeysWith: { first, _ in first }
+    )
+
+    private var portraitKey: String {
+        "\(productFamily)-\(min(width, height))x\(max(width, height))"
+    }
+
+    private static func portraitKey(forTableKey key: String) -> String {
+        let parts = key.split(separator: "-", maxSplits: 1)
+        let dims = parts.count == 2 ? parts[1].split(separator: "x").compactMap { Int($0) } : []
+        guard dims.count == 2 else { return key }
+        return "\(parts[0])-\(min(dims[0], dims[1]))x\(max(dims[0], dims[1]))"
+    }
+
     /// Maps "family-widthxheight" to a human-readable App Store display name.
-    /// This table is purely cosmetic - the CLI works without it.
-    /// When Apple adds a new resolution, it auto-generates a name until this table is updated.
+    ///
+    /// The name is more than cosmetic. It is written to manifest.json as the
+    /// device's `deviceType`, it becomes the output filename prefix
+    /// ("iPhone 6.9\"" -> "iPhone_6.9_Home.png"), and it keys the HTML
+    /// preview pages. Render and submit read the product family from its
+    /// "iPhone" / "iPad" prefix. Two sizes that share a name therefore share
+    /// output files, so a UI-test capture that includes both overwrites one
+    /// with the other (capture warns, see `ResolvedDevice.sharedLabels`;
+    /// simple mode names files by device position instead), and renaming
+    /// an existing entry renames every file captured for that size. The App
+    /// Store size class used for upload is not taken from this name: submit
+    /// decides it from each PNG's pixel size through `ScreenshotDisplayType`.
+    ///
+    /// A size missing from this table still captures, under an auto-generated
+    /// "iPhone WxH" name, until the table is updated.
     private static let friendlyNames: [String: String] = [
         // iPhone
-        "1-1320x2868": "iPhone 6.9\"",    // iPhone 16/17 Pro Max
+        "1-1320x2868": "iPhone 6.9\"",    // iPhone 16/17/18 Pro Max
         "1-1290x2796": "iPhone 6.7\"",    // iPhone 14 Pro Max, 15 Plus/Pro Max, 16 Plus
         "1-1284x2778": "iPhone 6.7\"",    // iPhone 12/13 Pro Max, 14 Plus
         "1-1260x2736": "iPhone 6.3\"",    // iPhone Air
         "1-1242x2688": "iPhone 6.5\"",    // iPhone Xs Max, 11 Pro Max
-        "1-1206x2622": "iPhone 6.3\"",    // iPhone 16/17 Pro, 17
+        "1-1206x2622": "iPhone 6.3\"",    // iPhone 16/17/18 Pro, 17
         "1-1179x2556": "iPhone 6.1\"",    // iPhone 14 Pro, 15, 15 Pro, 16
         "1-1170x2532": "iPhone 6.1\"",    // iPhone 12, 12 Pro, 13, 13 Pro, 14, 16e
         "1-1125x2436": "iPhone 5.8\"",    // iPhone X, Xs, 11 Pro
@@ -70,6 +123,12 @@ package struct AppStoreScreenSize: Codable, Hashable, Sendable {
         "1-828x1792":  "iPhone 6.1\"",    // iPhone Xr, 11
         "1-750x1334":  "iPhone 4.7\"",    // iPhone 6s, 7, 8, SE 2/3
         "1-640x1136":  "iPhone 4\"",      // iPhone SE 1st gen, 5s
+        // iPhone Duo (foldable). Each display gets its own name because the
+        // simulator produces screenshots of whichever display the device's
+        // pose (folded or open) has active. App Store Connect lists both
+        // sizes but has no upload slot for them yet.
+        "1-1398x2034": "iPhone Duo outer", // iPhone Duo outer display (folded)
+        "1-2007x2853": "iPhone Duo inner", // iPhone Duo inner display (open)
         // iPad
         "2-2064x2752": "iPad Pro 13\"",   // iPad Pro 13-inch M4/M5
         "2-2048x2732": "iPad Pro 12.9\"", // iPad Pro 12.9", iPad Air 13"
@@ -137,6 +196,12 @@ package struct DeviceMapping {
     /// the built-in touch display. The other entries are external displays
     /// (CarPlay at 720x480, an 8K monitor), and taking the first or the
     /// largest would pick one of those on some devices.
+    ///
+    /// A device with two built-in displays (the iPhone Duo: outer display
+    /// when folded, inner when open) still gets one size here, and which
+    /// display a screenshot shows depends on a pose storescreens cannot set.
+    /// Capture therefore labels each screenshot by its own pixel size when it
+    /// differs from this one (`OutputOrganizer.labelSize`).
     static func mainDisplay(in capabilities: [String: Any]) -> (width: Int, height: Int)? {
         guard let inner = capabilities["capabilities"] as? [String: Any],
               let displays = inner["displays"] as? [[String: Any]] else {

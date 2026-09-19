@@ -186,13 +186,11 @@ struct InitCommand: AsyncParsableCommand {
         from devices: [SimulatorDevice],
         sizeMap: [String: AppStoreScreenSize]
     ) -> [SimulatorDevice] {
-        let iPhones = devices
-            .filter { sizeMap[$0.udid]?.isIPhone == true }
-            .sorted { (sizeMap[$0.udid]?.width ?? 0) > (sizeMap[$1.udid]?.width ?? 0) }
-
-        // Default: pick the largest iPhone (6.9") - App Store Connect generates
-        // smaller sizes automatically. Users can add more devices in the config file.
-        if let largest = iPhones.first {
+        // Default: one iPhone in the largest App Store class (6.9"), newest
+        // model first - App Store Connect generates smaller sizes
+        // automatically. Users can add more devices in the config file.
+        // See DefaultDevicePicker for why this is not simply the widest iPhone.
+        if let largest = DefaultDevicePicker.iPhone(from: devices, sizes: sizeMap) {
             return [largest]
         }
         return []

@@ -19,9 +19,9 @@ import Foundation
 /// while the tests run and applies the override to every booted clone as it
 /// appears - plus the base itself, for toolchains that skip cloning. The clones
 /// live in their own device set (see `DeviceSet.xctest`), which is why they are
-/// invisible to a plain `simctl list devices`. Devices that merely share the
-/// base's name (the same model on another runtime) can be caught by the name
-/// match; applying a status bar override to an idle simulator is harmless.
+/// invisible to a plain `simctl list devices`. The base is matched by UDID, not
+/// by name: the user's other simulators of the same model (one per installed
+/// runtime, all with the same name) are left alone, even when booted.
 ///
 /// Everything here is best-effort: a failed override warns, it never aborts the
 /// capture.
@@ -73,19 +73,24 @@ package struct StatusBarKeeper: Sendable {
         self.failureLimit = failureLimit
     }
 
-    /// Devices that should get the override on this poll: booted, named like the
-    /// base device or one of its xcodebuild clones, and neither finished nor
-    /// given up on. Pure, so the selection is testable without a simulator.
+    /// Devices that should get the override on this poll: booted, either the
+    /// base device itself (`baseUDID`) or one of its xcodebuild clones, and
+    /// neither finished nor given up on. Pure, so the selection is testable
+    /// without a simulator.
     package static func devicesNeedingOverride(
         devices: [LocatedDevice],
         baseName: String,
+        baseUDID: String,
         progress: [String: Progress],
         applicationsPerDevice: Int,
         failureLimit: Int
     ) -> [LocatedDevice] {
         devices.filter { located in
             let device = located.device
-            guard device.isBooted, SimulatorManager.isClone(device.name, of: baseName) else {
+            guard device.isBooted,
+                  device.udid == baseUDID
+                    || SimulatorManager.isClone(device.name, of: baseName, in: located.set)
+            else {
                 return false
             }
             let state = progress[device.udid] ?? Progress()
@@ -93,10 +98,11 @@ package struct StatusBarKeeper: Sendable {
         }
     }
 
-    /// Poll until cancelled, applying `arguments` to every booted clone of
-    /// `baseName` as it appears.
+    /// Poll until canceled, applying `arguments` to the base device
+    /// `baseUDID` and to every booted clone of `baseName` as it appears.
     package func run(
         baseName: String,
+        baseUDID: String,
         arguments: String,
         manager: SimulatorManager,
         log: @escaping @Sendable (String) async -> Void
@@ -106,6 +112,7 @@ package struct StatusBarKeeper: Sendable {
             let targets = Self.devicesNeedingOverride(
                 devices: await manager.locatedDevices(),
                 baseName: baseName,
+                baseUDID: baseUDID,
                 progress: progress,
                 applicationsPerDevice: applicationsPerDevice,
                 failureLimit: failureLimit
@@ -136,6 +143,7 @@ package struct StatusBarKeeper: Sendable {
     /// or a macOS target) to run `body` untouched.
     package func maintaining<T>(
         baseName: String,
+        baseUDID: String,
         arguments: String?,
         manager: SimulatorManager,
         log: @escaping @Sendable (String) async -> Void,
@@ -143,7 +151,7 @@ package struct StatusBarKeeper: Sendable {
     ) async rethrows -> T {
         guard let arguments else { return try await body() }
         let keeper = Task {
-            await run(baseName: baseName, arguments: arguments, manager: manager, log: log)
+            await run(baseName: baseName, baseUDID: baseUDID, arguments: arguments, manager: manager, log: log)
         }
         defer { keeper.cancel() }
         return try await body()

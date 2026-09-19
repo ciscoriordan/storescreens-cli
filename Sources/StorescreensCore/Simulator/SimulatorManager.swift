@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 
 package actor SimulatorManager {
     private let shell = ShellRunner()
@@ -215,14 +217,35 @@ package actor SimulatorManager {
         }
     }
 
-    /// True when a simulator named `candidate` is an xcodebuild-created clone of
-    /// the device named `base`. `xcodebuild test` clones its destination on every
-    /// run and names the clone `Clone N of <base>`; some older toolchains reused
-    /// the exact base name. This matches both forms. The base device itself also
-    /// matches the exact-name form, so callers must exclude it by UDID (`keepUDID`).
-    package static func isClone(_ candidate: String, of base: String) -> Bool {
-        if candidate == base { return true }
-        return candidate.hasPrefix("Clone ") && candidate.hasSuffix(" of \(base)")
+    /// True when a simulator named `candidate`, listed in device set `set`, is
+    /// an xcodebuild-created clone of the device named `base`. `xcodebuild test`
+    /// clones its destination on every run and names the clone
+    /// `Clone N of <base>`; some older toolchains reused the exact base name.
+    ///
+    /// The exact-name form only counts inside xcodebuild's own test set
+    /// (`DeviceSet.xctest`), which nothing else writes to. In the default set
+    /// an exact-name match is one of the user's own simulators: Xcode creates
+    /// a device of the same name for each installed runtime ("iPhone 17" on
+    /// iOS 26.5 and on iOS 27.0), and treating those as clones deleted the
+    /// user's other copy whenever a capture ran on one of them.
+    package static func isClone(_ candidate: String, of base: String, in set: DeviceSet) -> Bool {
+        if candidate.hasPrefix("Clone ") && candidate.hasSuffix(" of \(base)") { return true }
+        return set == .xctest && candidate == base
+    }
+
+    /// The leftover xcodebuild clones of `name` among `devices`: clones by
+    /// `isClone`, still available, and never the base device `keepUDID`
+    /// itself. Pure, so the selection is testable without a simulator.
+    package static func clones(
+        of name: String,
+        keeping keepUDID: String,
+        in devices: [LocatedDevice]
+    ) -> [LocatedDevice] {
+        devices.filter { located in
+            isClone(located.device.name, of: name, in: located.set)
+                && located.device.udid != keepUDID
+                && located.device.isAvailable
+        }
     }
 
     /// Every device `simctl` lists as available in `set`, with its current
@@ -269,12 +292,12 @@ package actor SimulatorManager {
 
     /// Simulator clones of `name` in any device set, excluding the base `keepUDID`.
     private func currentClones(name: String, keepUDID: String) async -> [LocatedDevice] {
-        await locatedDevices()
-            .filter { Self.isClone($0.device.name, of: name) && $0.device.udid != keepUDID && $0.device.isAvailable }
+        Self.clones(of: name, keeping: keepUDID, in: await locatedDevices())
     }
 
-    /// Delete all simulator clones that share `name` but have a different UDID.
-    /// xcodebuild test clones the target simulator on every run; this cleans up leftovers.
+    /// Delete the xcodebuild clones of `name` (see `isClone`), never the base
+    /// `keepUDID`. xcodebuild test clones the target simulator on every run;
+    /// this cleans up leftovers.
     package func deleteClonesOf(name: String, keepUDID: String) async throws {
         for clone in await currentClones(name: name, keepUDID: keepUDID) {
             try? await shutdown(clone.device.udid, in: clone.set)
@@ -407,8 +430,33 @@ package actor SimulatorManager {
     /// already booted (it returns immediately). Ensures the simulator is fully
     /// ready before a test runner is installed/launched, so the launch doesn't
     /// race an unfinished boot. Best-effort: a non-zero bootstatus does not throw.
-    package func waitUntilBooted(_ udid: String) async {
+    ///
+    /// `bootstatus` is not always enough: on the iPhone Duo runtime (Xcode
+    /// 27.1 beta) it reports the boot finished after about a second, while
+    /// the Apple logo is still on screen. So this also waits, up to
+    /// `springBoardTimeout`, until SpringBoard posts its finished-startup
+    /// state. On runtimes where `bootstatus` works that state is already set
+    /// and the check is one extra `simctl spawn`.
+    package func waitUntilBooted(_ udid: String, springBoardTimeout: Duration = .seconds(120)) async {
         _ = try? await shell.xcrun("simctl", arguments: ["bootstatus", udid, "-b"])
+        let deadline = ContinuousClock.now.advanced(by: springBoardTimeout)
+        while ContinuousClock.now < deadline {
+            guard let result = try? await shell.xcrun(
+                "simctl", arguments: ["spawn", udid, "notifyutil", "-g", "com.apple.springboard.finishedstartup"]
+            ), result.succeeded else { return }
+            if Self.springBoardFinishedStartup(notifyutilOutput: result.stdout) { return }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    /// Parses `notifyutil -g com.apple.springboard.finishedstartup`, which
+    /// prints the name and the state value; SpringBoard sets a non-zero
+    /// state once it has finished starting up.
+    package static func springBoardFinishedStartup(notifyutilOutput output: String) -> Bool {
+        guard let last = output.split(whereSeparator: \.isWhitespace).last, let value = UInt64(last) else {
+            return false
+        }
+        return value != 0
     }
 
     package func shutdown(_ udid: String, in set: DeviceSet = .default) async throws {
@@ -418,11 +466,89 @@ package actor SimulatorManager {
         }
     }
 
+    /// Screenshot of the device's display, via `simctl io screenshot`.
+    ///
+    /// A device with one built-in display is captured exactly as `simctl`
+    /// does by default. A device with more than one (iPhone Duo: the outer
+    /// display and the inner one) needs a choice, because `simctl` picks the
+    /// inner display by default and that one is dark while the phone is
+    /// folded, which is how the simulator boots. Each built-in display is
+    /// captured on its own and the first one that is not blank wins; when
+    /// every one is blank the default capture is kept, as before.
     package func takeScreenshot(_ udid: String, outputPath: String) async throws {
+        let screens = await integratedScreenIDs(udid)
+        if screens.count > 1 {
+            let fm = FileManager.default
+            for screen in screens {
+                let candidate = outputPath + ".display-\(screen).png"
+                defer { try? fm.removeItem(atPath: candidate) }
+                let result = try await shell.xcrun(
+                    "simctl", arguments: ["io", udid, "screenshot", "--display=\(screen)", candidate]
+                )
+                guard result.succeeded, !Self.isBlankImage(atPath: candidate) else { continue }
+                try? fm.removeItem(atPath: outputPath)
+                try fm.moveItem(atPath: candidate, toPath: outputPath)
+                return
+            }
+        }
         let result = try await shell.xcrun("simctl", arguments: ["io", udid, "screenshot", outputPath])
         guard result.succeeded else {
             throw CLIError.screenshotFailed(reason: result.stderr)
         }
+    }
+
+    /// Screen IDs of the device's built-in displays, in `simctl io enumerate`
+    /// order. Empty when the device can't be enumerated.
+    private func integratedScreenIDs(_ udid: String) async -> [String] {
+        guard let result = try? await shell.xcrun("simctl", arguments: ["io", udid, "enumerate"]),
+              result.succeeded else { return [] }
+        return Self.integratedScreenIDs(fromEnumerateOutput: result.stdout)
+    }
+
+    /// Parses `simctl io enumerate` output. Each screen is a block of
+    /// "Key: value" lines starting at "Screen ID:"; built-in displays have
+    /// "Screen Type: Integrated" (the others are TVOut, CarPlay and the
+    /// resizable scene).
+    package static func integratedScreenIDs(fromEnumerateOutput output: String) -> [String] {
+        var ids: [String] = []
+        var currentID: String?
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("Screen ID:") {
+                currentID = line.dropFirst("Screen ID:".count).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Screen Type:"), let id = currentID {
+                let type = line.dropFirst("Screen Type:".count).trimmingCharacters(in: .whitespaces)
+                if type == "Integrated", !ids.contains(id) { ids.append(id) }
+                currentID = nil
+            }
+        }
+        return ids
+    }
+
+    /// True when the image at `path` has no visible content: every pixel is
+    /// black, which is what `simctl` returns for a display that is off.
+    /// Content drawn in dark mode still has lit pixels (status bar, text),
+    /// so the threshold only has to allow for compression noise. An image
+    /// that can't be read is treated as blank.
+    package static func isBlankImage(atPath path: String) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return true }
+        // Downsample: an off display is black everywhere, so a coarse grid
+        // decides it without reading millions of pixels.
+        let side = 64
+        guard let ctx = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return true }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+        guard let data = ctx.data else { return true }
+        let bytes = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
+        for i in stride(from: 0, to: side * side * 4, by: 4) where max(bytes[i], bytes[i + 1], bytes[i + 2]) > 2 {
+            return false
+        }
+        return true
     }
 
     package func install(_ udid: String, appPath: String) async throws {

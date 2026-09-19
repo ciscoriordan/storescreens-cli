@@ -3,8 +3,18 @@ import StorescreensCore
 
 struct OutputOrganizer {
 
+    /// The size a screenshot is labeled with: the device's own, or the
+    /// image's when a two-display device (iPhone Duo) captured the display
+    /// its profile does not list. The rule lives in the core module's
+    /// organizer so both capture paths label files the same way.
+    private static func labelSize(forImageAt path: String, device: ResolvedDevice) -> AppStoreScreenSize {
+        StorescreensCore.OutputOrganizer.labelSize(forImageAt: path, device: device)
+    }
+
     /// Organize exported xcresulttool attachments into the final output structure.
-    /// Files are saved as: outputDir/[locale]/[appearance]/DevicePrefix_screenshot.png
+    /// Files are saved as: outputDir/[locale]/[appearance]/DevicePrefix_screenshot.png,
+    /// where DevicePrefix comes from each file's label size; the result is
+    /// grouped by that label.
     func organize(
         attachments: [TestAttachmentDetails],
         rawExportDir: String,
@@ -13,9 +23,8 @@ struct OutputOrganizer {
         locale: String? = nil,
         appearance: String? = nil,
         screenshotFilter: [String]?
-    ) throws -> [CaptureManifest.Screenshot] {
+    ) throws -> [LabeledScreenshots] {
         let fm = FileManager.default
-        let devicePrefix = device.appStoreSize.filenamePrefix
         let baseDir = qualifiedBaseDir(outputDir: outputDir, locale: locale, appearance: appearance)
         try fm.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
 
@@ -50,29 +59,32 @@ struct OutputOrganizer {
                 .filter { byName[$0] != nil }
         }()
 
-        var screenshots: [CaptureManifest.Screenshot] = []
+        var groups: [LabeledScreenshots] = []
         for name in orderedNames {
             guard let entry = byName[name] else { continue }
             let srcPath = (rawExportDir as NSString)
                 .appendingPathComponent(entry.attachment.exportedFileName)
             guard fm.fileExists(atPath: srcPath) else { continue }
 
+            let size = Self.labelSize(forImageAt: srcPath, device: device)
+            let devicePrefix = size.filenamePrefix
             let destFilename = "\(devicePrefix)_\(name).png"
             let destPath = (baseDir as NSString).appendingPathComponent(destFilename)
             try? fm.removeItem(atPath: destPath)
             try fm.copyItem(atPath: srcPath, toPath: destPath)
 
-            screenshots.append(CaptureManifest.Screenshot(
+            groups.append(CaptureManifest.Screenshot(
                 name: name,
                 filename: relativeFilename(devicePrefix: devicePrefix, screenshotName: name, locale: locale, appearance: appearance),
                 capturedAt: entry.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
-            ))
+            ), labeledAs: size)
         }
 
-        return screenshots
+        return groups
     }
 
-    /// Organize a simple-mode screenshot into the output structure.
+    /// Organize a simple-mode screenshot into the output structure. Returns
+    /// the screenshot and the size it is labeled with.
     func organizeSimpleScreenshot(
         sourcePath: String,
         name: String,
@@ -80,9 +92,10 @@ struct OutputOrganizer {
         device: ResolvedDevice,
         locale: String? = nil,
         appearance: String? = nil
-    ) throws -> CaptureManifest.Screenshot {
+    ) throws -> (screenshot: CaptureManifest.Screenshot, size: AppStoreScreenSize) {
         let fm = FileManager.default
-        let devicePrefix = device.appStoreSize.filenamePrefix
+        let size = Self.labelSize(forImageAt: sourcePath, device: device)
+        let devicePrefix = size.filenamePrefix
         let baseDir = qualifiedBaseDir(outputDir: outputDir, locale: locale, appearance: appearance)
         try fm.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
 
@@ -92,19 +105,21 @@ struct OutputOrganizer {
         try? fm.removeItem(atPath: destPath)
         try fm.copyItem(atPath: sourcePath, toPath: destPath)
 
-        return CaptureManifest.Screenshot(
+        let screenshot = CaptureManifest.Screenshot(
             name: name,
             filename: relativeFilename(devicePrefix: devicePrefix, screenshotName: name, locale: locale, appearance: appearance),
             capturedAt: Date()
         )
+        return (screenshot, size)
     }
 
     /// Collect screenshots written directly to the filesystem by the test code (fastlane-style).
     /// Supports both plain names ("01_Home.png") and the legacy prefixed format
-    /// ("iPhone 17 Pro Max-01_Home.png"). Modern tests are expected to write plain
+    /// ("iPhone 18 Pro Max-01_Home.png"). Modern tests are expected to write plain
     /// names into a per-simulator subdirectory (the orchestrator passes one via
     /// `screenshotsDir`), which is already namespaced. The prefix form is kept
     /// working for older test templates that prepend the simulator name.
+    /// Grouped by each file's label size, like `organize`.
     func organizeFromFilesystem(
         screenshotsDir: String,
         simulatorName: String,
@@ -113,9 +128,8 @@ struct OutputOrganizer {
         locale: String? = nil,
         appearance: String? = nil,
         screenshotFilter: [String]?
-    ) throws -> [CaptureManifest.Screenshot] {
+    ) throws -> [LabeledScreenshots] {
         let fm = FileManager.default
-        let devicePrefix = device.appStoreSize.filenamePrefix
         let baseDir = qualifiedBaseDir(outputDir: outputDir, locale: locale, appearance: appearance)
         try fm.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
 
@@ -148,24 +162,26 @@ struct OutputOrganizer {
                 .filter { fileByName[$0] != nil }
         }()
 
-        var screenshots: [CaptureManifest.Screenshot] = []
+        var groups: [LabeledScreenshots] = []
         for name in orderedNames {
             guard let filename = fileByName[name] else { continue }
             let srcPath = (screenshotsDir as NSString).appendingPathComponent(filename)
+            let size = Self.labelSize(forImageAt: srcPath, device: device)
+            let devicePrefix = size.filenamePrefix
             let destFilename = "\(devicePrefix)_\(name).png"
             let destPath = (baseDir as NSString).appendingPathComponent(destFilename)
 
             try? fm.removeItem(atPath: destPath)
             try fm.copyItem(atPath: srcPath, toPath: destPath)
 
-            screenshots.append(CaptureManifest.Screenshot(
+            groups.append(CaptureManifest.Screenshot(
                 name: name,
                 filename: relativeFilename(devicePrefix: devicePrefix, screenshotName: name, locale: locale, appearance: appearance),
                 capturedAt: Date()
-            ))
+            ), labeledAs: size)
         }
 
-        return screenshots
+        return groups
     }
 
     /// Write the final manifest.json.

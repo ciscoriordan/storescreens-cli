@@ -146,26 +146,69 @@ package struct ProjectDetector {
         sizeMap: [String: AppStoreScreenSize],
         logger: Logger
     ) {
-        let availableNames = Set(sizeMap.values.map(\.displayName))
+        for gap in Self.sizeCoverageGaps(in: Array(sizeMap.values)) {
+            logger.log(gap.message, level: gap.severity == .error ? .error : .warning)
+        }
+    }
 
-        let hasLargeIPhone = availableNames.contains("iPhone 6.9\"") ||
-                             availableNames.contains("iPhone 6.7\"")
-        if !hasLargeIPhone {
-            logger.log(
-                "No compatible simulator for iPhone 6.7\"/6.9\" - required by App Store Connect. " +
-                "Install a simulator runtime that includes iPhone 15 Pro Max, 16 Pro Max, or 17 Pro Max.",
-                level: .error
-            )
+    /// A screenshot size class the available simulators do not cover.
+    package struct SizeCoverageGap: Sendable, Equatable {
+        package enum Severity: Sendable { case error, warning }
+        /// `.error` when App Store Connect cannot take the app's screenshots
+        /// without it, `.warning` for a recommended class.
+        package let severity: Severity
+        package let message: String
+    }
+
+    /// The gaps `warnMissingRequiredSizes` logs for simulators with `sizes`,
+    /// in log order. Pure, so the check is testable without a simulator; the
+    /// CLI's copy of `ProjectDetector` calls it too.
+    package static func sizeCoverageGaps(in sizes: [AppStoreScreenSize]) -> [SizeCoverageGap] {
+        var gaps: [SizeCoverageGap] = []
+        let availableNames = Set(sizes.map(\.displayName))
+
+        // The iPhone checks go by App Store Connect display type, not by
+        // label. ScreenshotDisplayType is the source of truth for which slot
+        // a pixel size fills; the labels do not line up with those slots
+        // (iPhone Air is labeled 6.3" but App Store Connect files it in the
+        // 6.9" class), so checking labels let an Air hide a missing 6.3".
+        let iPhoneDisplayTypes = Set(sizes.filter(\.isIPhone).compactMap(\.screenshotDisplayType))
+
+        // App Store Connect requires one iPhone set: 6.9" (APP_IPHONE_67),
+        // or 6.5" (APP_IPHONE_65) when there is no 6.9" set. A machine whose
+        // largest iPhone is a 12/13 Pro Max or 14 Plus (1284x2778) only has
+        // the 6.5" class, which is accepted but not the recommended one.
+        //
+        // Xcode creates each model's simulator only for some runtimes: the
+        // iPhone 17 Pro and 17 Pro Max for iOS 26, the 18 Pro and 18 Pro Max
+        // for iOS 27. Which one a machine has depends on its runtimes.
+        let has69 = iPhoneDisplayTypes.contains("APP_IPHONE_67")
+        let has65 = iPhoneDisplayTypes.contains("APP_IPHONE_65")
+        if !has69 && !has65 {
+            gaps.append(SizeCoverageGap(
+                severity: .error,
+                message: "No compatible simulator in the iPhone 6.9\" or 6.5\" class - App Store Connect requires " +
+                    "screenshots in one of them. Install a simulator runtime that creates a 6.9\" iPhone: " +
+                    "iOS 27 runtimes create iPhone 18 Pro Max, iOS 26 runtimes iPhone 17 Pro Max, " +
+                    "older runtimes iPhone 15 or 16 Pro Max."
+            ))
+        } else if !has69 {
+            gaps.append(SizeCoverageGap(
+                severity: .warning,
+                message: "The largest compatible iPhone simulator is in the 6.5\" class. App Store Connect accepts " +
+                    "6.5\" screenshots when there are no 6.9\" ones, but a 6.9\" simulator is recommended: " +
+                    "iOS 27 runtimes create iPhone 18 Pro Max, iOS 26 runtimes iPhone 17 Pro Max."
+            ))
         }
 
-        let hasStandardIPhone = availableNames.contains("iPhone 6.1\"") ||
-                                availableNames.contains("iPhone 6.3\"")
-        if !hasStandardIPhone && hasLargeIPhone {
-            logger.log(
-                "No compatible simulator for iPhone 6.1\"/6.3\". " +
-                "Consider installing a runtime with iPhone 16 or 17 Pro for a second size class.",
-                level: .warning
-            )
+        let hasStandardIPhone = iPhoneDisplayTypes.contains("APP_IPHONE_61")
+        if !hasStandardIPhone && (has69 || has65) {
+            gaps.append(SizeCoverageGap(
+                severity: .warning,
+                message: "No compatible simulator in the iPhone 6.3\" class. " +
+                    "For a second size class, install a runtime that creates one: iOS 27 runtimes create " +
+                    "iPhone 18 Pro, iOS 26 runtimes iPhone 17 Pro."
+            ))
         }
 
         let hasAnyIPad = availableNames.contains(where: { $0.hasPrefix("iPad") })
@@ -173,13 +216,14 @@ package struct ProjectDetector {
             let hasLargeIPad = availableNames.contains("iPad Pro 13\"") ||
                                availableNames.contains("iPad Pro 12.9\"")
             if !hasLargeIPad {
-                logger.log(
-                    "No compatible simulator for iPad Pro 12.9\"/13\" - required by App Store Connect for iPad apps. " +
-                    "Install a simulator runtime that includes iPad Pro 13-inch.",
-                    level: .error
-                )
+                gaps.append(SizeCoverageGap(
+                    severity: .error,
+                    message: "No compatible simulator for iPad Pro 12.9\"/13\" - required by App Store Connect for iPad apps. " +
+                        "Install a simulator runtime that includes iPad Pro 13-inch."
+                ))
             }
         }
+        return gaps
     }
 
     /// Query xcodebuild for TARGETED_DEVICE_FAMILY and return the supported product family IDs.

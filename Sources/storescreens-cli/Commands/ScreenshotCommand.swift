@@ -8,7 +8,7 @@ struct ScreenshotCommand: AsyncParsableCommand {
         abstract: "Take a screenshot of a running simulator's current screen."
     )
 
-    @Option(name: .shortAndLong, help: "Simulator name (e.g. \"iPhone 17 Pro\").")
+    @Option(name: .shortAndLong, help: "Simulator name (e.g. \"iPhone 18 Pro\").")
     var simulator: String?
 
     @Option(name: .long, help: "Simulator UDID (alternative to --simulator).")
@@ -52,6 +52,10 @@ struct ScreenshotCommand: AsyncParsableCommand {
             if boot {
                 logger.log("Booting \(device.name)...", level: .info)
                 try await manager.boot(device.udid)
+                // `boot` returns while the Apple logo is still up; wait for the
+                // boot to finish, then give the home screen a moment to draw.
+                await manager.waitUntilBooted(device.udid)
+                try await Task.sleep(nanoseconds: 3_000_000_000)
             } else {
                 throw CLIError.simulatorBootFailed(reason: "Simulator '\(device.name)' is not booted. Pass --boot to boot it automatically.")
             }

@@ -274,7 +274,7 @@ package struct PreflightScanner {
 
             // Rule: simulator-clone-device-name
             // xcodebuild clones simulators for parallel test runs, producing names like
-            // "Clone 1 of iPhone 17 Pro Max". If the test uses SIMULATOR_DEVICE_NAME raw
+            // "Clone 1 of iPhone 18 Pro Max". If the test uses SIMULATOR_DEVICE_NAME raw
             // (without stripping the prefix), screenshots land in the wrong cache directory
             // and storescreens-cli finds 0 screenshots.
             if contents.contains("SIMULATOR_DEVICE_NAME") && !contents.contains("Clone") {

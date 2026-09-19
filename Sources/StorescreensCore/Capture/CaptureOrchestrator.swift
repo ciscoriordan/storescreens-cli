@@ -215,6 +215,11 @@ package struct CaptureOrchestrator: Sendable {
         for device in resolvedDevices {
             await eventHandler(.deviceLog(device: device.simulatorName, message: "\(device.simulatorName) -> \(device.appStoreSize.displayName)"))
         }
+        // UI-test captures name each file <label>_<testName>.png, so devices
+        // that share a label write the same files; warn, don't fail.
+        for shared in ResolvedDevice.sharedLabels(in: resolvedDevices) {
+            await eventHandler(.preflightFinding(rule: "shared-app-store-label", device: nil, message: shared.warning))
+        }
 
         // 1b. Check that the app's Supported Destinations match the configured devices.
         // xcodebuild silently uses an iPhone clone when the app doesn't support iPad,
@@ -351,7 +356,7 @@ package struct CaptureOrchestrator: Sendable {
                     await eventHandler(.phase("Running \(resolvedDevices.count) devices in parallel..."))
 
                     let allCaptures = try await withThrowingTaskGroup(
-                        of: [CaptureManifest.DeviceCapture].self
+                        of: (Int, [CaptureManifest.DeviceCapture]).self
                     ) { group in
                         for (index, device) in resolvedDevices.enumerated() {
                             // Each device gets its own DerivedData subdirectory to prevent
@@ -386,13 +391,16 @@ package struct CaptureOrchestrator: Sendable {
                                 }
                                 let count = deviceCaptures.reduce(0) { $0 + $1.screenshots.count }
                                 await eventHandler(.deviceCompleted(device: devName, count: count))
-                                return deviceCaptures
+                                return (index, deviceCaptures)
                             }
-                            _ = index
                         }
-                        var all: [CaptureManifest.DeviceCapture] = []
-                        for try await captures in group { all.append(contentsOf: captures) }
-                        return all
+                        // Tasks finish in any order; keep the manifest in config
+                        // order so "first device wins" rules downstream (submit
+                        // fills each App Store slot from the first device that
+                        // has it) do not change from one run to the next.
+                        var byIndex: [(Int, [CaptureManifest.DeviceCapture])] = []
+                        for try await result in group { byIndex.append(result) }
+                        return byIndex.sorted { $0.0 < $1.0 }.flatMap(\.1)
                     }
                     manifestDevices.append(contentsOf: allCaptures)
                 }
@@ -567,8 +575,9 @@ package struct CaptureOrchestrator: Sendable {
         // Live screenshot watcher - polls deviceScreenshotsDir for new PNGs while the test runs
         // and emits screenshotCaptured events in real time. Only active in non-TTY mode (MCP/pipe
         // context) so CLI terminal output is unchanged.
+        // The slot is each file's own label (OutputOrganizer.labelSize), so a
+        // two-display device reports the display it actually captured.
         let simulatorName = device.simulatorName
-        let appStoreSlot = device.appStoreSize.displayName
         let watchDir = deviceScreenshotsDir
         let liveWatcher: Task<Void, Never>? = isatty(STDOUT_FILENO) == 0 ? Task {
             actor Tracker { var seen = Set<String>(); func tryInsert(_ f: String) -> Bool { seen.insert(f).inserted } }
@@ -580,11 +589,12 @@ package struct CaptureOrchestrator: Sendable {
                 for filename in files.filter({ $0.hasSuffix(".png") }).sorted() {
                     guard await tracker.tryInsert(filename) else { continue }
                     let name = (filename as NSString).deletingPathExtension
+                    let path = watchDir.appendingPathComponent(filename).path
                     await eventHandler(.screenshotCaptured(
                         device: simulatorName,
-                        appStoreSlot: appStoreSlot,
+                        appStoreSlot: OutputOrganizer.labelSize(forImageAt: path, device: device).displayName,
                         name: name,
-                        path: watchDir.appendingPathComponent(filename).path
+                        path: path
                     ))
                 }
             }
@@ -605,6 +615,7 @@ package struct CaptureOrchestrator: Sendable {
         // override to each clone as it boots, for as long as tests are running.
         try await StatusBarKeeper().maintaining(
             baseName: device.simulatorName,
+            baseUDID: device.udid,
             arguments: device.isMacOS ? nil : StatusBarKeeper.arguments(for: config),
             manager: simulatorManager,
             log: logLine
@@ -737,7 +748,10 @@ package struct CaptureOrchestrator: Sendable {
         await logLine("  xcresult path: \(resultPath)")
         await logLine("  xcresult exists: \(FileManager.default.fileExists(atPath: resultPath))")
 
-        var screenshots: [CaptureManifest.Screenshot] = []
+        // Grouped by the App Store size each file is labeled with - one group
+        // unless a two-display device captured the display its profile does
+        // not list (see OutputOrganizer.labelSize).
+        var groups: [LabeledScreenshots] = []
         if xcresult && FileManager.default.fileExists(atPath: resultPath) {
             await logLine("  Extracting from xcresult...")
             let xcresultParser = XCResultParser()
@@ -749,7 +763,7 @@ package struct CaptureOrchestrator: Sendable {
                     outputPath: rawExportDir
                 )
                 await logLine("  xcresult attachments: \(attachments.count) test details")
-                screenshots = try await outputOrganizer.organize(
+                groups = try await outputOrganizer.organize(
                     attachments: attachments,
                     rawExportDir: rawExportDir,
                     outputDir: outputDir,
@@ -757,10 +771,10 @@ package struct CaptureOrchestrator: Sendable {
                     locale: locale,
                     appearance: effectiveAppearance,
                     screenshotFilter: screenshotFilter,
-                    onScreenshotSaved: { name, _ in
+                    onScreenshotSaved: { name, path in
                         await eventHandler(.screenshotCaptured(
                             device: device.simulatorName,
-                            appStoreSlot: device.appStoreSize.displayName,
+                            appStoreSlot: OutputOrganizer.labelSize(forImageAt: path, device: device).displayName,
                             name: name,
                             path: ""
                         ))
@@ -775,15 +789,15 @@ package struct CaptureOrchestrator: Sendable {
             // for each PNG as it appeared during the test run - suppress duplicates here.
             let onSaved: @Sendable (String, String) async -> Void = isatty(STDOUT_FILENO) == 0
                 ? { @Sendable _, _ in }
-                : { @Sendable name, _ in
+                : { @Sendable name, path in
                     await eventHandler(.screenshotCaptured(
                         device: device.simulatorName,
-                        appStoreSlot: device.appStoreSize.displayName,
+                        appStoreSlot: OutputOrganizer.labelSize(forImageAt: path, device: device).displayName,
                         name: name,
                         path: ""
                     ))
                 }
-            screenshots = try await outputOrganizer.organizeFromFilesystem(
+            groups = try await outputOrganizer.organizeFromFilesystem(
                 screenshotsDir: deviceScreenshotsDir.path,
                 simulatorName: device.simulatorName,
                 outputDir: outputDir,
@@ -793,14 +807,19 @@ package struct CaptureOrchestrator: Sendable {
                 screenshotFilter: screenshotFilter,
                 onScreenshotSaved: onSaved
             )
-            await logLine("  Found \(screenshots.count) screenshots via filesystem")
+            await logLine("  Found \(groups.screenshotCount) screenshots via filesystem")
         }
-        await logLine("✓ \(screenshots.count) screenshots")
+        for group in groups {
+            if let note = OutputOrganizer.relabelNote(for: group, device: device) {
+                await logLine(note)
+            }
+        }
+        await logLine("✓ \(groups.screenshotCount) screenshots")
 
         // Fail loudly if no screenshots were collected. Pick the error variant that
         // actually matches what we observed in the xcresult so the message points at
         // the right root cause, not a generic "simulator in bad state" red herring.
-        if screenshots.isEmpty {
+        if groups.screenshotCount == 0 {
             if let summary = testSummary, summary.hasFailures {
                 // Prefer the legacy assertion summaries (they include file:line); fall
                 // back to the modern summary's failureText if the legacy parse was empty.
@@ -829,13 +848,15 @@ package struct CaptureOrchestrator: Sendable {
             throw CLIError.noScreenshotsFound(device: device.simulatorName)
         }
 
-        return [CaptureManifest.DeviceCapture(
-            deviceType: device.appStoreSize.deviceTypeRawValue,
-            simulatorName: device.simulatorName,
-            locale: locale,
-            appearance: effectiveAppearance,
-            screenshots: screenshots
-        )]
+        return groups.map { group in
+            CaptureManifest.DeviceCapture(
+                deviceType: group.size.deviceTypeRawValue,
+                simulatorName: device.simulatorName,
+                locale: locale,
+                appearance: effectiveAppearance,
+                screenshots: group.screenshots
+            )
+        }
     }
 
     // MARK: - Simple Mode
@@ -876,6 +897,10 @@ package struct CaptureOrchestrator: Sendable {
         for device in resolvedDevices {
             await eventHandler(.deviceLog(device: device.simulatorName, message: "\(device.simulatorName) -> \(device.appStoreSize.displayName)"))
         }
+        // No shared-label warning here, unlike the UI-test path: simple mode
+        // names each file after the device's position in the list
+        // (screenshot_001, screenshot_002), so devices that share a label
+        // keep separate files.
 
         guard let firstDevice = resolvedDevices.first else {
             throw CLIError.noDevicesConfigured
@@ -964,7 +989,7 @@ package struct CaptureOrchestrator: Sendable {
 
                             try await simulatorManager.takeScreenshot(device.udid, outputPath: tempScreenshot)
 
-                            let screenshot = try outputOrganizer.organizeSimpleScreenshot(
+                            let (screenshot, size) = try outputOrganizer.organizeSimpleScreenshot(
                                 sourcePath: tempScreenshot,
                                 name: screenshotName,
                                 outputDir: effectiveOutputDir,
@@ -972,9 +997,13 @@ package struct CaptureOrchestrator: Sendable {
                                 locale: currentLocale,
                                 appearance: currentAppearance
                             )
+                            let labeled = LabeledScreenshots(size: size, screenshots: [screenshot])
+                            if let note = OutputOrganizer.relabelNote(for: labeled, device: device) {
+                                await eventHandler(.deviceLog(device: devName, message: note))
+                            }
 
                             manifestDevices.append(CaptureManifest.DeviceCapture(
-                                deviceType: device.appStoreSize.deviceTypeRawValue,
+                                deviceType: size.deviceTypeRawValue,
                                 simulatorName: device.simulatorName,
                                 locale: currentLocale,
                                 appearance: currentAppearance,
@@ -983,7 +1012,7 @@ package struct CaptureOrchestrator: Sendable {
 
                             await eventHandler(.screenshotCaptured(
                                 device: devName,
-                                appStoreSlot: device.appStoreSize.displayName,
+                                appStoreSlot: size.displayName,
                                 name: screenshotName,
                                 path: screenshot.filename
                             ))

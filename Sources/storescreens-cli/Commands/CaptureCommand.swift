@@ -283,6 +283,11 @@ struct CaptureCommand: AsyncParsableCommand {
         for device in resolvedDevices {
             logger.log("\(device.simulatorName) -> \(device.appStoreSize.displayName)", level: .success)
         }
+        // UI-test captures name each file <label>_<testName>.png, so devices
+        // that share a label write the same files; warn, don't fail.
+        for shared in ResolvedDevice.sharedLabels(in: resolvedDevices) {
+            logger.log(shared.warning, level: .warning)
+        }
 
         // Clean up stale xcodebuild clones left by a previous (possibly killed)
         // run. A leftover clone tearing down while this run's clone installs its
@@ -461,7 +466,7 @@ struct CaptureCommand: AsyncParsableCommand {
                         : nil
                     panel?.start()
                     let allCaptures = try await withThrowingTaskGroup(
-                        of: [CaptureManifest.DeviceCapture].self
+                        of: (Int, [CaptureManifest.DeviceCapture]).self
                     ) { group in
                         for (index, device) in resolvedDevices.enumerated() {
                             group.addTask {
@@ -507,12 +512,16 @@ struct CaptureCommand: AsyncParsableCommand {
                                     )
                                     deviceCaptures.append(contentsOf: captures)
                                 }
-                                return deviceCaptures
+                                return (index, deviceCaptures)
                             }
                         }
-                        var all: [CaptureManifest.DeviceCapture] = []
-                        for try await captures in group { all.append(contentsOf: captures) }
-                        return all
+                        // Tasks finish in any order; keep the manifest in config
+                        // order so "first device wins" rules downstream (submit
+                        // fills each App Store slot from the first device that
+                        // has it) do not change from one run to the next.
+                        var byIndex: [(Int, [CaptureManifest.DeviceCapture])] = []
+                        for try await result in group { byIndex.append(result) }
+                        return byIndex.sorted { $0.0 < $1.0 }.flatMap(\.1)
                     }
                     panel?.finalize()
                     manifestDevices.append(contentsOf: allCaptures)
@@ -690,6 +699,7 @@ struct CaptureCommand: AsyncParsableCommand {
         // override to each clone as it boots, for as long as tests are running.
         try await StatusBarKeeper().maintaining(
             baseName: device.simulatorName,
+            baseUDID: device.udid,
             arguments: device.isMacOS ? nil : StatusBarKeeper.arguments(for: config),
             manager: simulatorManager,
             log: { message in logLine(message) }
@@ -805,8 +815,11 @@ struct CaptureCommand: AsyncParsableCommand {
         logLine("  xcresult path: \(resultPath)")
         logLine("  xcresult exists: \(FileManager.default.fileExists(atPath: resultPath))")
 
-        // Extract screenshots - filesystem (default) or xcresult (--xcresult flag)
-        var screenshots: [CaptureManifest.Screenshot] = []
+        // Extract screenshots - filesystem (default) or xcresult (--xcresult flag).
+        // Grouped by the App Store size each file is labeled with - one group
+        // unless a two-display device captured the display its profile does
+        // not list (see OutputOrganizer.labelSize in the core module).
+        var groups: [LabeledScreenshots] = []
         if xcresult && FileManager.default.fileExists(atPath: resultPath) {
             // xcresult mode: extract named attachments from the .xcresult bundle
             logLine("  Extracting from xcresult...")
@@ -824,7 +837,7 @@ struct CaptureCommand: AsyncParsableCommand {
                         logLine("      → \(att.suggestedHumanReadableName) [\(att.exportedFileName)]")
                     }
                 }
-                screenshots = try outputOrganizer.organize(
+                groups = try outputOrganizer.organize(
                     attachments: attachments,
                     rawExportDir: rawExportDir,
                     outputDir: outputDir,
@@ -838,7 +851,7 @@ struct CaptureCommand: AsyncParsableCommand {
             }
         } else {
             // Filesystem mode (default): collect PNGs written directly by the test
-            screenshots = try outputOrganizer.organizeFromFilesystem(
+            groups = try outputOrganizer.organizeFromFilesystem(
                 screenshotsDir: deviceScreenshotsDir.path,
                 simulatorName: device.simulatorName,
                 outputDir: outputDir,
@@ -847,12 +860,17 @@ struct CaptureCommand: AsyncParsableCommand {
                 appearance: effectiveAppearance,
                 screenshotFilter: screenshotFilter
             )
-            logLine("  Found \(screenshots.count) screenshots via filesystem")
+            logLine("  Found \(groups.screenshotCount) screenshots via filesystem")
+        }
+        for group in groups {
+            if let note = StorescreensCore.OutputOrganizer.relabelNote(for: group, device: device) {
+                logLine(note)
+            }
         }
         // Fail loudly if no screenshots were captured, and make the message match reality:
         // if the xcresult shows test failures, name them; if all tests passed, point at
         // the breadcrumb mechanism; otherwise fall back to the generic simulator-state hint.
-        if screenshots.isEmpty {
+        if groups.screenshotCount == 0 {
             if let summary = testSummary, summary.hasFailures {
                 let detailed = legacyFailureSummaries.isEmpty
                     ? summary.failures.map { failure -> String in
@@ -878,24 +896,26 @@ struct CaptureCommand: AsyncParsableCommand {
             }
             throw CLIError.noScreenshotsFound(device: device.simulatorName)
         }
-        logLine("✓ \(screenshots.count) screenshots")
+        logLine("✓ \(groups.screenshotCount) screenshots")
 
         // In per-slide mode each shot carries its own appearance so the
         // renderer + submit can pick the right `{ light:, dark: }` variant
         // even though the DeviceCapture's appearance field is nil (flat
         // output layout).
-        let stampedScreenshots: [CaptureManifest.Screenshot] = perSlideAppearance.map { app in
-            screenshots.map {
-                CaptureManifest.Screenshot(name: $0.name, filename: $0.filename, capturedAt: $0.capturedAt, appearance: app)
-            }
-        } ?? screenshots
-        return [CaptureManifest.DeviceCapture(
-            deviceType: device.appStoreSize.deviceTypeRawValue,
-            simulatorName: device.simulatorName,
-            locale: locale,
-            appearance: effectiveAppearance,
-            screenshots: stampedScreenshots
-        )]
+        return groups.map { group in
+            let stampedScreenshots: [CaptureManifest.Screenshot] = perSlideAppearance.map { app in
+                group.screenshots.map {
+                    CaptureManifest.Screenshot(name: $0.name, filename: $0.filename, capturedAt: $0.capturedAt, appearance: app)
+                }
+            } ?? group.screenshots
+            return CaptureManifest.DeviceCapture(
+                deviceType: group.size.deviceTypeRawValue,
+                simulatorName: device.simulatorName,
+                locale: locale,
+                appearance: effectiveAppearance,
+                screenshots: stampedScreenshots
+            )
+        }
     }
 
     // MARK: - Simple Mode
@@ -952,6 +972,10 @@ struct CaptureCommand: AsyncParsableCommand {
         for device in resolvedDevices {
             logger.log("\(device.simulatorName) -> \(device.appStoreSize.displayName)", level: .success)
         }
+        // No shared-label warning here, unlike the UI-test path: simple mode
+        // names each file after the device's position in the list
+        // (screenshot_001, screenshot_002), so devices that share a label
+        // keep separate files.
 
         let outputDir = (config.outputDir as NSString).expandingTildeInPath
         let historyManager = RunHistoryManager(
@@ -1056,7 +1080,7 @@ struct CaptureCommand: AsyncParsableCommand {
 
                             try await simulatorManager.takeScreenshot(device.udid, outputPath: tempScreenshot)
 
-                            let screenshot = try outputOrganizer.organizeSimpleScreenshot(
+                            let (screenshot, size) = try outputOrganizer.organizeSimpleScreenshot(
                                 sourcePath: tempScreenshot,
                                 name: screenshotName,
                                 outputDir: effectiveOutputDir,
@@ -1064,9 +1088,13 @@ struct CaptureCommand: AsyncParsableCommand {
                                 locale: currentLocale,
                                 appearance: effectiveAppearance
                             )
+                            let labeled = LabeledScreenshots(size: size, screenshots: [screenshot])
+                            if let note = StorescreensCore.OutputOrganizer.relabelNote(for: labeled, device: device) {
+                                logger.log(note, level: .info)
+                            }
 
                             manifestDevices.append(CaptureManifest.DeviceCapture(
-                                deviceType: device.appStoreSize.deviceTypeRawValue,
+                                deviceType: size.deviceTypeRawValue,
                                 simulatorName: device.simulatorName,
                                 locale: currentLocale,
                                 appearance: effectiveAppearance,
@@ -1204,9 +1232,9 @@ struct CaptureCommand: AsyncParsableCommand {
 /// Screen layout during run (tailLines=20, N=2 devices):
 ///
 ///   (blank line)
-///   ── [iPhone 17 Pro] ────────────────────────
-///   ▸ [iPhone 17 Pro] [3/11] Statistics
-///   ▸ [iPhone 17 Pro] Switched to Settings tab
+///   ── [iPhone 18 Pro] ────────────────────────
+///   ▸ [iPhone 18 Pro] [3/11] Statistics
+///   ▸ [iPhone 18 Pro] Switched to Settings tab
 ///   ... (up to 20 lines, older lines scroll off)
 ///   ── [iPad Pro 13-inch (M5)] ────────────────
 ///   ▸ [iPad Pro 13-inch (M5)] [2/11] CountryPicker

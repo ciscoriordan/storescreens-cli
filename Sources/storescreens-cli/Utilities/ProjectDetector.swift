@@ -136,43 +136,14 @@ struct ProjectDetector {
     }
 
     /// Check that compatible simulators cover all required App Store screenshot sizes.
+    /// The check itself is the core module's `ProjectDetector.sizeCoverageGaps`,
+    /// shared so the two copies cannot drift apart.
     func warnMissingRequiredSizes(
         sizeMap: [String: AppStoreScreenSize],
         logger: Logger
     ) {
-        let availableNames = Set(sizeMap.values.map(\.displayName))
-
-        let hasLargeIPhone = availableNames.contains("iPhone 6.9\"") ||
-                             availableNames.contains("iPhone 6.7\"")
-        if !hasLargeIPhone {
-            logger.log(
-                "No compatible simulator for iPhone 6.7\"/6.9\" - required by App Store Connect. " +
-                "Install a simulator runtime that includes iPhone 15 Pro Max, 16 Pro Max, or 17 Pro Max.",
-                level: .error
-            )
-        }
-
-        let hasStandardIPhone = availableNames.contains("iPhone 6.1\"") ||
-                                availableNames.contains("iPhone 6.3\"")
-        if !hasStandardIPhone && hasLargeIPhone {
-            logger.log(
-                "No compatible simulator for iPhone 6.1\"/6.3\". " +
-                "Consider installing a runtime with iPhone 16 or 17 Pro for a second size class.",
-                level: .warning
-            )
-        }
-
-        let hasAnyIPad = availableNames.contains(where: { $0.hasPrefix("iPad") })
-        if hasAnyIPad {
-            let hasLargeIPad = availableNames.contains("iPad Pro 13\"") ||
-                               availableNames.contains("iPad Pro 12.9\"")
-            if !hasLargeIPad {
-                logger.log(
-                    "No compatible simulator for iPad Pro 12.9\"/13\" - required by App Store Connect for iPad apps. " +
-                    "Install a simulator runtime that includes iPad Pro 13-inch.",
-                    level: .error
-                )
-            }
+        for gap in StorescreensCore.ProjectDetector.sizeCoverageGaps(in: Array(sizeMap.values)) {
+            logger.log(gap.message, level: gap.severity == .error ? .error : .warning)
         }
     }
 

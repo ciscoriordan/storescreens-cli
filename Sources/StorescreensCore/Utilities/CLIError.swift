@@ -53,6 +53,26 @@ package enum CLIError: LocalizedError {
     case uploadFailed(output: String)
     case versionProbeFailed(reason: String)
 
+    /// Why a simulator the config names can be missing on a machine that has
+    /// Xcode, for the models where the answer is not obvious. Xcode creates
+    /// each model's simulators only for some runtimes, and the iPhone Duo
+    /// simulator ships only with a later Xcode than the other 2026 models.
+    private static func simulatorNotFoundHint(for name: String) -> String? {
+        if name.hasPrefix("iPhone Duo") {
+            return "The iPhone Duo simulator needs Xcode 27.1 beta or later, selected with xcode-select -s "
+                + "or DEVELOPER_DIR, and its iPhone Duo Simulator runtime installed."
+        }
+        if name.hasPrefix("iPhone 17 Pro") {
+            return "Xcode creates iPhone 17 Pro and 17 Pro Max simulators only for iOS 26 runtimes. "
+                + "With only iOS 27 runtimes installed, use iPhone 18 Pro or 18 Pro Max, which have the same screen sizes."
+        }
+        if name.hasPrefix("iPhone 18 Pro") {
+            return "iPhone 18 Pro and 18 Pro Max simulators need Xcode 27 or later and are created only for iOS 27 runtimes. "
+                + "With only iOS 26 runtimes installed, use iPhone 17 Pro or 17 Pro Max, which have the same screen sizes."
+        }
+        return nil
+    }
+
     private func familyName(_ id: Int) -> String {
         switch id {
         case 1: return "iPhone"
@@ -68,9 +88,12 @@ package enum CLIError: LocalizedError {
         case .xcrunFailed(let msg):
             return "xcrun failed: \(msg)"
         case .simulatorNotFound(let name):
-            return "Simulator '\(name)' not found. Run 'storescreens list' to see available simulators."
+            let message = "Simulator '\(name)' not found. Run 'storescreens list' to see available simulators."
+            return Self.simulatorNotFoundHint(for: name).map { "\(message) \($0)" } ?? message
         case .noMatchingDeviceSize(let name):
-            return "Could not determine App Store size for '\(name)'. Specify 'size:' explicitly in config."
+            return "Could not determine App Store size for '\(name)': its screen size could not be read from "
+                + "its CoreSimulator device type, or it is not an iPhone, iPad, or Apple Watch simulator. "
+                + "Check that the selected Xcode lists its device type (xcrun simctl list devicetypes)."
         case .simulatorBootFailed(let reason):
             return "Failed to boot simulator: \(reason)"
         case .simulatorShutdownFailed(let reason):
