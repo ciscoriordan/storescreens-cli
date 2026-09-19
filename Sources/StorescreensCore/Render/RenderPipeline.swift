@@ -298,7 +298,8 @@ package struct RenderPipeline {
                 reservedHeight: initialCaptionBandH,
                 blockWidth: captionBlockWidth,
                 spacing: captionSpacing,
-                middleSlotHeight: middleSlotH
+                middleSlotHeight: middleSlotH,
+                language: locale
             )
             for w in out.warnings { warnings.append("[\(slideName)] \(w.message)") }
             captionLayout = out

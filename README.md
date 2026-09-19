@@ -1275,6 +1275,15 @@ render:
 
 When the current render's locale matches a key, that entry replaces the slide's `caption:` for that pass. Locales absent from the map fall back to the slide's default caption. This is distinct from the `locale_overrides:` on caption roles documented above: `locale_overrides` swaps font/weight/color for the whole role across all slides; `caption_locales` swaps the actual title text on a single slide.
 
+Each caption is tagged with its locale when it is rendered, so glyphs the caption font lacks come from a fallback font for that language. This matters for Chinese, Japanese and Korean with the `system` font: Han characters are drawn differently in Japanese and in each Chinese script, and without the tag the fallback would follow the language of the Mac doing the rendering. A `caption_locales` value can also be an array of lines, like `caption:`, which is the way to place line breaks in Chinese and Japanese, where a line may otherwise break between any two characters:
+
+```yaml
+      caption_locales:
+        zh-Hant: ["符號可先選，", "也可後加"]
+```
+
+Locales with a script subtag (`zh-Hans`, `zh-Hant`, `sr-Latn`) are passed to the simulator whole as the test language, with no region.
+
 ## App Store search preview
 
 `storescreens search-preview` renders faithful iPhone App Store mockups so you can see how the app will read in search results - and on its detail page - before you ship. SF Pro throughout, drawn natively in Swift Core Graphics. Two modes:

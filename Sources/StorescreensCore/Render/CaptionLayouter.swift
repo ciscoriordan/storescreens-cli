@@ -207,7 +207,8 @@ package struct CaptionLayouter {
         reservedHeight: CGFloat,
         blockWidth: CGFloat,
         spacing: CGFloat,
-        middleSlotHeight: CGFloat = 0
+        middleSlotHeight: CGFloat = 0,
+        language: String? = nil
     ) throws -> Output {
 
         // If nothing to render, return empty output.
@@ -236,10 +237,10 @@ package struct CaptionLayouter {
             let sRole = scaled(subtitleResolved, ratio: ratio)
 
             let titleAttr = try title.map {
-                try buildAttr(text: $0, role: tRole, highlights: highlights)
+                try buildAttr(text: $0, role: tRole, highlights: highlights, language: language)
             }
             let subtitleAttr = try subtitle.map {
-                try buildAttr(text: $0, role: sRole, highlights: highlights)
+                try buildAttr(text: $0, role: sRole, highlights: highlights, language: language)
             }
 
             let titleMeasure = titleAttr.map {
@@ -452,7 +453,8 @@ package struct CaptionLayouter {
     private func buildAttr(
         text: CaptionText,
         role: ResolvedRole,
-        highlights: [CaptionHighlight]
+        highlights: [CaptionHighlight],
+        language: String? = nil
     ) throws -> NSAttributedString {
         // Join array lines with newlines; framesetter will respect them when
         // we set paragraph style to no-wrap for strict mode.
@@ -472,6 +474,19 @@ package struct CaptionLayouter {
         paragraph.alignment = nsTextAlignment(from: role.align)
         paragraph.lineBreakMode = text.isStrictLines ? .byClipping : .byWordWrapping
         mutable.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: mutable.length))
+        // Tag the text with the slide's language. Han characters are shared
+        // by Japanese and both Chinese scripts but drawn differently in each,
+        // and when the caption font (SF Pro for `system`) has no glyph, Core
+        // Text picks the fallback font from this attribute; without it the
+        // choice follows the rendering Mac's own language, so a Japanese
+        // caption rendered on an English Mac comes out with Chinese forms.
+        if let language, !language.isEmpty {
+            mutable.addAttribute(
+                NSAttributedString.Key(kCTLanguageAttributeName as String),
+                value: language,
+                range: NSRange(location: 0, length: mutable.length)
+            )
+        }
 
         return try MarkdownAttributor.applyHighlights(mutable, role: style, highlights: highlights, resolver: resolver)
     }

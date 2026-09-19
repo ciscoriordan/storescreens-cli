@@ -122,9 +122,14 @@ package struct MetadataPrecheck {
     ]
 
     static let placeholders: [String] = [
-        "lorem ipsum", "todo", "fixme", "tbd",
-        "insert text here", "your app name here", "placeholder",
+        "lorem ipsum", "insert text here", "your app name here", "placeholder",
     ]
+
+    /// Developer markers, matched in capitals only. Lowercase "todo" is an
+    /// ordinary word in Portuguese and Spanish ("são oito ao todo", "todo el
+    /// texto"), so a case-insensitive match flagged correct copy as an
+    /// App Review error.
+    static let placeholderMarkers: [String] = ["TODO", "FIXME", "TBD"]
 
     static let futureFunctionality: [String] = [
         "coming soon", "in a future update", "in a future release",
@@ -235,6 +240,10 @@ package struct MetadataPrecheck {
             Self.placeholders, in: lines, file: file, locale: locale,
             severity: .error, rule: "placeholder-text"
         ) { "contains placeholder text \"\($0)\"" })
+        findings.append(contentsOf: matchAll(
+            Self.placeholderMarkers, in: lines, file: file, locale: locale,
+            severity: .error, rule: "placeholder-text", caseSensitive: true
+        ) { "contains placeholder text \"\($0)\"" })
 
         findings.append(contentsOf: matchAll(
             Self.profanity, in: lines, file: file, locale: locale,
@@ -273,11 +282,12 @@ package struct MetadataPrecheck {
         locale: String,
         severity: Severity,
         rule: String,
+        caseSensitive: Bool = false,
         message: (String) -> String
     ) -> [Finding] {
         var findings: [Finding] = []
         for needle in needles {
-            guard let hit = firstMatch(of: needle, in: lines) else { continue }
+            guard let hit = firstMatch(of: needle, in: lines, caseSensitive: caseSensitive) else { continue }
             findings.append(Finding(
                 severity: severity,
                 rule: rule,
@@ -291,7 +301,7 @@ package struct MetadataPrecheck {
         return findings
     }
 
-    private func firstMatch(of needle: String, in lines: [String]) -> (line: Int, excerpt: String)? {
+    private func firstMatch(of needle: String, in lines: [String], caseSensitive: Bool = false) -> (line: Int, excerpt: String)? {
         // Latin-letter lookarounds rather than `\b`. Every needle here is
         // Latin script, and `\b` needs a *non-word* character on each side,
         // which unspaced scripts never provide: "Androidにもあります" would
@@ -302,7 +312,7 @@ package struct MetadataPrecheck {
         let pattern = "(?<!\(boundary))"
             + NSRegularExpression.escapedPattern(for: needle)
             + "(?!\(boundary))"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: caseSensitive ? [] : [.caseInsensitive]) else {
             return nil
         }
         for (index, line) in lines.enumerated() {

@@ -320,7 +320,7 @@ package struct CaptureOrchestrator: Sendable {
                     await eventHandler(.phase("Locale: \(loc)"))
                 }
 
-                let (testLanguage, testRegion) = parseLocale(currentLocale)
+                let (testLanguage, testRegion) = Self.parseLocale(currentLocale)
 
                 if noParallel {
                     // Sequential: one device at a time, outer appearance loop
@@ -1187,9 +1187,16 @@ package struct CaptureOrchestrator: Sendable {
 
     /// Parse a locale string into (language, region).
     /// "en-US" → ("en", "US"), "ja" → ("ja", nil), "zh-Hans-CN" → ("zh-Hans", "CN")
-    private func parseLocale(_ locale: String?) -> (language: String?, region: String?) {
+    package static func parseLocale(_ locale: String?) -> (language: String?, region: String?) {
         guard let locale else { return (nil, nil) }
         let parts = locale.split(separator: "-")
+        // A four-letter final subtag is a script, not a region: zh-Hans,
+        // zh-Hant, sr-Latn. Splitting it off would pass "zh" as the language
+        // and "Hans" as a region, which is not one, and a Traditional Chinese
+        // capture would run in whatever Chinese "zh" resolves to.
+        if parts.count >= 2, let last = parts.last, last.count == 4, last.allSatisfy(\.isLetter) {
+            return (locale, nil)
+        }
         if parts.count >= 2 {
             let region = String(parts.last!)
             let language = parts.dropLast().joined(separator: "-")

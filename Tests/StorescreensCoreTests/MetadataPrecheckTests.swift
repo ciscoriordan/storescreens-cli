@@ -97,6 +97,18 @@ final class MetadataPrecheckTests: XCTestCase {
         XCTAssertTrue(hits.allSatisfy { $0.severity == .error })
     }
 
+    func testPlaceholder_ignoresTodoAsAPortugueseOrSpanishWord() throws {
+        try write("São oito ao todo, todas com duas letras.", to: "description.txt")
+        try write("Todo el texto, con todos los acentos.", to: "promotional_text.txt")
+        XCTAssertTrue(findings(rule: "placeholder-text").isEmpty)
+    }
+
+    func testPlaceholder_stillFlagsCapitalMarkers() throws {
+        try write("FIXME before release", to: "description.txt")
+        try write("Price TBD", to: "promotional_text.txt")
+        XCTAssertEqual(findings(rule: "placeholder-text").count, 2)
+    }
+
     func testPlaceholder_doesNotFireOnCleanCopy() throws {
         try write("A careful reader for ancient Greek texts.", to: "description.txt")
         XCTAssertTrue(findings(rule: "placeholder-text").isEmpty)
