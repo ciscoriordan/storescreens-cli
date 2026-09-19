@@ -339,21 +339,20 @@ package struct ChromeRenderer {
             ctx.restoreGState()
         }
 
-        // 1. Draw screenshot inside the Screen rect, clipped to a rounded
-        //    rect so its corners don't poke past the bezel's rounded display
-        //    cut-out. Radius is device-class-derived in native px.
-        let screenCornerRadius = bezelScreenCornerRadius(
+        // 1. Draw screenshot inside the Screen rect, clipped to the display
+        //    outline so its corners don't poke past the bezel's display
+        //    cut-out. The shape is picked from the bezel's native screen
+        //    size (the same one the export punched) and scaled onto the
+        //    placed rect. Camera discs are left out of the clip: the
+        //    bezel's opaque camera artwork is drawn on top, and its
+        //    antialiased rim should blend into the screenshot, not the
+        //    background.
+        let shape = DisplayShape.forScreen(
             productFamily: productFamily,
-            screenRect: screenInBezel
+            size: CGSize(width: metadata.screenWidth, height: metadata.screenHeight)
         )
         ctx.saveGState()
-        let screenClipPath = CGPath(
-            roundedRect: screenInBezel,
-            cornerWidth: screenCornerRadius,
-            cornerHeight: screenCornerRadius,
-            transform: nil
-        )
-        ctx.addPath(screenClipPath)
+        ctx.addPath(shape.outlinePath(in: screenInBezel, yUp: true))
         ctx.clip()
         drawImage(screenshotImg, in: screenInBezel, ctx: ctx)
         ctx.restoreGState()
@@ -387,13 +386,6 @@ package struct ChromeRenderer {
         tmp.setFillColor(NSColor.black.cgColor)
         tmp.fill(rect)
         return tmp.makeImage()
-    }
-
-    /// Device-display corner radius in screen-pixel units. Delegates to the
-    /// shared table in `BezelExporter` so the screenshot's rounded clip and
-    /// the bezel's screen hole line up exactly.
-    private func bezelScreenCornerRadius(productFamily: Int, screenRect: CGRect) -> CGFloat {
-        BezelExporter.deviceScreenCornerRadius(productFamily: productFamily, screenSize: screenRect.size)
     }
 
     // MARK: - helpers

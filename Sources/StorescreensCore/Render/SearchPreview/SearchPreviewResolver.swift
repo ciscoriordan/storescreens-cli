@@ -402,6 +402,10 @@ package struct SearchPreviewResolver {
     /// Curated mapping. Friendly App Store size names map to the canonical
     /// pixel dimensions Apple expects in screenshots; common product names
     /// alias to the same canvas so YAML can read naturally.
+    ///
+    /// The iPhone Duo is deliberately absent: how the App Store lays out
+    /// search results and product pages on a foldable is unknown, so a
+    /// request for it takes the unknown-name fallback and its warning.
     private static let deviceCanvases: [String: DeviceCanvas] = {
         let proMaxBig = DeviceCanvas(
             canvasSize: CGSize(width: 1290, height: 2796),
@@ -431,6 +435,7 @@ package struct SearchPreviewResolver {
         return [
             "iPhone 6.9\"":       proMaxBig,
             "iPhone 6.9":         proMaxBig,
+            "iPhone 18 Pro Max":  proMaxBig,
             "iPhone 17 Pro Max":  proMaxBig,
             "iPhone 16 Pro Max":  proMaxBig,
             "iPhone 15 Pro Max":  proMaxBig,
@@ -440,6 +445,7 @@ package struct SearchPreviewResolver {
             "iPhone 15 Plus":     plus,
             "iPhone 6.3\"":       pro,
             "iPhone 6.3":         pro,
+            "iPhone 18 Pro":      pro,
             "iPhone 17 Pro":      pro,
             "iPhone 16 Pro":      pro,
             "iPhone 6.1\"":       standard,
@@ -518,18 +524,21 @@ package struct SearchPreviewResolver {
 
     /// Pick the manifest's iPhone capture closest to the App Store hero
     /// (preferring 6.9" / Pro Max, then 6.7", then any iPhone). Locale
-    /// filter is applied first when present.
+    /// filter is applied first when present. iPhone Duo captures are never
+    /// picked: the preview draws the App Store page of a phone that does not
+    /// fold, and the Duo's squat screenshots do not fit its tiles.
     static func preferredIPhoneCapture(
         manifest: CaptureManifest?,
         locale: String?
     ) -> CaptureManifest.DeviceCapture? {
         guard let manifest else { return nil }
-        let pool: [CaptureManifest.DeviceCapture] = manifest.devices.filter { dev in
+        let candidates = manifest.devices.filter { !isIPhoneDuoCapture($0) }
+        let pool: [CaptureManifest.DeviceCapture] = candidates.filter { dev in
             if let locale, let captureLocale = dev.locale, captureLocale != locale { return false }
             let lower = dev.deviceType.lowercased()
             return lower.contains("iphone") || lower.contains("phone")
         }
-        if pool.isEmpty { return manifest.devices.first }
+        if pool.isEmpty { return candidates.first }
 
         let priorities: [(String) -> Bool] = [
             { $0.lowercased().contains("6.9") || $0.lowercased().contains("pro max") },
@@ -544,6 +553,19 @@ package struct SearchPreviewResolver {
             }
         }
         return pool.first
+    }
+
+    /// Recognizes an iPhone Duo capture by its simulator or device-type name
+    /// ("iPhone Duo", "iPhone Duo outer display"), or by either display's
+    /// pixel size in an auto-generated device-type name
+    /// ("iPhone 1398x2034").
+    static func isIPhoneDuoCapture(_ capture: CaptureManifest.DeviceCapture) -> Bool {
+        let names = [capture.simulatorName, capture.deviceType].map { $0.lowercased() }
+        if names.contains(where: { $0.range(of: #"\bduo\b"#, options: .regularExpression) != nil }) {
+            return true
+        }
+        let duoSizes = ["1398x2034", "2034x1398", "2007x2853", "2853x2007"]
+        return duoSizes.contains { size in capture.deviceType.contains(size) }
     }
 
     /// Hand-curated mapping for the well-known App Store categories so the

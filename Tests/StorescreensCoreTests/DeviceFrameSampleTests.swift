@@ -6,15 +6,19 @@ import AppKit
 @testable import StorescreensCore
 
 /// Renders a gallery of `chrome.style: device` samples - one per cutout
-/// shape, colorway, and orientation - so the drawn frame can be eyeballed
-/// after geometry or palette changes.
+/// shape, colorway, and orientation, plus both iPhone Duo displays in both
+/// orientations - so the drawn frame can be eyeballed after geometry or
+/// palette changes.
 ///
 /// Skipped by default. To render:
 ///
 ///     STORESCREENS_WRITE_DEVICE_SAMPLES=1 swift test --filter DeviceFrameSampleTests
 ///
 /// Output goes to `STORESCREENS_DEVICE_SAMPLES_DIR` if set, else a fresh
-/// temp directory (path printed at the end).
+/// temp directory (path printed at the end). Next to each rendered
+/// screenshot, `<name>-frame.png` shows the whole device on a transparent
+/// background, for side-by-side comparison with Apple's bezel artwork (the
+/// rendered screenshot lets the device bleed off the bottom).
 final class DeviceFrameSampleTests: XCTestCase {
 
     private struct Sample {
@@ -44,10 +48,10 @@ final class DeviceFrameSampleTests: XCTestCase {
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         let samples: [Sample] = [
-            Sample(name: "island-dark", width: 1206, height: 2622, deviceType: "iPhone 6.9\"",
+            Sample(name: "island-dark", width: 1206, height: 2622, deviceType: "iPhone 6.3\"",
                    colorway: .dark, darkUI: false, background: ["#1a1d29", "#0b0d14"],
                    darkBackground: true, title: "Dynamic Island, dark band"),
-            Sample(name: "island-silver", width: 1206, height: 2622, deviceType: "iPhone 6.9\"",
+            Sample(name: "island-silver", width: 1206, height: 2622, deviceType: "iPhone 6.3\"",
                    colorway: .silver, darkUI: false, background: ["#f5f1ea"],
                    darkBackground: false, title: "Dynamic Island, silver band"),
             Sample(name: "island-natural", width: 1320, height: 2868, deviceType: "iPhone 6.9\"",
@@ -62,9 +66,21 @@ final class DeviceFrameSampleTests: XCTestCase {
             Sample(name: "ipad-silver", width: 2064, height: 2752, deviceType: "iPad 13\"",
                    colorway: .silver, darkUI: false, background: ["#e8e4dc"],
                    darkBackground: false, title: "iPad, uniform border"),
-            Sample(name: "landscape-dark", width: 2622, height: 1206, deviceType: "iPhone 6.9\"",
+            Sample(name: "landscape-dark", width: 2622, height: 1206, deviceType: "iPhone 6.3\"",
                    colorway: .dark, darkUI: true, background: ["#101318", "#1c2028"],
                    darkBackground: true, title: "Landscape island"),
+            Sample(name: "duo-outer-dark", width: 1398, height: 2034, deviceType: "iPhone Duo outer",
+                   colorway: .dark, darkUI: false, background: ["#1a1d29", "#0b0d14"],
+                   darkBackground: true, title: "iPhone Duo, closed"),
+            Sample(name: "duo-outer-landscape-silver", width: 2034, height: 1398, deviceType: "iPhone Duo outer",
+                   colorway: .silver, darkUI: false, background: ["#eef2f5"],
+                   darkBackground: false, title: "iPhone Duo, closed, landscape"),
+            Sample(name: "duo-inner-natural", width: 2007, height: 2853, deviceType: "iPhone Duo inner",
+                   colorway: .natural, darkUI: false, background: ["#eee6d8", "#d9cbb4"],
+                   darkBackground: false, title: "iPhone Duo, open"),
+            Sample(name: "duo-inner-landscape-dark", width: 2853, height: 2007, deviceType: "iPhone Duo inner",
+                   colorway: .dark, darkUI: true, background: ["#101318", "#1c2028"],
+                   darkBackground: true, title: "iPhone Duo, open, landscape"),
         ]
 
         let workRoot = FileManager.default.temporaryDirectory
@@ -129,9 +145,40 @@ final class DeviceFrameSampleTests: XCTestCase {
                 try FileManager.default.removeItem(at: dest)
             }
             try FileManager.default.copyItem(at: rendered, to: dest)
+
+            try writeFrameOnly(
+                sample: sample,
+                screenshot: capturedRoot.appendingPathComponent(filename),
+                to: outDir.appendingPathComponent("\(sample.name)-frame.png")
+            )
         }
 
         print("Rendered \(samples.count) device frame samples in \(outDir.path)")
+    }
+
+    /// The drawn device alone, scaled so its long side is 1000 px.
+    private func writeFrameOnly(sample: Sample, screenshot: URL, to url: URL) throws {
+        let spec = try XCTUnwrap(DeviceFrame.spec(
+            productFamily: RenderPipeline.productFamilyFromDeviceType(sample.deviceType),
+            screenshotPixelSize: CGSize(width: sample.width, height: sample.height)
+        ))
+        let scale = 1000 / max(spec.canvasWidth, spec.canvasHeight)
+        let width = Int((spec.canvasWidth * scale).rounded())
+        let height = Int((spec.canvasHeight * scale).rounded())
+        let ctx = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(screenshot as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        DeviceFrame.draw(
+            spec: spec, colorway: sample.colorway, screenshot: image, shadow: false,
+            into: ctx, targetRect: CGRect(x: 0, y: 0, width: width, height: height)
+        )
+        let dest = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, try XCTUnwrap(ctx.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(dest))
     }
 
     /// Synthetic app UI - status-bar strip, header card, and list rows -

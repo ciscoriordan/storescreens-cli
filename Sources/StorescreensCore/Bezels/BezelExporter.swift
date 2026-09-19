@@ -5,8 +5,9 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// Rasterizes a source PSD (flattened by AppKit's PSD codec), punches a
-/// transparent rect where the Screen layer sits, and writes the result to the
-/// user-global bezels directory as a PNG plus a `.json` sidecar.
+/// transparent display-shaped hole where the Screen layer sits, and writes
+/// the result to the user-global bezels directory as a PNG plus a `.json`
+/// sidecar.
 ///
 /// Called once per winner selected by `BezelImporter.selectWinners`.
 package enum BezelExporter {
@@ -84,23 +85,17 @@ package enum BezelExporter {
         let flippedY = CGFloat(canvasH) - (screen.minY + screen.height)
         let clearRect = CGRect(x: screen.minX, y: flippedY, width: screen.width, height: screen.height)
 
-        // Punch a rounded hole rather than a rectangular one so the Screen
-        // opening matches the real device's display corners. Radius is
-        // proportional to the screen's short side, per product family.
-        let cornerRadius = Self.deviceScreenCornerRadius(
-            productFamily: candidate.productFamily,
-            screenSize: screen.size
-        )
+        // Punch the display's own outline rather than a rectangle so the
+        // Screen opening matches the real device's display corners (per
+        // corner: the iPhone Duo's hinge-side corners are nearly square).
+        // Camera discs inside the display stay opaque so Apple's camera
+        // artwork survives: the even-odd fill clears the outline minus the
+        // discs.
+        let shape = DisplayShape.forScreen(productFamily: candidate.productFamily, size: screen.size)
         ctx.saveGState()
         ctx.setBlendMode(.clear)
-        let holePath = CGPath(
-            roundedRect: clearRect,
-            cornerWidth: cornerRadius,
-            cornerHeight: cornerRadius,
-            transform: nil
-        )
-        ctx.addPath(holePath)
-        ctx.fillPath()
+        ctx.addPath(shape.openingPath(in: clearRect, yUp: true))
+        ctx.fillPath(using: shape.cameraCutouts.isEmpty ? .winding : .evenOdd)
         ctx.restoreGState()
 
         guard let outImage = ctx.makeImage() else {
@@ -121,9 +116,10 @@ package enum BezelExporter {
     }
 
     /// Proportional display corner radius (in screen-pixel units) per
-    /// product family. Shared with ChromeRenderer so the hole punched at
-    /// export time lines up exactly with the rounded clip applied to the
-    /// screenshot at render time.
+    /// product family: the uniform radius `DisplayShape` uses for every
+    /// display except the iPhone Duo's, and the drawn device frame's
+    /// screen radius. `DisplayShape` is what the export hole and the
+    /// render-time screenshot clip share.
     ///
     /// Values tuned against Apple's shipped bezels - larger than a pure
     /// "display corner radius" reading because the bezel PSDs stylize the

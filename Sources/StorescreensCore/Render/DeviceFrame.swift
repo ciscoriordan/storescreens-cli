@@ -12,6 +12,12 @@ import CoreGraphics
 /// of tools that hard-code one device's proportions and crop the screenshot
 /// to fit; here the screenshot is never cropped or stretched.
 ///
+/// The iPhone Duo (a foldable) gets its own frames, one per display: the
+/// outer display shows the closed phone (hinge-side corners nearly square,
+/// the other half of the phone showing past the hinge edge, a camera hole
+/// in the display), the inner display the open phone (fold marks where the
+/// hinge meets the two long edges).
+///
 /// `DeviceFrameSpec` lives in "canvas pixel" space with a top-left origin,
 /// mirroring `BezelMetadata` for real bezels, so `ChromeRenderer` lays out
 /// both styles with the same fit/scale math.
@@ -33,17 +39,25 @@ package enum DeviceFrame {
         package let bodyRect: CGRect
         /// Screen rect (screenshot at native pixel size), top-left origin.
         package let screenRect: CGRect
-        /// Outer body corner radius. Ring and screen radii are concentric
+        /// Outer body corner radii. Ring and screen radii are concentric
         /// (inner radius = outer radius - inset) so the band reads as a
-        /// uniform-width rail around the corners.
-        package let bodyCornerRadius: CGFloat
-        package let screenCornerRadius: CGFloat
+        /// uniform-width rail around the corners. All four are equal on
+        /// every device but the iPhone Duo.
+        package let bodyCorners: CornerRadii
+        package let screenCorners: CornerRadii
         /// Metal band thickness (body edge to the dark ring).
         package let bandWidth: CGFloat
         package let cutout: Cutout
         /// Button rects, top-left origin. Drawn under the body so only the
         /// outer sliver protrudes past the band.
         package let buttons: [CGRect]
+        /// Foldable details (iPhone Duo); nil for every other device.
+        package let hinge: Hinge?
+
+        /// Largest body corner radius (the only one, except on the Duo).
+        package var bodyCornerRadius: CGFloat { bodyCorners.maximum }
+        /// Largest screen corner radius (the only one, except on the Duo).
+        package var screenCornerRadius: CGFloat { screenCorners.maximum }
 
         package enum Cutout: Equatable, Sendable {
             case none
@@ -52,6 +66,22 @@ package enum DeviceFrame {
             /// Notch flush against the screen's top (or leading, in
             /// landscape) edge. Drawn with the flush corners square.
             case notch(CGRect)
+            /// Round camera hole through the display (the Duo's outer
+            /// display): the disc's bounding rect.
+            case hole(CGRect)
+        }
+
+        /// Top-left origin, like the rest of the spec.
+        package struct Hinge: Equatable, Sendable {
+            /// Closed phone: the other half of the phone, visible past the
+            /// hinge edge as a strip behind the body.
+            package let spine: CGRect?
+            package let spineCornerRadius: CGFloat
+            /// Open phone: where the fold meets each long edge, a short
+            /// gap across the metal band and the hinge housing showing in
+            /// the dark ring. Neither crosses the screen.
+            package let foldSeams: [CGRect]
+            package let foldHousings: [CGRect]
         }
     }
 
@@ -64,6 +94,12 @@ package enum DeviceFrame {
         let sh = size.height.rounded()
         let shortSide = min(sw, sh)
         let landscape = sw > sh
+
+        // The Duo's displays are squat (aspect below 2), so the
+        // home-button rule below would otherwise claim them.
+        if let duo = DisplayShape.DuoDisplay.match(productFamily: productFamily, size: CGSize(width: sw, height: sh)) {
+            return duoSpec(duo, screenSize: CGSize(width: sw, height: sh))
+        }
 
         // Band proportions relative to the display's short side, tuned
         // against Apple's product bezels: iPhone has a visible metal rail
@@ -153,11 +189,12 @@ package enum DeviceFrame {
             canvasHeight: canvasH,
             bodyRect: bodyRect,
             screenRect: screenRect,
-            bodyCornerRadius: bodyR,
-            screenCornerRadius: screenR,
+            bodyCorners: CornerRadii(uniform: bodyR),
+            screenCorners: CornerRadii(uniform: screenR),
             bandWidth: band,
             cutout: cutout(productFamily: productFamily, screenRect: screenRect, landscape: landscape),
-            buttons: buttons
+            buttons: buttons,
+            hinge: nil
         )
     }
 
@@ -231,6 +268,199 @@ package enum DeviceFrame {
 
     private enum CutoutKind { case island, notch }
 
+    // MARK: - iPhone Duo
+
+    /// Builds the portrait frame, then turns it the way Apple's landscape
+    /// artwork turns: the outer display counterclockwise (hinge along the
+    /// bottom, camera top-left), the inner display clockwise (the power
+    /// button ends up on the right edge, volume on the top).
+    ///
+    /// Proportions come from Apple's iPhone Duo bezel artwork, relative to
+    /// the display's short side; button positions are fractions of the body
+    /// measured on the "Outer Closed Portrait" and "Inner Open Portrait"
+    /// PNGs.
+    private static func duoSpec(_ duo: DisplayShape.DuoDisplay, screenSize: CGSize) -> Spec {
+        let sw = min(screenSize.width, screenSize.height)
+        let sh = max(screenSize.width, screenSize.height)
+        let shape = DisplayShape.forScreen(productFamily: 1, size: CGSize(width: sw, height: sh))
+
+        let portrait: Spec
+        switch duo.panel {
+        case .outer: portrait = duoOuterPortrait(shape: shape, screenWidth: sw, screenHeight: sh)
+        case .inner: portrait = duoInnerPortrait(shape: shape, screenWidth: sw, screenHeight: sh)
+        }
+        guard duo.landscape else { return portrait }
+        return duo.panel == .outer ? rotated(portrait, clockwise: false) : rotated(portrait, clockwise: true)
+    }
+
+    /// Closed phone, hinge on the left. The body's corners follow the
+    /// display's (small on the hinge side), the other half of the phone
+    /// shows as a strip past the hinge edge, and the canvas keeps equal
+    /// margins left and right so the screen stays centered, as in Apple's
+    /// artwork.
+    private static func duoOuterPortrait(shape: DisplayShape, screenWidth sw: CGFloat, screenHeight sh: CGFloat) -> Spec {
+        let band = (0.016 * sw).rounded()
+        let ring = (0.019 * sw).rounded()
+        let buttonOut = (0.009 * sw).rounded()
+        let spineOut = (0.026 * sw).rounded()
+        let spineInsetY = (0.018 * sw).rounded()
+
+        let inset = band + ring
+        let sideMargin = max(spineOut, buttonOut)
+        let bodyRect = CGRect(x: sideMargin, y: buttonOut, width: sw + 2 * inset, height: sh + 2 * inset)
+        let screenRect = CGRect(x: sideMargin + inset, y: buttonOut + inset, width: sw, height: sh)
+        let bodyCorners = shape.corners.expanded(by: inset)
+
+        // Reaches under the body past the rounded hinge-side corners so no
+        // gap opens between the strip and the body.
+        let spine = CGRect(
+            x: bodyRect.minX - spineOut,
+            y: bodyRect.minY + spineInsetY,
+            width: spineOut + max(bodyCorners.topLeft, bodyCorners.bottomLeft),
+            height: bodyRect.height - 2 * spineInsetY
+        )
+
+        // Two volume buttons on the top edge, the power button on the edge
+        // opposite the hinge.
+        var buttons: [CGRect] = []
+        for offset in [0.451, 0.613] {
+            buttons.append(CGRect(
+                x: bodyRect.minX + CGFloat(offset) * bodyRect.width,
+                y: bodyRect.minY - buttonOut,
+                width: 0.132 * bodyRect.width,
+                height: 2 * buttonOut
+            ))
+        }
+        buttons.append(CGRect(
+            x: bodyRect.maxX - buttonOut,
+            y: bodyRect.minY + 0.285 * bodyRect.height,
+            width: 2 * buttonOut,
+            height: 0.159 * bodyRect.height
+        ))
+
+        let camera = shape.cameraCutouts.first.map {
+            $0.offsetBy(dx: screenRect.minX, dy: screenRect.minY)
+        }
+        return Spec(
+            canvasWidth: bodyRect.width + 2 * sideMargin,
+            canvasHeight: bodyRect.height + 2 * buttonOut,
+            bodyRect: bodyRect,
+            screenRect: screenRect,
+            bodyCorners: bodyCorners,
+            screenCorners: shape.corners,
+            bandWidth: band,
+            cutout: camera.map { .hole($0) } ?? .none,
+            buttons: buttons,
+            hinge: Spec.Hinge(
+                spine: spine,
+                spineCornerRadius: (0.55 * spineOut).rounded(),
+                foldSeams: [],
+                foldHousings: []
+            )
+        )
+    }
+
+    /// Open phone, portrait: the fold runs across the middle of the
+    /// display. Marks sit on both long edges at the fold, outside the
+    /// screen, so nothing is drawn over the screenshot.
+    private static func duoInnerPortrait(shape: DisplayShape, screenWidth sw: CGFloat, screenHeight sh: CGFloat) -> Spec {
+        let band = (0.011 * sw).rounded()
+        let ring = (0.021 * sw).rounded()
+        let buttonOut = (0.0065 * sw).rounded()
+
+        let inset = band + ring
+        let bodyRect = CGRect(x: buttonOut, y: buttonOut, width: sw + 2 * inset, height: sh + 2 * inset)
+        let screenRect = CGRect(x: buttonOut + inset, y: buttonOut + inset, width: sw, height: sh)
+
+        // Two volume buttons on the left edge, the power button on the top.
+        var buttons: [CGRect] = []
+        for offset in [0.127, 0.208] {
+            buttons.append(CGRect(
+                x: bodyRect.minX - buttonOut,
+                y: bodyRect.minY + CGFloat(offset) * bodyRect.height,
+                width: 2 * buttonOut,
+                height: 0.066 * bodyRect.height
+            ))
+        }
+        buttons.append(CGRect(
+            x: bodyRect.minX + 0.285 * bodyRect.width,
+            y: bodyRect.minY - buttonOut,
+            width: 0.159 * bodyRect.width,
+            height: 2 * buttonOut
+        ))
+
+        let foldY = screenRect.midY
+        let seamHeight = max(2, (0.004 * sw).rounded())
+        let housingHeight = (0.095 * sw).rounded()
+        let housingInset = (0.1 * ring).rounded()
+        let housingWidth = (0.6 * ring).rounded()
+        // Seams start one pixel outside the body so no sliver of band is
+        // left at the outer edge; drawing clips them to the body.
+        let seams = [
+            CGRect(x: bodyRect.minX - 1, y: foldY - seamHeight / 2, width: band + 1, height: seamHeight),
+            CGRect(x: bodyRect.maxX - band, y: foldY - seamHeight / 2, width: band + 1, height: seamHeight),
+        ]
+        let housings = [
+            CGRect(x: bodyRect.minX + band + housingInset, y: foldY - housingHeight / 2,
+                   width: housingWidth, height: housingHeight),
+            CGRect(x: bodyRect.maxX - band - housingInset - housingWidth, y: foldY - housingHeight / 2,
+                   width: housingWidth, height: housingHeight),
+        ]
+
+        return Spec(
+            canvasWidth: bodyRect.width + 2 * buttonOut,
+            canvasHeight: bodyRect.height + 2 * buttonOut,
+            bodyRect: bodyRect,
+            screenRect: screenRect,
+            bodyCorners: shape.corners.expanded(by: inset),
+            screenCorners: shape.corners,
+            bandWidth: band,
+            cutout: .none,
+            buttons: buttons,
+            hinge: Spec.Hinge(spine: nil, spineCornerRadius: 0, foldSeams: seams, foldHousings: housings)
+        )
+    }
+
+    /// Turns a whole spec a quarter turn, canvas included.
+    private static func rotated(_ spec: Spec, clockwise: Bool) -> Spec {
+        let cw = spec.canvasWidth
+        let ch = spec.canvasHeight
+        func turn(_ r: CGRect) -> CGRect {
+            clockwise
+                ? CGRect(x: ch - r.maxY, y: r.minX, width: r.height, height: r.width)
+                : CGRect(x: r.minY, y: cw - r.maxX, width: r.height, height: r.width)
+        }
+        func turn(_ c: CornerRadii) -> CornerRadii {
+            clockwise ? c.rotatedClockwise() : c.rotatedCounterclockwise()
+        }
+        let cutout: Spec.Cutout
+        switch spec.cutout {
+        case .none: cutout = .none
+        case .island(let r): cutout = .island(turn(r))
+        case .notch(let r): cutout = .notch(turn(r))
+        case .hole(let r): cutout = .hole(turn(r))
+        }
+        return Spec(
+            canvasWidth: ch,
+            canvasHeight: cw,
+            bodyRect: turn(spec.bodyRect),
+            screenRect: turn(spec.screenRect),
+            bodyCorners: turn(spec.bodyCorners),
+            screenCorners: turn(spec.screenCorners),
+            bandWidth: spec.bandWidth,
+            cutout: cutout,
+            buttons: spec.buttons.map(turn),
+            hinge: spec.hinge.map { h in
+                Spec.Hinge(
+                    spine: h.spine.map(turn),
+                    spineCornerRadius: h.spineCornerRadius,
+                    foldSeams: h.foldSeams.map(turn),
+                    foldHousings: h.foldHousings.map(turn)
+                )
+            }
+        )
+    }
+
     // MARK: - Colorways
 
     package struct Palette: Sendable {
@@ -239,25 +469,36 @@ package enum DeviceFrame {
         package let edge: CGColor
         package let button: CGColor
         package let ring: CGColor
+        /// The Duo's other half, showing past the hinge of the closed
+        /// phone: a flat tone a step off the band's gradient, so it reads
+        /// as a separate part.
+        package let spine: CGColor
+        /// Hinge housing in the dark ring of the open Duo: just lighter
+        /// than the ring.
+        package let hingeHousing: CGColor
 
         package init(_ colorway: DeviceColorway) {
             self.ring = Self.srgb(8, 8, 10)
+            self.hingeHousing = Self.srgb(36, 36, 40)
             switch colorway {
             case .dark:
                 bandTop = Self.srgb(82, 82, 87)
                 bandBottom = Self.srgb(50, 50, 54)
                 edge = Self.srgb(118, 118, 124)
                 button = Self.srgb(66, 66, 70)
+                spine = Self.srgb(58, 58, 63)
             case .silver:
                 bandTop = Self.srgb(236, 234, 231)
                 bandBottom = Self.srgb(206, 204, 200)
                 edge = Self.srgb(166, 164, 160)
                 button = Self.srgb(198, 196, 192)
+                spine = Self.srgb(212, 210, 206)
             case .natural:
                 bandTop = Self.srgb(158, 152, 142)
                 bandBottom = Self.srgb(126, 121, 112)
                 edge = Self.srgb(176, 171, 160)
                 button = Self.srgb(122, 117, 108)
+                spine = Self.srgb(134, 129, 120)
             }
         }
 
@@ -296,8 +537,13 @@ package enum DeviceFrame {
         }
 
         let bodyBL = place(spec.bodyRect)
-        let bodyR = spec.bodyCornerRadius * rScale
-        let bodyPath = CGPath(roundedRect: bodyBL, cornerWidth: bodyR, cornerHeight: bodyR, transform: nil)
+        let bodyPath = spec.bodyCorners.scaled(by: rScale).path(in: bodyBL, yUp: true)
+        let spinePath: CGPath? = spec.hinge.flatMap { hinge in
+            hinge.spine.map { rect in
+                let radius = hinge.spineCornerRadius * rScale
+                return CGPath(roundedRect: place(rect), cornerWidth: radius, cornerHeight: radius, transform: nil)
+            }
+        }
 
         // 1. Device-shaped drop shadow (same offsets as the bezel style).
         if shadow {
@@ -308,8 +554,23 @@ package enum DeviceFrame {
                 color: NSColor.black.withAlphaComponent(0.4).cgColor
             )
             ctx.addPath(bodyPath)
+            if let spinePath { ctx.addPath(spinePath) }
             ctx.setFillColor(palette.bandBottom)
             ctx.fillPath()
+            ctx.restoreGState()
+        }
+
+        // 1b. Closed Duo: the other half of the phone, behind the body so
+        //     only the strip past the hinge edge shows.
+        if let spinePath {
+            ctx.addPath(spinePath)
+            ctx.setFillColor(palette.spine)
+            ctx.fillPath()
+            ctx.saveGState()
+            ctx.addPath(spinePath)
+            ctx.setStrokeColor(palette.edge)
+            ctx.setLineWidth(max(1, spec.bandWidth * 0.08 * rScale))
+            ctx.strokePath()
             ctx.restoreGState()
         }
 
@@ -349,17 +610,38 @@ package enum DeviceFrame {
         ctx.strokePath()
         ctx.restoreGState()
 
+        // 3b. Open Duo: the gap where the two halves of the band meet at
+        //     the fold, clipped to the body.
+        if let seams = spec.hinge?.foldSeams, !seams.isEmpty {
+            ctx.saveGState()
+            ctx.addPath(bodyPath)
+            ctx.clip()
+            ctx.setFillColor(palette.ring)
+            for seam in seams {
+                ctx.fill(place(seam))
+            }
+            ctx.restoreGState()
+        }
+
         // 4. Dark ring between band and screen.
         let ringBL = bodyBL.insetBy(dx: spec.bandWidth * scaleX, dy: spec.bandWidth * scaleY)
-        let ringR = max(0, (spec.bodyCornerRadius - spec.bandWidth) * rScale)
-        ctx.addPath(CGPath(roundedRect: ringBL, cornerWidth: ringR, cornerHeight: ringR, transform: nil))
+        let ringCorners = spec.bodyCorners.expanded(by: -spec.bandWidth).scaled(by: rScale)
+        ctx.addPath(ringCorners.path(in: ringBL, yUp: true))
         ctx.setFillColor(palette.ring)
         ctx.fillPath()
 
+        // 4b. Open Duo: hinge housings in the ring at the fold.
+        for housing in spec.hinge?.foldHousings ?? [] {
+            let r = place(housing)
+            let radius = 0.3 * min(r.width, r.height)
+            ctx.addPath(CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            ctx.setFillColor(palette.hingeHousing)
+            ctx.fillPath()
+        }
+
         // 5. Screenshot, clipped to the display's rounded corners.
         let screenBL = place(spec.screenRect)
-        let screenR = spec.screenCornerRadius * rScale
-        let screenPath = CGPath(roundedRect: screenBL, cornerWidth: screenR, cornerHeight: screenR, transform: nil)
+        let screenPath = spec.screenCorners.scaled(by: rScale).path(in: screenBL, yUp: true)
         ctx.saveGState()
         ctx.addPath(screenPath)
         ctx.clip()
@@ -405,6 +687,14 @@ package enum DeviceFrame {
                 cornerHeight: radius * rScale,
                 transform: nil
             ))
+            ctx.setFillColor(palette.ring)
+            ctx.fillPath()
+            ctx.restoreGState()
+        case .hole(let rect):
+            ctx.saveGState()
+            ctx.addPath(screenPath)
+            ctx.clip()
+            ctx.addEllipse(in: place(rect))
             ctx.setFillColor(palette.ring)
             ctx.fillPath()
             ctx.restoreGState()

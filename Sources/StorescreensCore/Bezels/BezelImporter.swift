@@ -50,9 +50,8 @@ package enum BezelImporter {
         return candidates
     }
 
-    /// Groups candidates by canonicalKey and returns one winner per group,
-    /// applying `preferences` (model_order then colorway_order, then
-    /// alphabetical fallback on the original filename).
+    /// Groups candidates by canonicalKey and returns one winner per group.
+    /// See `pickBest` for the ranking.
     package static func selectWinners(
         candidates: [BezelCandidate],
         preferences: BezelPreferences = .defaults
@@ -77,7 +76,7 @@ package enum BezelImporter {
         }
 
         let canvasSize = CGSize(width: psd.canvasWidth, height: psd.canvasHeight)
-        let orientation = resolveOrientation(parsed: parsedName, canvasSize: canvasSize)
+        let orientation = resolveOrientation(parsed: parsedName, screenBBox: screen.bbox)
         let canonicalKey = makeCanonicalKey(
             productFamily: parsedName.productFamily,
             screenBBox: screen.bbox,
@@ -90,6 +89,7 @@ package enum BezelImporter {
             modelName: parsedName.model,
             colorway: parsedName.colorway,
             orientation: orientation,
+            orientationIsExplicit: parsedName.orientation != nil,
             productFamily: parsedName.productFamily,
             canvasSize: canvasSize,
             screenBBox: screen.bbox,
@@ -109,12 +109,14 @@ package enum BezelImporter {
     }
 
     /// Determines orientation. Macs are always `.none`. Others use the
-    /// filename's explicit orientation word when present; otherwise fall back
-    /// to canvas aspect.
-    static func resolveOrientation(parsed: FilenameParser.Parsed, canvasSize: CGSize) -> BezelOrientation {
+    /// filename's orientation word when present; otherwise the Screen
+    /// layer's box. The canvas is no guide: Apple's "iPhone Duo - Night Sky -
+    /// Outer Open" artwork is the open phone seen from the back, a landscape
+    /// canvas around a portrait outer display.
+    static func resolveOrientation(parsed: FilenameParser.Parsed, screenBBox: CGRect) -> BezelOrientation {
         if parsed.productFamily == 6 { return .none }
         if let explicit = parsed.orientation { return explicit }
-        return canvasSize.width > canvasSize.height ? .landscape : .portrait
+        return screenBBox.width > screenBBox.height ? .landscape : .portrait
     }
 
     /// Canonical filename key based on the Screen layer's actual pixel
@@ -163,22 +165,54 @@ package enum BezelImporter {
 
     // MARK: - Preference application
 
+    /// Picks one candidate from a group sharing a canonical key. In order:
+    ///   1. A filename that states the orientation beats one that does not:
+    ///      the Duo's "Outer Closed Portrait" is the intended portrait
+    ///      artwork, "Outer Open" only lands in the same group because its
+    ///      outer display has the same size.
+    ///   2. `preferences.modelOrder`.
+    ///   3. The newer generation of the model line, so the iPhone 18 Pro
+    ///      Max artwork wins over the iPhone 17 Pro Max one when both DMGs
+    ///      are mounted. Ahead of colorway because each generation ships
+    ///      its own set of finishes.
+    ///   4. `preferences.colorwayOrder`.
+    ///   5. Filename, alphabetically, so the result never depends on the
+    ///      order the volume walk returned files in.
     static func pickBest(
         from group: [BezelCandidate],
         preferences: BezelPreferences
     ) -> BezelCandidate {
-        // Stable sort: lower score wins. Score is (modelRank, colorwayRank, filename)
-        let ranked = group.map { candidate -> (BezelCandidate, Int, Int, String) in
-            let modelRank = rank(value: candidate.modelName, in: preferences.modelOrder)
-            let colorwayRank = rank(value: candidate.colorway ?? "", in: preferences.colorwayOrder)
-            return (candidate, modelRank, colorwayRank, candidate.filename)
+        struct Score: Comparable {
+            let orientationRank: Int
+            let modelRank: Int
+            let generationRank: Int
+            let colorwayRank: Int
+            let filename: String
+
+            static func < (a: Score, b: Score) -> Bool {
+                (a.orientationRank, a.modelRank, a.generationRank, a.colorwayRank, a.filename)
+                    < (b.orientationRank, b.modelRank, b.generationRank, b.colorwayRank, b.filename)
+            }
         }
-        let best = ranked.min { a, b in
-            if a.1 != b.1 { return a.1 < b.1 }
-            if a.2 != b.2 { return a.2 < b.2 }
-            return a.3 < b.3
-        }!
-        return best.0
+        let scored = group.map { candidate in
+            (candidate, Score(
+                orientationRank: candidate.orientationIsExplicit ? 0 : 1,
+                modelRank: rank(value: candidate.modelName, in: preferences.modelOrder),
+                generationRank: -(generation(of: candidate.modelName) ?? 0),
+                colorwayRank: rank(value: candidate.colorway ?? "", in: preferences.colorwayOrder),
+                filename: candidate.filename
+            ))
+        }
+        return scored.min { $0.1 < $1.1 }!.0
+    }
+
+    /// Generation number in an iPhone model name: "iPhone 18 Pro Max" is
+    /// 18, "iPhone 16e" is 16. Nil for names without one ("iPhone Air",
+    /// "iPhone Duo") and for other families, whose names carry screen
+    /// sizes and chip names rather than generations ("iPad Pro (M5) 13\"").
+    static func generation(of modelName: String) -> Int? {
+        guard let range = modelName.range(of: #"^iPhone\s+\d+"#, options: .regularExpression) else { return nil }
+        return Int(modelName[range].drop(while: { !$0.isNumber }))
     }
 
     /// Returns the index of the first element in `order` that appears as a
@@ -212,18 +246,12 @@ package enum FilenameParser {
         // Pattern A - space-dash-space separated (iPhone / iPad):
         //   "iPhone 17 Pro Max - Silver - Portrait"
         //   "iPad Pro (M5) 13\" - Silver - Landscape"
+        //   "iPhone Duo - Night Sky - Outer Closed Portrait"
         if stem.contains(" - ") {
             let parts = stem.components(separatedBy: " - ")
             let model = parts[0]
             let colorway = parts.count >= 2 ? parts[1] : nil
-            let orientation: BezelOrientation? = {
-                guard parts.count >= 3 else { return nil }
-                switch parts[2].lowercased() {
-                case "portrait": return .portrait
-                case "landscape": return .landscape
-                default: return nil
-                }
-            }()
+            let orientation = parts.count >= 3 ? orientation(inPose: parts[2]) : nil
             return Parsed(model: model, colorway: colorway, orientation: orientation, productFamily: family)
         }
 
@@ -247,6 +275,19 @@ package enum FilenameParser {
 
         // Fallback: whole stem = model, no colorway / orientation.
         return Parsed(model: stem, colorway: nil, orientation: nil, productFamily: family)
+    }
+
+    /// Orientation named in the third filename field. Foldables describe a
+    /// pose there ("Inner Open Landscape", "Outer Closed Portrait"), so the
+    /// word is looked for anywhere in the field, case-insensitively. Nil
+    /// when the field names neither orientation ("Outer Open") or both.
+    static func orientation(inPose field: String) -> BezelOrientation? {
+        let words = Set(field.lowercased().split(whereSeparator: { !$0.isLetter }))
+        switch (words.contains("portrait"), words.contains("landscape")) {
+        case (true, false): return .portrait
+        case (false, true): return .landscape
+        default: return nil
+        }
     }
 
     package static func inferProductFamily(from name: String) throws -> Int {

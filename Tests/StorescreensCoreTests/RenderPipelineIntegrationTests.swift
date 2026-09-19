@@ -260,6 +260,88 @@ final class RenderPipelineIntegrationTests: XCTestCase {
         print("--- bezel fixture rendered to \(renderRoot.path) ---")
     }
 
+    /// iPhone Duo screenshots (outer and inner display, both orientations)
+    /// through the whole pipeline with the drawn frame and with bezel
+    /// chrome. The bezel store is hermetic: one Duo bezel punched from a
+    /// flat stand-in artwork, the other sizes fall back to the drawn frame.
+    func testEndToEnd_iPhoneDuo_deviceAndBezelChrome() async throws {
+        let runRoot = try perTestRoot("iphone-duo")
+        let capturedRoot = runRoot.appendingPathComponent("captured", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturedRoot, withIntermediateDirectories: true)
+
+        let shots: [(deviceType: String, width: Int, height: Int)] = [
+            ("iPhone Duo outer display", 1398, 2034),
+            ("iPhone Duo outer display", 2034, 1398),
+            ("iPhone Duo inner display", 2007, 2853),
+            ("iPhone Duo inner display", 2853, 2007),
+        ]
+        var devices: [CaptureManifest.DeviceCapture] = []
+        for (idx, shot) in shots.enumerated() {
+            let filename = "iPhone_Duo_\(shot.width)x\(shot.height)_01_Home.png"
+            try writeSyntheticPNG(width: shot.width, height: shot.height, label: "Home", index: idx,
+                                  to: capturedRoot.appendingPathComponent(filename))
+            devices.append(CaptureManifest.DeviceCapture(
+                deviceType: shot.deviceType, simulatorName: "iPhone Duo",
+                locale: "en-US", appearance: nil,
+                screenshots: [CaptureManifest.Screenshot(name: "01_Home", filename: filename, capturedAt: Date())]
+            ))
+        }
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "fixture-test",
+            appName: "DuoFixture", displayName: "Duo Fixture", scheme: "Duo",
+            devices: devices
+        )
+
+        let bezelDir = runRoot.appendingPathComponent("bezels", isDirectory: true)
+        try FileManager.default.createDirectory(at: bezelDir, withIntermediateDirectories: true)
+        let artwork = runRoot.appendingPathComponent("outer-artwork.png")
+        try writeSolidColorPNG(width: 1574, height: 2194, color: .darkGray, to: artwork)
+        try BezelExporter.export(
+            candidate: BezelCandidate(
+                sourceURL: artwork, filename: "outer-artwork.png", modelName: "iPhone Duo",
+                colorway: nil, orientation: .portrait, orientationIsExplicit: true, productFamily: 1,
+                canvasSize: CGSize(width: 1574, height: 2194),
+                screenBBox: CGRect(x: 88, y: 80, width: 1398, height: 2034),
+                canonicalKey: "iPhone_1398x2034_portrait"
+            ),
+            to: bezelDir
+        )
+        let store = BezelStore(
+            projectLocal: bezelDir,
+            userGlobal: runRoot.appendingPathComponent("no-user-global", isDirectory: true)
+        )
+
+        for style in [ChromeStyle.device, .bezel] {
+            let renderRoot = runRoot.appendingPathComponent("framed-\(style.rawValue)", isDirectory: true)
+            let config = RenderConfig(
+                enabled: true,
+                background: BackgroundConfig(color: .solid("#20242e")),
+                caption: CaptionConfig(
+                    title: CaptionRole(font: .system, weight: .bold, fontSizePct: 5.5, color: "#ffffff", align: .center),
+                    minHeightPct: 20, paddingPct: 4
+                ),
+                chrome: ChromeConfig(style: style, shadow: true, paddingPct: 5),
+                slides: ["01_Home": SlideOverride(caption: SlideCaption(title: .string("Opens into a tablet")))]
+            )
+            let pipeline = RenderPipeline(config: config, baseDirectory: runRoot, bezelStore: store)
+            let out = try await pipeline.render(manifest: manifest, capturedRoot: capturedRoot, renderRoot: renderRoot)
+
+            XCTAssertEqual(out.failures.count, 0, "[\(style)] \(out.failures)")
+            XCTAssertEqual(out.renderedSlides, shots.count, "[\(style)]")
+            for device in devices {
+                try assertOutputIsValidPNG(at: renderRoot.appendingPathComponent(device.screenshots[0].filename))
+            }
+            XCTAssertFalse(out.warnings.contains { $0.contains("stroke chrome") }, "[\(style)] \(out.warnings)")
+            if style == .bezel {
+                // The installed outer-portrait bezel renders without a
+                // fallback; the three other sizes use the drawn frame.
+                XCTAssertFalse(out.warnings.contains { $0.contains("'iPhone_1398x2034_portrait'") }, "\(out.warnings)")
+                let fallbacks = out.warnings.filter { $0.contains("rendered the drawn device frame instead") }
+                XCTAssertEqual(fallbacks.count, 3, "\(out.warnings)")
+            }
+        }
+    }
+
     // MARK: - Images + laurels
 
     /// One image at above_title, runs end-to-end with chrome=stroke. Verifies

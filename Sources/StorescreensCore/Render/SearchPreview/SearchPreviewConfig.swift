@@ -28,9 +28,10 @@ package struct SearchPreviewConfig: Codable, Sendable {
 
     /// Which iPhone size(s) to render at. Default: `["iPhone 6.9\""]`
     /// (Pro Max, 1290×2796). Other accepted names: `iPhone 6.7"`, `iPhone 6.3"`,
-    /// `iPhone 6.1"`, plus device-name aliases like `iPhone 17 Pro Max`,
-    /// `iPhone 17 Pro`. Unknown names fall back to the Pro Max canvas with
-    /// a warning.
+    /// `iPhone 6.1"`, plus device-name aliases like `iPhone 18 Pro Max`,
+    /// `iPhone 18 Pro`, `iPhone 17 Pro Max`, `iPhone 17 Pro`. Unknown names,
+    /// including `iPhone Duo` (the App Store's layout on a foldable is not
+    /// known), fall back to the Pro Max canvas with a warning.
     package var devices: [String]?
 
     /// Which previews to render: `search_row` (default, the search-result

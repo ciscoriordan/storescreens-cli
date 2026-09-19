@@ -193,6 +193,88 @@ final class SearchPreviewTests: XCTestCase {
         XCTAssertEqual(SearchPreviewResolver.defaultSearchTerm(from: "Short"), "short")
     }
 
+    // MARK: - Device canvases
+
+    func testCanvasFor_iPhone18AliasesMatchThe17Canvases() {
+        var warnings: [String] = []
+        let proMax = SearchPreviewResolver.canvasFor(deviceName: "iPhone 18 Pro Max", warnings: &warnings)
+        let proMax17 = SearchPreviewResolver.canvasFor(deviceName: "iPhone 17 Pro Max", warnings: &warnings)
+        XCTAssertEqual(proMax.canvasSize, proMax17.canvasSize)
+        XCTAssertEqual(proMax.filenamePrefix, proMax17.filenamePrefix)
+
+        let pro = SearchPreviewResolver.canvasFor(deviceName: "iPhone 18 Pro", warnings: &warnings)
+        let pro17 = SearchPreviewResolver.canvasFor(deviceName: "iPhone 17 Pro", warnings: &warnings)
+        XCTAssertEqual(pro.canvasSize, CGSize(width: 1206, height: 2622))
+        XCTAssertEqual(pro.canvasSize, pro17.canvasSize)
+        XCTAssertEqual(pro.label, "iPhone 6.3\"")
+        XCTAssertEqual(warnings, [])
+    }
+
+    func testCanvasFor_iPhoneDuoFallsBackWithWarning() {
+        var warnings: [String] = []
+        let canvas = SearchPreviewResolver.canvasFor(deviceName: "iPhone Duo", warnings: &warnings)
+        XCTAssertEqual(canvas.label, "iPhone 6.9\"")
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertTrue(warnings[0].contains("unknown search-preview device 'iPhone Duo'"), warnings[0])
+    }
+
+    private func capture(_ deviceType: String, _ simulatorName: String, locale: String? = "en-US") -> CaptureManifest.DeviceCapture {
+        CaptureManifest.DeviceCapture(
+            deviceType: deviceType,
+            simulatorName: simulatorName,
+            locale: locale,
+            appearance: nil,
+            screenshots: [CaptureManifest.Screenshot(name: "01", filename: "\(simulatorName)-01.png", capturedAt: Date())]
+        )
+    }
+
+    private func manifest(_ devices: [CaptureManifest.DeviceCapture]) -> CaptureManifest {
+        CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "test",
+            appName: "X", displayName: "X", scheme: "X", devices: devices
+        )
+    }
+
+    func testPreferredIPhoneCapture_neverPicksTheDuo() {
+        // Duo listed first, then a slab iPhone: the slab iPhone is the hero.
+        let picked = SearchPreviewResolver.preferredIPhoneCapture(
+            manifest: manifest([
+                capture("iPhone Duo outer display", "iPhone Duo"),
+                capture("iPhone Duo inner display", "iPhone Duo"),
+                capture("iPhone 6.3\"", "iPhone 18 Pro"),
+            ]),
+            locale: "en-US"
+        )
+        XCTAssertEqual(picked?.simulatorName, "iPhone 18 Pro")
+
+        // Pro Max still preferred over 6.3" when both exist.
+        let proMax = SearchPreviewResolver.preferredIPhoneCapture(
+            manifest: manifest([
+                capture("iPhone 1398x2034", "iPhone Duo"),
+                capture("iPhone 6.3\"", "iPhone 18 Pro"),
+                capture("iPhone 6.9\"", "iPhone 18 Pro Max"),
+            ]),
+            locale: nil
+        )
+        XCTAssertEqual(proMax?.simulatorName, "iPhone 18 Pro Max")
+
+        // Only Duo captures: no hero at all rather than a foldable one.
+        XCTAssertNil(SearchPreviewResolver.preferredIPhoneCapture(
+            manifest: manifest([
+                capture("iPhone 1398x2034", "iPhone Duo"),
+                capture("iPhone 2007x2853", "My Test Phone"),
+            ]),
+            locale: nil
+        ))
+    }
+
+    func testIsIPhoneDuoCapture_matchesNamesAndSizesOnly() {
+        XCTAssertTrue(SearchPreviewResolver.isIPhoneDuoCapture(capture("iPhone Duo outer display", "Some Clone")))
+        XCTAssertTrue(SearchPreviewResolver.isIPhoneDuoCapture(capture("iPhone 2853x2007", "Phone")))
+        XCTAssertFalse(SearchPreviewResolver.isIPhoneDuoCapture(capture("iPhone 6.9\"", "iPhone 18 Pro Max")))
+        XCTAssertFalse(SearchPreviewResolver.isIPhoneDuoCapture(capture("iPhone 6.1\"", "Duolingo Test Phone")))
+    }
+
     // MARK: - Renderer
 
     func testRenderer_writesPNG_atExpectedDimensions() throws {

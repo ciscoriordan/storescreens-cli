@@ -340,4 +340,266 @@ final class DeviceFrameTests: XCTestCase {
             chromeRect: chromeRect
         ))
     }
+
+    // MARK: - iPhone Duo
+
+    private func edgeButtons(_ spec: DeviceFrame.Spec) -> (top: [CGRect], bottom: [CGRect], left: [CGRect], right: [CGRect]) {
+        let b = spec.bodyRect
+        return (
+            spec.buttons.filter { abs($0.midY - b.minY) < 1 },
+            spec.buttons.filter { abs($0.midY - b.maxY) < 1 },
+            spec.buttons.filter { abs($0.midX - b.minX) < 1 },
+            spec.buttons.filter { abs($0.midX - b.maxX) < 1 }
+        )
+    }
+
+    func testSpec_duoOuterPortrait() throws {
+        let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 1398, height: 2034)))
+        XCTAssertEqual(spec.screenRect.size, CGSize(width: 1398, height: 2034))
+
+        // Display corners from the shared display shape: small on the
+        // hinge (left) side, large on the other side.
+        XCTAssertEqual(spec.screenCorners, CornerRadii(topLeft: 18, topRight: 162, bottomLeft: 18, bottomRight: 162))
+        // Body concentric with the display, corner by corner.
+        let inset = spec.screenRect.minX - spec.bodyRect.minX
+        XCTAssertEqual(spec.bodyCorners, spec.screenCorners.expanded(by: inset))
+        XCTAssertEqual(spec.screenRect.minY - spec.bodyRect.minY, inset)
+
+        // Screen centered horizontally even with the hinge strip on one side.
+        XCTAssertEqual(spec.screenRect.minX, spec.canvasWidth - spec.screenRect.maxX, accuracy: 0.5)
+
+        // Camera hole top right, where Apple's artwork puts it.
+        guard case .hole(let camera) = spec.cutout else {
+            return XCTFail("expected camera hole, got \(spec.cutout)")
+        }
+        XCTAssertEqual(camera.midX - spec.screenRect.minX, 1255, accuracy: 0.5)
+        XCTAssertEqual(camera.midY - spec.screenRect.minY, 143.5, accuracy: 0.5)
+        XCTAssertEqual(camera.width, 108, accuracy: 0.5)
+        XCTAssertTrue(spec.screenRect.contains(camera))
+
+        // The other half of the closed phone shows past the hinge edge.
+        let hinge = try XCTUnwrap(spec.hinge)
+        let spine = try XCTUnwrap(hinge.spine)
+        XCTAssertLessThan(spine.minX, spec.bodyRect.minX)
+        XCTAssertGreaterThanOrEqual(spine.minX, 0)
+        XCTAssertGreaterThan(spine.minY, spec.bodyRect.minY)
+        XCTAssertLessThan(spine.maxY, spec.bodyRect.maxY)
+        XCTAssertTrue(hinge.foldSeams.isEmpty)
+
+        // Volume buttons on the top edge, power on the edge opposite the hinge.
+        let edges = edgeButtons(spec)
+        XCTAssertEqual(edges.top.count, 2)
+        XCTAssertEqual(edges.right.count, 1)
+        XCTAssertEqual(spec.buttons.count, 3)
+    }
+
+    func testSpec_duoOuterLandscapeIsPortraitTurnedCounterclockwise() throws {
+        let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 2034, height: 1398)))
+        let portrait = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 1398, height: 2034)))
+        XCTAssertEqual(spec.canvasWidth, portrait.canvasHeight)
+        XCTAssertEqual(spec.canvasHeight, portrait.canvasWidth)
+        XCTAssertEqual(spec.screenRect.size, CGSize(width: 2034, height: 1398))
+
+        // Apple's landscape artwork: large corners on top, hinge along the
+        // bottom, camera top left.
+        XCTAssertEqual(spec.screenCorners, CornerRadii(topLeft: 162, topRight: 162, bottomLeft: 18, bottomRight: 18))
+        XCTAssertEqual(
+            spec.screenCorners,
+            DisplayShape.forScreen(productFamily: 1, size: CGSize(width: 2034, height: 1398)).corners
+        )
+        guard case .hole(let camera) = spec.cutout else {
+            return XCTFail("expected camera hole, got \(spec.cutout)")
+        }
+        XCTAssertEqual(camera.midX - spec.screenRect.minX, 143.5, accuracy: 0.5)
+        XCTAssertEqual(camera.midY - spec.screenRect.minY, 143, accuracy: 0.5)
+
+        let spine = try XCTUnwrap(spec.hinge?.spine)
+        XCTAssertGreaterThan(spine.maxY, spec.bodyRect.maxY)
+        XCTAssertLessThanOrEqual(spine.maxY, spec.canvasHeight)
+
+        let edges = edgeButtons(spec)
+        XCTAssertEqual(edges.top.count, 1)
+        XCTAssertEqual(edges.left.count, 2)
+    }
+
+    func testSpec_duoInnerPortrait() throws {
+        let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 2007, height: 2853)))
+        XCTAssertEqual(spec.screenCorners, CornerRadii(uniform: 149))
+        XCTAssertEqual(spec.cutout, .none)
+        XCTAssertEqual(
+            spec.bodyCornerRadius,
+            spec.screenCornerRadius + (spec.screenRect.minX - spec.bodyRect.minX),
+            accuracy: 0.5
+        )
+
+        // Fold marks on both long edges at mid-height, none over the screen.
+        let hinge = try XCTUnwrap(spec.hinge)
+        XCTAssertNil(hinge.spine)
+        XCTAssertEqual(hinge.foldSeams.count, 2)
+        XCTAssertEqual(hinge.foldHousings.count, 2)
+        for mark in hinge.foldSeams + hinge.foldHousings {
+            XCTAssertEqual(mark.midY, spec.screenRect.midY, accuracy: 0.5)
+            XCTAssertFalse(mark.intersects(spec.screenRect), "\(mark) crosses the screen")
+        }
+        XCTAssertLessThan(hinge.foldSeams[0].midX, spec.screenRect.minX)
+        XCTAssertGreaterThan(hinge.foldSeams[1].midX, spec.screenRect.maxX)
+
+        let edges = edgeButtons(spec)
+        XCTAssertEqual(edges.left.count, 2)
+        XCTAssertEqual(edges.top.count, 1)
+    }
+
+    func testSpec_duoInnerLandscapeIsPortraitTurnedClockwise() throws {
+        let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 2853, height: 2007)))
+        XCTAssertEqual(spec.screenCorners, CornerRadii(uniform: 149))
+
+        // Fold now runs vertically at mid-width: marks on top and bottom.
+        let hinge = try XCTUnwrap(spec.hinge)
+        for mark in hinge.foldSeams + hinge.foldHousings {
+            XCTAssertEqual(mark.midX, spec.screenRect.midX, accuracy: 0.5)
+            XCTAssertFalse(mark.intersects(spec.screenRect))
+        }
+
+        // Apple's Inner Open Landscape: volume on the top edge, power on the right.
+        let edges = edgeButtons(spec)
+        XCTAssertEqual(edges.top.count, 2)
+        XCTAssertEqual(edges.right.count, 1)
+        XCTAssertTrue(edges.top.allSatisfy { $0.midX > spec.bodyRect.midX })
+    }
+
+    func testSpec_duoIsNotTreatedAsHomeButtonIPhone() throws {
+        // Both Duo displays are squat (aspect below 2); the home-button
+        // rule would give them nearly square corners and no hinge.
+        let sizes = [
+            CGSize(width: 1398, height: 2034), CGSize(width: 2007, height: 2853),
+            CGSize(width: 699, height: 1017), CGSize(width: 1004, height: 1427), CGSize(width: 669, height: 951),
+        ]
+        for size in sizes {
+            let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: size))
+            XCTAssertNotNil(spec.hinge, "\(size)")
+            XCTAssertGreaterThan(spec.screenCornerRadius, 0.05 * size.width, "\(size)")
+        }
+    }
+
+    func testSpec_iPhoneCropsWithADuoLikeAspectKeepTheHomeButtonFrame() throws {
+        // Element and cropped screenshots keep their device's iPhone
+        // label. 1206 x 1755 is within 0.02% of the Duo outer display's
+        // aspect ratio and 1206 x 1714 of the inner one's, but neither is
+        // a Duo size: both keep the home-button frame they got before Duo
+        // support, with no hinge and no camera hole over the content.
+        // Expected geometry is what that frame produced for these sizes.
+        struct Expected {
+            let size: CGSize
+            let canvas: CGSize
+            let body: CGRect
+            let buttons: [CGRect]
+        }
+        let cases = [
+            Expected(
+                size: CGSize(width: 1206, height: 1755),
+                canvas: CGSize(width: 1322, height: 1871),
+                body: CGRect(x: 11, y: 11, width: 1300, height: 1849),
+                buttons: [
+                    CGRect(x: 0, y: 297.595, width: 22, height: 83.205),
+                    CGRect(x: 0, y: 445.515, width: 22, height: 138.675),
+                    CGRect(x: 0, y: 611.925, width: 22, height: 138.675),
+                    CGRect(x: 1300, y: 491.74, width: 22, height: 203.39),
+                ]
+            ),
+            Expected(
+                size: CGSize(width: 1755, height: 1206),
+                canvas: CGSize(width: 1871, height: 1322),
+                body: CGRect(x: 11, y: 11, width: 1849, height: 1300),
+                buttons: [
+                    CGRect(x: 297.595, y: 1300, width: 83.205, height: 22),
+                    CGRect(x: 445.515, y: 1300, width: 138.675, height: 22),
+                    CGRect(x: 611.925, y: 1300, width: 138.675, height: 22),
+                    CGRect(x: 491.74, y: 0, width: 203.39, height: 22),
+                ]
+            ),
+            Expected(
+                size: CGSize(width: 1206, height: 1714),
+                canvas: CGSize(width: 1322, height: 1830),
+                body: CGRect(x: 11, y: 11, width: 1300, height: 1808),
+                buttons: [
+                    CGRect(x: 0, y: 291.24, width: 22, height: 81.36),
+                    CGRect(x: 0, y: 435.88, width: 22, height: 135.6),
+                    CGRect(x: 0, y: 598.6, width: 22, height: 135.6),
+                    CGRect(x: 1300, y: 481.08, width: 22, height: 198.88),
+                ]
+            ),
+        ]
+        for c in cases {
+            let label = "\(c.size)"
+            let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: c.size), label)
+            XCTAssertNil(spec.hinge, label)
+            XCTAssertEqual(spec.cutout, .none, label)
+            // Home-button rule: nearly square display corners inside a
+            // rounded body, the same on all four corners.
+            XCTAssertEqual(spec.screenCorners, CornerRadii(uniform: 0.02 * 1206), label)
+            XCTAssertEqual(spec.bodyCorners, CornerRadii(uniform: 0.115 * 1206), label)
+            XCTAssertEqual(spec.bandWidth, 29, label)
+            XCTAssertEqual(spec.canvasWidth, c.canvas.width, label)
+            XCTAssertEqual(spec.canvasHeight, c.canvas.height, label)
+            XCTAssertEqual(spec.bodyRect, c.body, label)
+            XCTAssertEqual(spec.screenRect, CGRect(origin: CGPoint(x: 58, y: 58), size: c.size), label)
+            XCTAssertEqual(spec.buttons.count, c.buttons.count, label)
+            for (button, expected) in zip(spec.buttons, c.buttons) {
+                XCTAssertEqual(button.minX, expected.minX, accuracy: 0.001, label)
+                XCTAssertEqual(button.minY, expected.minY, accuracy: 0.001, label)
+                XCTAssertEqual(button.width, expected.width, accuracy: 0.001, label)
+                XCTAssertEqual(button.height, expected.height, accuracy: 0.001, label)
+            }
+        }
+    }
+
+    func testSpec_nonFoldingDevicesHaveUniformCornersAndNoHinge() throws {
+        for size in [CGSize(width: 1206, height: 2622), CGSize(width: 2622, height: 1206), CGSize(width: 750, height: 1334)] {
+            let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: size))
+            XCTAssertNil(spec.hinge)
+            XCTAssertTrue(spec.bodyCorners.isUniform)
+            XCTAssertTrue(spec.screenCorners.isUniform)
+        }
+    }
+
+    func testDrawChrome_deviceStyleDuoDrawsCameraOverScreenshot() throws {
+        let (store, dir) = try makeEmptyBezelStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let screenshotURL = dir.appendingPathComponent("shot.png")
+        try writeTinyScreenshot(to: screenshotURL, width: 1398, height: 2034)
+
+        let spec = try XCTUnwrap(DeviceFrame.spec(productFamily: 1, screenshotPixelSize: CGSize(width: 1398, height: 2034)))
+        let width = Int(spec.canvasWidth)
+        let height = Int(spec.canvasHeight)
+        let ctx = try XCTUnwrap(CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        let warnings = try ChromeRenderer(bezelStore: store).drawChrome(
+            ChromeConfig(style: .device, shadow: false, paddingPct: 0),
+            screenshotURL: screenshotURL,
+            productFamily: 1,
+            orientation: .portrait,
+            screenshotPixelSize: CGSize(width: 1398, height: 2034),
+            into: ctx,
+            chromeRect: CGRect(x: 0, y: 0, width: width, height: height)
+        )
+        XCTAssertEqual(warnings, [])
+
+        // Rows of the context's buffer run top to bottom, matching the
+        // spec's top-left coordinates at this 1:1 scale.
+        let pixels = try XCTUnwrap(ctx.data)
+        func red(_ p: CGPoint) -> UInt8 {
+            pixels.load(fromByteOffset: Int(p.y) * ctx.bytesPerRow + Int(p.x) * 4, as: UInt8.self)
+        }
+        guard case .hole(let camera) = spec.cutout else { return XCTFail("expected camera hole") }
+        XCTAssertLessThan(red(CGPoint(x: camera.midX, y: camera.midY)), 40, "camera disc drawn over the white screenshot")
+        XCTAssertEqual(red(CGPoint(x: spec.screenRect.midX, y: spec.screenRect.midY)), 255, "screenshot visible")
+        // Hinge-side corner is nearly square: 6 px in from the corner is
+        // screenshot. At the large corner opposite the hinge it is not.
+        XCTAssertEqual(red(CGPoint(x: spec.screenRect.minX + 6, y: spec.screenRect.minY + 6)), 255)
+        XCTAssertLessThan(red(CGPoint(x: spec.screenRect.maxX - 6, y: spec.screenRect.minY + 6)), 40)
+    }
 }
