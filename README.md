@@ -182,7 +182,7 @@ Then verify everything builds before running the full capture. Pipe the output t
 xcodebuild build-for-testing \
   -workspace Example.xcworkspace \
   -scheme Example \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' \
   2>&1 | tee build.log
 
 # Then capture (--verbose for live terminal output; logs are always saved)
@@ -479,7 +479,7 @@ Generates a `storescreens.yml` config file by auto-detecting your project:
 
 - Finds your `.xcodeproj` or `.xcworkspace`
 - Detects your scheme and deployment target
-- Picks simulators that match required App Store sizes and are compatible with your deployment target
+- Picks simulators that match required App Store sizes and are compatible with your deployment target. For the required 6.9" slot it takes the newest 6.9"-class iPhone installed (`iPhone 18 Pro Max` when an iOS 27 runtime is installed, `iPhone 17 Pro Max` with only iOS 26 runtimes), and it never picks the iPhone Duo
 - Warns if any required sizes are missing
 
 ```bash
@@ -657,11 +657,13 @@ Available Simulators
   Name                    State     App Store Size
   ──────────────────────────────────────────────────
   iPad Pro 13-inch (M5)   Shutdown  iPad Pro 13"
-  iPhone 17 Pro Max       Shutdown  iPhone 6.9"
-  iPhone 17 Pro           Shutdown  iPhone 6.3"
-  iPhone 16 Plus          Shutdown  iPhone 6.7"
+  iPhone 18 Pro Max       Shutdown  iPhone 6.9"
+  iPhone 18 Pro           Shutdown  iPhone 6.3"
+  iPhone 17               Shutdown  iPhone 6.3"
   ...
 ```
+
+The App Store Size column is the label storescreens uses for output file names. For a few sizes it differs from the App Store Connect slot the screenshots upload to; see [App Store Connect Screenshot Sizes](#app-store-connect-screenshot-sizes).
 
 | Flag | Description |
 |------|-------------|
@@ -679,10 +681,10 @@ Takes a quick screenshot of a running simulator's current screen. No build, no t
 storescreens screenshot
 
 # Screenshot a specific simulator
-storescreens screenshot --simulator "iPhone 17 Pro" --output screenshot.png
+storescreens screenshot --simulator "iPhone 18 Pro" --output screenshot.png
 
 # Boot the simulator if it's not running
-storescreens screenshot --simulator "iPhone 17 Pro" --boot
+storescreens screenshot --simulator "iPhone 18 Pro" --boot
 ```
 
 | Flag | Description |
@@ -725,8 +727,8 @@ project: "MyApp.xcodeproj"
 scheme: "MyApp"
 
 devices:
-  - simulator: "iPhone 17 Pro Max"
-  - simulator: "iPhone 17 Pro"
+  - simulator: "iPhone 18 Pro Max"      # iOS 26 runtimes: "iPhone 17 Pro Max"
+  - simulator: "iPhone 18 Pro"          # iOS 26 runtimes: "iPhone 17 Pro"
   - simulator: "iPad Pro 13-inch (M5)"
   # macOS devices run tests natively (no simulator)
   # - simulator: "Mac 2560x1600"
@@ -750,6 +752,8 @@ test_class: ScreenshotTests
 
 All values can be overridden via CLI flags.
 
+Which simulator names you have depends on the installed simulator runtimes, not on the Xcode version. iOS 27 runtimes (Xcode 27 or later) create `iPhone 18 Pro Max` (6.9") and `iPhone 18 Pro` (6.3"). iOS 26 runtimes create `iPhone 17 Pro Max` and `iPhone 17 Pro`, which still work from Xcode 27 when an iOS 26 runtime is installed. Both pairs have the same screens, so either produces the same App Store sizes. `iPhone Air`, `iPhone 17`, and `iPhone 17e` exist on both runtimes. Run `storescreens list` to see the names you have. For the iPhone Duo, see [iPhone Duo](#iphone-duo).
+
 <details>
 <summary>Full config reference</summary>
 
@@ -761,8 +765,8 @@ project: "MyApp.xcodeproj"
 scheme: "MyApp"
 
 devices:
-  - simulator: "iPhone 17 Pro Max"
-  - simulator: "iPhone 17 Pro"
+  - simulator: "iPhone 18 Pro Max"
+  - simulator: "iPhone 18 Pro"
   - simulator: "iPad Pro 13-inch (M5)"
   # macOS: tests run natively, no simulator needed
   # - simulator: "Mac 2560x1600"
@@ -1045,7 +1049,7 @@ storescreens themes suggest shot.png    # analyze specific files
 
 - `none`: no chrome; screenshot drawn at the padded rect.
 - `stroke`: rounded-rect clip with device-derived corner radius plus optional colored border and drop shadow. Zero asset download.
-- `device`: generic device frame drawn procedurally in CoreGraphics - metal band, dark bezel ring, side buttons, and a Dynamic Island or notch picked from the screenshot's pixel dimensions. Zero asset download; the screenshot keeps its native aspect (never cropped). `device_colorway: dark | silver | natural` picks the body color (default `dark`). iPhone and iPad only; use `stroke` or `bezel` for MacBook.
+- `device`: generic device frame drawn procedurally in CoreGraphics - metal band, dark bezel ring, side buttons, and a Dynamic Island or notch picked from the screenshot's pixel dimensions. Zero asset download; the screenshot keeps its native aspect (never cropped). `device_colorway: dark | silver | natural` picks the body color (default `dark`). iPhone and iPad only; use `stroke` or `bezel` for MacBook. iPhone Duo screenshots get a Duo frame for whichever display they came from: the outer display with its tighter corners on the hinge side and its camera, or the unfolded inner display.
 - `bezel`: screenshot composited inside a real Apple device bezel. Requires [bezel assets](#device-bezels). When no bezel is installed for a screenshot, the renderer falls back per `bezel_fallback: device | stroke | error` (default `device`, with a warning telling you how to get the real bezels).
 
 ### Fonts
@@ -1333,7 +1337,12 @@ The `bezel` chrome style requires PSD files from Apple's Design Resources. Apple
 storescreens bezels import
 ```
 
-This auto-scans `/Volumes/` for Apple Design Resource DMGs, classifies PSDs by screen pixel dimensions, applies your colorway preferences, and exports transparent-screen PNGs + JSON sidecars to `~/Library/Application Support/storescreens/bezels/`.
+This auto-scans `/Volumes/` for Apple Design Resource DMGs, classifies PSDs by screen pixel dimensions, keeps one bezel per screen size and orientation (see [Which bezel is installed](#which-bezel-is-installed)), and exports transparent-screen PNGs + JSON sidecars to `~/Library/Application Support/storescreens/bezels/`.
+
+Notes on specific DMGs:
+
+- iPhone 18: the iPhone 18 Pro and Pro Max bezels (Black, Silver, Glacier, Burgundy) import the same way as the iPhone 17 set. Their screens are the same size as the 17 Pro and 17 Pro Max, so both DMGs supply bezels for the same sizes; when both are mounted, the iPhone 18 artwork wins.
+- iPhone Duo: four poses are imported. `Inner Open Portrait` and `Inner Open Landscape` frame the unfolded inner display (2007x2853), `Outer Closed Portrait` and `Outer Closed Landscape` the folded outer display (1398x2034). The `Outer Open` file (the open phone seen from the back) is ignored; the outer display uses `Outer Closed Portrait`. The DMG has two colorways, Night Sky and Star White.
 
 ### Inspect
 
@@ -1346,17 +1355,17 @@ storescreens bezels path    # print the install directory
 
 Drop bezel PNGs + their JSON sidecars into `./bezels/` next to `storescreens.yml` to override the user-global set for that project only.
 
-### Colorway / model preference
+### Which bezel is installed
 
-By default the importer picks "Space Black" when available, else Silver / Natural Titanium. Override per project:
+`bezels import` installs one bezel per screen size and orientation into the user-global directory, so the choice applies to every project. When several PSDs fit the same size, it ranks them with fixed defaults, in this order:
 
-```yaml
-render:
-  chrome:
-    style: bezel
-    model_preference: [Pro Max, Pro, Air]
-    colorway_preference: ["Cosmic Orange", Silver]
-```
+1. A file name that states the orientation (`Outer Closed Portrait`) beats one that doesn't (`Outer Open`).
+2. Model: Pro Max, Pro, Air, mini, then any other.
+3. The newer iPhone generation (iPhone 18 Pro Max over iPhone 17 Pro Max), ahead of colorway because each generation has its own finishes.
+4. Colorway: Space Black, Black, Night Sky, Natural Titanium, Silver, Space Gray, Deep Blue, then any other.
+5. File name, alphabetically.
+
+`render.chrome.model_preference` and `render.chrome.colorway_preference` are accepted in `storescreens.yml`, but the importer doesn't read them, so they have no effect. To install a different finish, copy its PSD (keeping the file name) into an empty folder and run `storescreens bezels import --volume <folder>`; that replaces only the sizes the PSD covers.
 
 ## Uploading to App Store Connect
 
@@ -1483,7 +1492,7 @@ Dry run first to validate everything without pushing:
 storescreens submit --dry-run
 ```
 
-It checks credentials, app lookup, metadata directory, and confirms every rendered PNG maps to a valid App Store display type and stays under Apple's 8 MB size cap.
+It checks credentials, app lookup, and the metadata directory, and confirms that every rendered PNG maps to a valid App Store display type and stays under Apple's 8 MB size cap, and that each screenshot set can be filled within App Store Connect's limit of 10 screenshots.
 
 Live upload:
 
@@ -1497,7 +1506,12 @@ Flags:
 - `--submit-for-review` / `--no-submit-for-review` overrides `submit.submit_for_review` for one run without touching the yml
 - `--render-dir` / `--metadata-dir` override config paths
 
-Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order.
+Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order. App Store Connect holds at most 10 screenshots per set, and the light and dark captures of one device share a set, so a device captured in both appearances fits only with 5 slides or fewer. A device over that limit is always reported as an error, so `submit` and `--dry-run` exit non-zero and the review submission is skipped. The next device in the slot still fills the set when it fits; when no device fits, the set is not touched and its current screenshots stay.
+
+Each PNG's screenshot set (its display type) comes from the PNG's pixel size, per the table in [App Store Connect Screenshot Sizes](#app-store-connect-screenshot-sizes). Two consequences:
+
+- If several configured devices fall into the same slot (iPhone Air and iPhone 18 Pro Max both go to 6.9"; iPhone 17 Pro and iPhone 18 Pro both go to 6.3"), `submit` uploads one device's screenshots for that slot and prints a notice naming the others. It picks the device with the largest screen in the slot (for 6.9": 1320x2868, then 1290x2796, then 1260x2736); devices with the same screen, such as iPhone 17 Pro and iPhone 18 Pro, go by config order. The choice is made once per display type and holds for every locale, except that in a locale where the chosen device has more than 10 screenshots the next device in that order is used, and the over-limit device is still reported as an error. When the two devices also share a file label (iPhone 17 Pro and iPhone 18 Pro are both `iPhone 6.3"`), a UI-test capture warns as well, because both write the same file names; if that happens, `submit` notices the shared files and uploads them once.
+- App Store Connect does not accept iPhone Duo screenshots yet (Apple says upload support is coming later this year), so `submit` skips them with a notice instead of failing. See [iPhone Duo](#iphone-duo).
 
 Re-runs are cheap. Both metadata and screenshots are idempotent: before PATCHing a localization, `submit` fetches the current version-localization attributes from ASC and sends only fields that actually differ (unchanged fields skip the PATCH entirely). Before wiping a screenshot set, it reads each existing screenshot's `sourceFileChecksum` (MD5) and compares to the local render's MD5 in manifest order. If the set already matches, no DELETEs fire and no uploads happen. The report lists unchanged locales with `count: 0` so you can see the skip happened.
 
@@ -1514,7 +1528,7 @@ app_store_connect:
     submit_for_review: true   # default false
 ```
 
-Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. The review submission ID and final state (`WAITING_FOR_REVIEW` on success) are included in the report output.
+Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. If any screenshot set failed to upload or was refused (for example, more than 10 screenshots for one set), `submit` skips the review submission and reports an error instead of sending the version with stale screenshots; fix the set and re-run. iPhone Duo screenshots skipped with a notice, and devices left out because another device filled their slot, don't block the submission. The review submission ID and final state (`WAITING_FOR_REVIEW` on success) are included in the report output.
 
 Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create the submission, POST a `reviewSubmissionItems` to attach the version, PATCH `submitted:true` to push it into `WAITING_FOR_REVIEW`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
 
@@ -1748,7 +1762,8 @@ For the full schema (every field, default, gotcha) see `references/submit-refere
 
 - "credentials not configured": run `storescreens auth login` or check the `ASC_*` env vars.
 - "no App Store Connect app matched": the `bundle_id` in config doesn't match any app in your ASC team; double-check spelling or use `app_id` instead.
-- "no ASC display type for WxH": the rendered screenshot has unsupported dimensions. Most commonly this means a non-App-Store simulator. Rebuild with supported devices.
+- "no ASC display type for WxH": the rendered screenshot's pixel size is not in any App Store Connect size class, for example 828x1792 from an `iPhone 11` simulator or 1620x2160 from an `iPad (9th generation)`. Recapture with a simulator from [App Store Connect Screenshot Sizes](#app-store-connect-screenshot-sizes).
+- A 409 on 6.3" screenshots (iPhone 18 Pro, 17 Pro, 17, 16 Pro): storescreens 3.11.3 and earlier sent these, and iPhone Air screenshots, under the display type `APP_IPHONE_63`, which App Store Connect does not define. Those versions also used undefined values for the iPhone 12/13 mini and for several iPad sizes. Upgrade; current versions use the display types in the sizes table.
 - "8MB limit exceeded": Apple caps individual screenshots at 8 MB. Reduce the PNG compression quality or simplify the background image.
 
 ### Checking on a submission with `storescreens status`
@@ -5872,29 +5887,79 @@ needs adjustment.
 
 ## App Store Connect Screenshot Sizes
 
-StoreScreens labels devices by physical screen dimension (6.9", 6.3", etc.). Here's how those map to what App Store Connect requires:
+App Store Connect groups screenshots into size classes, and each class has one display type in the API. `submit` picks the display type from each PNG's pixel size, so any simulator whose screen matches a size below fills that slot:
 
-| App Store Connect slot | StoreScreens size | Simulator to use |
-|------------------------|-------------------|------------------|
-| 6.9" (primary required) | 6.9" | `iPhone 17 Pro Max` |
-| 6.5" (auto-filled from 6.9") ¹ | 6.5" | `iPhone 11 Pro Max`, `iPhone Xs Max` ² |
-| 6.3" | 6.3" | `iPhone 17 Pro`, `iPhone 17`, `iPhone Air` |
-| 6.1" | 6.1" | `iPhone 16`, `iPhone 15` |
-| 5.5" | 5.5" | `iPhone 8 Plus` |
-| 4.7" | 4.7" | `iPhone SE (3rd generation)` |
-| iPad 13" (required when iPad supported) | iPad Pro 13" | `iPad Pro 13-inch (M5)` |
-| iPad 11" | iPad Pro 11" | `iPad Pro 11-inch (M5)` |
-| iPad Pro 12.9" (2nd Gen) | iPad Pro 12.9" | `iPad Pro 12.9-inch (2nd generation)` ³ |
-| iPad 10.5" | iPad 10.5" | `iPad Air (3rd generation)` ³ |
-| iPad 9.7" | iPad 9.7" | `iPad (6th generation)` ³ |
+| App Store Connect slot | Display type | Accepted sizes (px, portrait) | Simulator to use |
+|------------------------|--------------|-------------------------------|------------------|
+| iPhone 6.9" (required) | `APP_IPHONE_67` | 1320x2868, 1290x2796, 1260x2736 | `iPhone 18 Pro Max` (iOS 27 runtimes) or `iPhone 17 Pro Max` (iOS 26 runtimes) |
+| iPhone 6.5" (auto-filled from 6.9") ¹ | `APP_IPHONE_65` | 1284x2778, 1242x2688 | `iPhone 11 Pro Max`, `iPhone Xs Max` ² |
+| iPhone 6.3" | `APP_IPHONE_61` | 1206x2622, 1179x2556 | `iPhone 18 Pro` (iOS 27 runtimes) or `iPhone 17 Pro` (iOS 26 runtimes); `iPhone 17` on either |
+| iPhone 6.1" | `APP_IPHONE_58` | 1170x2532, 1125x2436, 1080x2340 | `iPhone 17e` |
+| iPhone 5.5" | `APP_IPHONE_55` | 1242x2208 | `iPhone 8 Plus` |
+| iPhone 4.7" | `APP_IPHONE_47` | 750x1334 | `iPhone SE (3rd generation)` |
+| iPad 13" (required when iPad supported) | `APP_IPAD_PRO_3GEN_129` | 2064x2752 | `iPad Pro 13-inch (M5)` |
+| iPad Pro 12.9" (2nd Gen) | `APP_IPAD_PRO_129` | 2048x2732 | `iPad Air 13-inch (M4)`, `iPad Pro (12.9-inch) (2nd generation)` ³ |
+| iPad 11" | `APP_IPAD_PRO_3GEN_11` | 1668x2420, 1668x2388, 1640x2360, 1488x2266 | `iPad Pro 11-inch (M5)`, `iPad Air 11-inch (M4)`, `iPad mini (A17 Pro)` |
+| iPad 10.5" | `APP_IPAD_105` | 1668x2224 | `iPad Air (3rd generation)` ³ |
+| iPad 9.7" | `APP_IPAD_97` | 1536x2048 | `iPad (6th generation)` ³ |
 
-No 6.7" slot exists in App Store Connect.
+No 6.7" slot exists in App Store Connect. `APP_IPHONE_67` is the 6.9" slot despite its name, and 1290x2796 captures (iPhone 16 Plus, 15 Pro Max) upload there. The iPhone Air (1260x2736) also uploads to the 6.9" slot, so it is not a second size class next to a Pro Max.
 
 ¹ 6.5" is auto-filled - providing 6.9" screenshots causes App Store Connect to automatically use them for the 6.5" slot too. A dedicated 6.5" simulator is only needed if you want distinct screenshots for that slot.
 
-² 6.5" (1242×2688) is the iPhone XS Max / 11 Pro Max resolution. No current simulator produces it - only these older simulators do.
+² The 6.5" sizes come from older models only (iPhone Xs Max and 11 Pro Max at 1242x2688, iPhone 12/13 Pro Max and 14 Plus at 1284x2778), which need older simulator runtimes.
 
 ³ Older iPad slots (12.9" 2nd Gen, 10.5", 9.7") require older simulator runtimes that may not be installed. Most apps only need the 13" slot.
+
+StoreScreens names output files with its own size labels (the App Store Size column of `storescreens list`), which predate Apple's current classes. For most devices the label matches the slot; where it doesn't, the pixel size decides the upload slot and the label only names the files:
+
+| Pixel size | File label | Uploads to |
+|------------|------------|------------|
+| 1260x2736 (iPhone Air) | `iPhone 6.3"` | 6.9" |
+| 1290x2796 | `iPhone 6.7"` | 6.9" |
+| 1284x2778 | `iPhone 6.7"` | 6.5" |
+| 1179x2556 | `iPhone 6.1"` | 6.3" |
+| 1125x2436, 1080x2340 | `iPhone 5.8"`, `iPhone 5.4"` | 6.1" |
+| 1640x2360, 1488x2266 | `iPad 10.9"`, `iPad mini 8.3"` | iPad 11" |
+
+In a UI-test capture, two devices with the same label write the same file names, and one overwrites the other; capture warns when it sees this. (Simple mode names files by device position, so nothing is overwritten there.) So don't pair iPhone Air with a 6.3" device (iPhone 18 Pro, 17 Pro, 17), and don't list both iPhone 17 Pro and iPhone 18 Pro.
+
+### iPhone Duo
+
+The iPhone Duo is a foldable with two displays: the outer display (1398x2034) shows when it is folded, the inner display (screenshot size 2007x2853) when it is open.
+
+Its simulator needs Xcode 27.1 beta or later plus the iOS 27.1 simulator runtime, which creates an `iPhone Duo` simulator (and no second copy of the other iPhones). One way to install both, signing in with your Apple ID once:
+
+```bash
+xcodes install 27.1 Beta --experimental-unxip   # xcodes: `mise use -g xcodes` or Homebrew
+DEVELOPER_DIR=/Applications/Xcode-27.1.0-Beta.app/Contents/Developer xcodebuild -downloadPlatform iOS
+```
+
+`capture`, `list`, and `screenshot` run against whichever Xcode `xcode-select` or `DEVELOPER_DIR` selects, so keep your other devices on the release Xcode and capture the Duo from a second config that lists only it:
+
+```yaml
+# storescreens-duo.yml: a copy of storescreens.yml with only the Duo
+devices:
+  - simulator: "iPhone Duo"
+# A separate output directory, so this run doesn't replace the main capture
+# (give render.output_dir its own directory too if render is enabled)
+output_dir: ./storescreens-output-duo
+# Remove the search_preview block: search previews never use Duo screenshots,
+# so a Duo-only run would overwrite the main previews with empty tiles
+```
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode-27.1.0-Beta.app/Contents/Developer \
+  storescreens capture --config storescreens-duo.yml --no-search-preview
+```
+
+`--no-search-preview` guards against the same overwrite if `search_preview` is still in the copied config.
+
+Apple lists a slow first launch as a known issue in the beta. On the iOS 27.1 runtime `simctl bootstatus` also reports the boot finished while the Apple logo is still up, so storescreens waits for SpringBoard to finish starting before it takes a screenshot.
+
+- Pose: folded or open can't be set from the command line or from a UI test; Apple exposes it only in Xcode's Device Hub. The simulator boots folded, so a capture produces outer-display screenshots (1398x2034). Screenshots come from whichever display is active, and storescreens files each one as `iPhone Duo outer` or `iPhone Duo inner` from its actual pixel size (`iPhone_Duo_outer_Home.png`, `iPhone_Duo_inner_Home.png`). `simctl io screenshot` on its own captures the inner display even when that one is dark, so simple mode and `storescreens screenshot` capture each built-in display and keep the one showing content.
+- Render: `chrome.style: device` draws Duo frames for both displays, and `bezel` uses Apple's iPhone Duo bezels once imported (see [Device bezels](#device-bezels)).
+- Submit: App Store Connect doesn't accept iPhone Duo screenshots yet (Apple says upload support comes later this year), so `submit` skips them with a notice and uploads the rest.
 
 ### Mac App Store
 
@@ -6049,7 +6114,7 @@ Those clones do not live in the device set `simctl list devices` shows. `xcodebu
 xcrun simctl --set ~/Library/Developer/XCTestDevices list devices
 ```
 
-Every `xcodebuild test` on the machine adds to that set, not just captures, and an interrupted run leaves its clone behind. Once a couple of dozen accumulate, CoreSimulator stops creating new ones and every test run on the machine fails to launch its test runner. So each capture starts by deleting the idle clones in that set, whatever device they are clones of. Booted and mid-transition clones are left alone, as is anything created in the last two minutes, so a test run in another terminal is never disturbed. When it removes anything, it says so:
+Every `xcodebuild test` on the machine adds to that set, not just captures, and an interrupted run leaves its clone behind. Once a couple of dozen accumulate, CoreSimulator stops creating new ones and every test run on the machine fails to launch its test runner. So each capture starts by deleting the idle clones in that set, whatever device they are clones of. Booted and mid-transition clones are left alone, as is anything created in the last two minutes, so a test run in another terminal is never disturbed. Only xcodebuild's own clones are deleted: a simulator of yours that has the same name as the device being captured but runs another runtime (for example the iOS 26 copy of `iPhone 17` next to the iOS 27 one) is left alone. When it removes anything, it says so:
 
 ```
 Removed 6 leftover xcodebuild simulator clones
@@ -6077,7 +6142,7 @@ With history enabled, a `latest` symlink always points to the most recent succes
 
 ## Device Size Detection
 
-The CLI reads screen dimensions directly from Xcode's CoreSimulator device profiles at runtime - no hardcoded device list. When Apple releases new devices with existing screen sizes (e.g., iPhone 18 Pro Max with the same resolution as iPhone 17 Pro Max), they appear seamlessly under the correct App Store size category. Devices with entirely new screen sizes are detected automatically and shown with their raw dimensions (e.g., `iPhone 1440x3120`).
+The CLI reads screen dimensions directly from Xcode's CoreSimulator device profiles at runtime - no hardcoded device list. When Apple releases new devices with existing screen sizes (e.g., iPhone 18 Pro Max, which has the same resolution as iPhone 17 Pro Max), they appear seamlessly under the correct App Store size category. Devices with entirely new screen sizes are detected automatically and shown with their raw dimensions (e.g., `iPhone 1440x3120`).
 
 To get friendly display names for new screen sizes (e.g., `iPhone 7.1"`), update the CLI via Homebrew:
 
@@ -6090,19 +6155,19 @@ brew upgrade storescreens
 When your UI tests write to the StoreScreens named pipe, the CLI displays progress in real time:
 
 ```
-                  ✓ iPhone 17 Pro Max -> iPhone 6.9"
+                  ✓ iPhone 18 Pro Max -> iPhone 6.9"
 
 Building for testing...
 ✓ Build succeeded
 
 Booting 1 simulators...
-✓ Booted iPhone 17 Pro Max
+✓ Booted iPhone 18 Pro Max
 
 Overriding status bar...
 ✓ Status bar overridden
 
 Warming up app (10s for setup)...
-✓ Launched on iPhone 17 Pro Max
+✓ Launched on iPhone 18 Pro Max
 ✓ Warmup complete
 
 Running tests on 1 simulators...
