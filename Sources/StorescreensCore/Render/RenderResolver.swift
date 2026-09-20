@@ -123,6 +123,7 @@ package enum RenderResolver {
             position: .aboveTitle,
             align: .center,
             maxHeightPct: logo.maxHeightPct,
+            topPaddingPct: logo.topPaddingPct,
             placement: placement,
             nudge: logo.nudge
         )]

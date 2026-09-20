@@ -32,6 +32,100 @@ final class OverlayPlacerTests: XCTestCase {
         XCTAssertEqual(h, 20, accuracy: 0.001)
     }
 
+    func testReservedHeight_aboveTitle_addsTopPadding() {
+        let placer = makePlacer()
+        let canvas = CGSize(width: 100, height: 200)
+        let img = ImageConfig(
+            path: .shared("/some/path.png"),
+            position: .aboveTitle,
+            maxHeightPct: 10,
+            topPaddingPct: 6
+        )
+        let h = placer.reservedHeight(
+            position: .aboveTitle,
+            images: [img],
+            laurels: [],
+            appearance: "light",
+            canvasSize: canvas,
+            isFirstInCombo: true
+        )
+        // 200 * (10 + 6)/100 = 32. The image still draws at 10% of canvas; the
+        // extra 6% is band the slot reserves above it, which is what the legacy
+        // `logo:` block always documented.
+        XCTAssertEqual(h, 32, accuracy: 0.001,
+                       "above_title band must be max_height_pct + top_padding_pct of canvas height; got \(h)")
+    }
+
+    func testReservedHeight_nonAboveTitleSlot_ignoresTopPadding() {
+        // Only above_title is anchored to the canvas edge, so it is the only
+        // slot where "padding above" says anything the slot's own position does
+        // not already say. Elsewhere the field must be inert rather than
+        // silently growing the band.
+        let placer = makePlacer()
+        let canvas = CGSize(width: 100, height: 200)
+        let below = ImageConfig(
+            path: .shared("/a.png"),
+            position: .belowSubtitle,
+            maxHeightPct: 10,
+            topPaddingPct: 6
+        )
+        let middle = ImageConfig(
+            path: .shared("/b.png"),
+            position: .belowTitle,
+            maxHeightPct: 10,
+            topPaddingPct: 6
+        )
+
+        let belowH = placer.reservedHeight(
+            position: .belowSubtitle,
+            images: [below],
+            laurels: [],
+            appearance: "light",
+            canvasSize: canvas,
+            isFirstInCombo: true
+        )
+        XCTAssertEqual(belowH, 20, accuracy: 0.001,
+                       "below_subtitle must reserve max_height_pct only; got \(belowH)")
+
+        let middleH = placer.reservedHeight(
+            position: .belowTitle,
+            images: [middle],
+            laurels: [],
+            appearance: "light",
+            canvasSize: canvas,
+            isFirstInCombo: true
+        )
+        XCTAssertEqual(middleH, 20, accuracy: 0.001,
+                       "below_title must reserve max_height_pct only; got \(middleH)")
+    }
+
+    func testReservedHeight_aboveTitle_topPaddingCountsTowardTheMax() {
+        let placer = makePlacer()
+        let canvas = CGSize(width: 100, height: 200)
+
+        // The padded item draws shorter (8% vs 14%) but claims the taller band
+        // (8 + 9 = 17% vs 14%), so the padding has to be inside the max, not
+        // added to whichever item happens to win it.
+        let tall = ImageConfig(path: .shared("/tall.png"), position: .aboveTitle, maxHeightPct: 14)
+        let padded = ImageConfig(
+            path: .shared("/padded.png"),
+            position: .aboveTitle,
+            maxHeightPct: 8,
+            topPaddingPct: 9
+        )
+        let h = placer.reservedHeight(
+            position: .aboveTitle,
+            images: [tall, padded],
+            laurels: [],
+            appearance: "light",
+            canvasSize: canvas,
+            isFirstInCombo: true
+        )
+        // 200 * 17/100 = 34, not 200 * (14 + 9)/100 = 46.
+        XCTAssertEqual(h, 34, accuracy: 0.001,
+                       "band must be the tallest max_height_pct + top_padding_pct pair; got \(h)")
+    }
+
     func testReservedHeight_emptySlot_returnsZero() {
         let placer = makePlacer()
         let canvas = CGSize(width: 100, height: 200)

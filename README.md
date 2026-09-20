@@ -1130,14 +1130,17 @@ logo:
 
 ### Equal spacing
 
-By default the logo and the caption are positioned by two independent vertical centerings, which tends to leave the caption -> device gap visibly larger than the canvas-top -> logo and logo -> caption gaps. Set `equal_spacing: true` to make all three gaps identical:
+By default the logo and the caption are positioned by two independent vertical centerings, which tends to leave the caption -> device gap visibly larger than the canvas-top -> logo and logo -> caption gaps. Set `equal_spacing: true` to make the gaps identical:
 
 ```yaml
 caption:
   equal_spacing: true   # canvas top -> logo, logo -> caption, caption -> device all equal
 ```
 
-This only takes effect on slides that have both an `above_title` logo image and a caption. The device stays exactly where it naturally lands; only the logo and caption move to balance the three gaps. The gaps are measured between the visible edges, the wordmark's actual glyph ink, the caption's cap height, and the device's screen content, not the looser layout boxes, so the spacing reads as even to the eye. `caption.nudge` still applies on top, so you can fine-tune afterward. If there isn't enough room (logo + caption taller than the space above the device) the layout falls back to the default placement and emits a warning. Default is off, so existing slides are unaffected.
+This takes effect on any slide that has an `above_title` logo image. With a caption there are three gaps to equalize: canvas top -> logo, logo -> caption, and caption -> device. On a caption-less slide - a hero carrying nothing but a wordmark - it is the same rule with one box removed, so there are two: canvas top -> logo and logo -> device. That second form is what stops the wordmark from reading as too high. Left alone, the logo is centered inside its own `above_title` band, and that band is anchored to the canvas edge and takes no account of the chrome inset below it, so the wordmark ends up above the middle of the space it appears to sit in. The device stays exactly where it naturally lands; only the logo, and the caption when there is one, move to balance the gaps. The gaps are measured between the visible edges, the wordmark's actual glyph ink, the caption's cap height, and the device's screen content, not the looser layout boxes, so the spacing reads as even to the eye. `caption.nudge` still applies on top, so you can fine-tune afterward. If there isn't enough room (the logo, plus the caption when present, taller than the space above the device) the layout falls back to the default placement and emits a warning. Default is off, so existing slides are unaffected.
+
+Two limits worth knowing. The caption-less form declines the job outright when the slide also has a `below_title` or `below_subtitle` overlay: those are drawn into the same space the two gaps divide up, and they are drawn after the logo, so an equal-spaced logo would be laid across them and an opaque one would paint the wordmark out. The slide keeps band centering and says so in a warning. The three-gap form has the same blind spot for a `below_subtitle` overlay and does not yet decline; if you use both together, check the render. And the gaps are measured from the wordmark's bright pixels against the dark background behind it, so a dark or mid-tone wordmark has no bright pixels to find and falls back to measuring its box, which is the looser number the rule exists to avoid.
+
 
 ### Images
 
@@ -1150,12 +1153,18 @@ render:
       position: above_title       # above_title | below_title | above_subtitle | below_subtitle
       align: center               # left | center (default) | right
       max_height_pct: 6           # % of canvas height; default 8
+      top_padding_pct: 4          # % of canvas height reserved above it; above_title only, default 0
       placement: first_only       # first_only | all | none
 ```
 
 `below_title` and `above_subtitle` are aliases for the same physical slot (the gap between the title and subtitle text); pick whichever reads more naturally. `placement` defaults to `first_only` for the `above_title` slot and `all` for every other slot, matching the "logo on slide 1, badges on every slide" convention.
 
 When a caption is present, the `above_title` slot extends from the canvas top down to just above the caption block, so the image is automatically balanced between the canvas edge and the caption text without any manual `nudge.y_pct`. When the caption shifts (via `caption.nudge` or `caption.vertical_align`), the image follows. Configs upgraded from pre-2.8 may want to drop their old `images[].nudge.y_pct` workaround, since the default already puts the logo near the caption.
+
+`top_padding_pct` reserves an extra band above the image, as a percentage of canvas height. Only the `above_title` slot honors it: that slot is anchored to the canvas edge, so it is the only one where padding above says anything the slot's own position does not. The slot grows to `max_height_pct + top_padding_pct` and the image centers inside it, so raising it pushes the caption and the device further down the canvas. That is how you line a hero slide's device up with the device on the caption slides: a caption reserves a band that a bare wordmark does not, and `top_padding_pct` makes up the difference.
+
+Two things it does not do. Both images in a slot share one band, so if two `above_title` images carry different `top_padding_pct` values the band is sized by whichever asks for the most and both images re-center inside it; neither gets its own padding. And the device only moves down when the chrome position is the natural stack-up. `chrome.device_height_pct` and `chrome.top_pct` both pin the device independently of the bands, so under either of those the extra band comes out of the caption instead: the caption moves down, and with `device_height_pct` its band shrinks by the same amount, which can re-wrap it or shrink its font.
+
 
 Two images in the same slot stack horizontally:
 
@@ -1179,7 +1188,7 @@ Slot distribution rules:
 
 `path` accepts a `{ light:, dark: }` variant the same way `background.image` does, so a wordmark can swap between dark/light files when rendering both appearances.
 
-The legacy `logo:` block still works and is treated as a single image at `above_title`. Setting `images: []` (an explicitly empty array) suppresses that legacy fallback.
+The legacy `logo:` block still works and is treated as a single image at `above_title`, including its `top_padding_pct`, which reaches the renderer again as of 3.13.0. Between the move to overlay images and that release the field was silently dropped in the conversion, so a config that set it got a band the size of the bare image. A `logo:` block that never set the field is unaffected and still reserves no padding: the retired placer defaulted it to 4, but no render has used that default since the overlay migration, and reviving it would move the device on every legacy config rather than only on the ones that asked for padding. Setting `images: []` (an explicitly empty array) suppresses that legacy fallback.
 
 ### Laurels
 

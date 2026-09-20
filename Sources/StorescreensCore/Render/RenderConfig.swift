@@ -445,6 +445,21 @@ package struct ImageConfig: Codable, Sendable {
     package var align: CaptionAlign?
     /// Image height as a percentage of canvas height. Default: 8.
     package var maxHeightPct: Double?
+    /// Extra band reserved ABOVE the image, as a percentage of canvas height.
+    /// Honored by the `above_title` slot only - that is the one slot anchored
+    /// to the canvas edge, so it is the only one where "padding above" has a
+    /// meaning distinct from the slot's own position. The slot grows to
+    /// `max_height_pct + top_padding_pct` and the image centers inside it, so
+    /// raising this pushes the caption and the device further down the canvas.
+    /// Default 0. The legacy `logo.top_padding_pct` maps onto this field, so a
+    /// `logo:` block that SETS it reserves the band again; between the move to
+    /// overlay images and this version the conversion dropped it. A `logo:`
+    /// block that never set it keeps reserving nothing: the retired
+    /// `LogoPlacer` defaulted the field to 4, but no render has used that
+    /// default since the overlay migration, and reviving it would move the
+    /// device on every legacy config rather than only on the ones that asked
+    /// for padding.
+    package var topPaddingPct: Double?
     /// Per-slide visibility. Default: `first_only` for `above_title`, `all`
     /// for every other position. (Re-applied at render time; the field stays
     /// a flat optional here so the merge logic is simple.)
@@ -457,6 +472,7 @@ package struct ImageConfig: Codable, Sendable {
         position: OverlayPosition? = nil,
         align: CaptionAlign? = nil,
         maxHeightPct: Double? = nil,
+        topPaddingPct: Double? = nil,
         placement: OverlayPlacement? = nil,
         nudge: NudgeConfig? = nil
     ) {
@@ -464,6 +480,7 @@ package struct ImageConfig: Codable, Sendable {
         self.position = position
         self.align = align
         self.maxHeightPct = maxHeightPct
+        self.topPaddingPct = topPaddingPct
         self.placement = placement
         self.nudge = nudge
     }
@@ -471,6 +488,7 @@ package struct ImageConfig: Codable, Sendable {
     package enum CodingKeys: String, CodingKey {
         case path, position, align, placement, nudge
         case maxHeightPct = "max_height_pct"
+        case topPaddingPct = "top_padding_pct"
     }
 }
 

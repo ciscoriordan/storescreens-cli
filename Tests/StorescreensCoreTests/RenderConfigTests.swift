@@ -266,6 +266,43 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertNil(imgs[0].nudge)
     }
 
+    func testImages_decode_topPaddingPct() throws {
+        let yaml = """
+            images:
+              - path: ./logo.png
+                position: above_title
+                max_height_pct: 10
+                top_padding_pct: 12
+              - path: ./badge.png
+                position: below_subtitle
+                max_height_pct: 6
+            """
+        let imgs: [ImageConfig] = try decodeNested(yaml, key: "images")
+        XCTAssertEqual(imgs.count, 2)
+        XCTAssertEqual(imgs[0].topPaddingPct, 12)
+        XCTAssertNil(imgs[1].topPaddingPct,
+                     "unset top_padding_pct must stay nil so the placer reads it as zero")
+    }
+
+    func testImages_topPaddingPct_roundTrips() throws {
+        let original = RenderConfig(
+            images: [
+                ImageConfig(
+                    path: .shared("./logo.png"),
+                    position: .aboveTitle,
+                    maxHeightPct: 10,
+                    topPaddingPct: 12
+                ),
+            ]
+        )
+        let yaml = try YAMLEncoder().encode(original)
+        XCTAssertTrue(yaml.contains("top_padding_pct"),
+                      "encoded YAML must use the snake_case key; got:\n\(yaml)")
+        let decoded = try YAMLDecoder().decode(RenderConfig.self, from: yaml)
+        XCTAssertEqual(decoded.images?.first?.topPaddingPct, 12)
+        XCTAssertEqual(decoded.images?.first?.maxHeightPct, 10)
+    }
+
     func testLaurels_decode_full() throws {
         let yaml = """
             laurels:
@@ -418,6 +455,46 @@ final class RenderConfigTests: XCTestCase {
         XCTAssertEqual(img.maxHeightPct, 7)
         XCTAssertEqual(img.placement, .firstOnly)
         XCTAssertEqual(img.nudge?.yPct, 2)
+    }
+
+    func testResolveImages_legacyLogoTopPaddingCarriesOver() {
+        // The synthesized above_title image is the only thing the renderer
+        // sees, so anything dropped here is dropped for good: a config that set
+        // logo.top_padding_pct used to get a band sized to the bare image
+        // height, and its device sat higher than on every other slide.
+        let config = RenderConfig(
+            logo: LogoConfig(
+                path: .shared("./logo.png"),
+                placement: .firstOnly,
+                maxHeightPct: 10,
+                topPaddingPct: 12
+            )
+        )
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 1)
+        XCTAssertEqual(resolved[0].maxHeightPct, 10)
+        XCTAssertEqual(resolved[0].topPaddingPct, 12,
+                       "logo.top_padding_pct must survive the conversion to an above_title image")
+    }
+
+    func testResolveImages_explicitImagesKeepTheirOwnTopPadding() {
+        // An explicit images: array replaces the legacy block wholesale, so
+        // each entry carries only the top_padding_pct it declares - the logo's
+        // value must not leak into an entry that omits it.
+        let config = RenderConfig(
+            logo: LogoConfig(path: .shared("./logo.png"), maxHeightPct: 10, topPaddingPct: 12),
+            images: [
+                ImageConfig(path: .shared("./a.png"), position: .aboveTitle, maxHeightPct: 8),
+                ImageConfig(path: .shared("./b.png"), position: .aboveTitle, maxHeightPct: 8, topPaddingPct: 5),
+            ]
+        )
+
+        let resolved = RenderResolver.resolvedImages(config: config, slideName: "01_Home")
+        XCTAssertEqual(resolved.count, 2)
+        XCTAssertNil(resolved[0].topPaddingPct,
+                     "an images: entry that omits top_padding_pct must stay nil, not inherit the legacy logo's")
+        XCTAssertEqual(resolved[1].topPaddingPct, 5)
     }
 
     func testResolveImages_imagesArrayOverridesLogo() {

@@ -15,12 +15,15 @@ package struct CaptionConfig: Codable, Sendable {
     /// Fine-grained positional offset applied after vertical-align placement.
     /// See `NudgeConfig` for units and sign conventions.
     package var nudge: NudgeConfig?
-    /// Equal-spacing layout. When true (and the slide has both an
-    /// `above_title` image and a caption), the three vertical gaps - canvas
-    /// top -> logo, logo -> caption, and caption -> device top - are made
-    /// identical. The device stays exactly where it naturally lands; only the
-    /// logo and caption are repositioned to balance the gaps. Default
-    /// nil/false keeps the legacy two-independent-centerings behavior.
+    /// Equal-spacing layout. When true, and the slide has an `above_title`
+    /// image, every vertical gap above the device is made identical. With a
+    /// caption that is three gaps - canvas top -> logo, logo -> caption, and
+    /// caption -> device top. On a caption-less slide, a hero carrying only a
+    /// wordmark, it is the same rule with one box removed: canvas top -> logo
+    /// and logo -> device top. The device stays exactly where it naturally
+    /// lands; only the logo, and the caption when there is one, are
+    /// repositioned to balance the gaps. Default nil/false keeps the legacy
+    /// two-independent-centerings behavior.
     package var equalSpacing: Bool?
 
     package init(

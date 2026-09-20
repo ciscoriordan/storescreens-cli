@@ -45,13 +45,20 @@ package struct OverlayPlacer: @unchecked Sendable {
             isFirstInCombo: isFirstInCombo
         ).items
 
+        // `top_padding_pct` reserves extra band above the image. Only the
+        // above_title slot honors it: that slot is anchored to the canvas
+        // edge, so "padding above" is the one thing it cannot express by
+        // position alone. It is also what the legacy `logo.top_padding_pct`
+        // meant - the logo centers in a band of max_height + top_padding.
+        let honorsTopPadding = position.canonicalSlot == .aboveTitle
         var maxH: CGFloat = 0
         for item in items {
             switch item {
             case .image(let cfg):
                 guard cfg.path?.value(for: appearance) != nil else { continue }
                 let pct = CGFloat(cfg.maxHeightPct ?? 8)
-                maxH = max(maxH, canvasSize.height * pct / 100.0)
+                let padPct = honorsTopPadding ? CGFloat(cfg.topPaddingPct ?? 0) : 0
+                maxH = max(maxH, canvasSize.height * (pct + padPct) / 100.0)
             case .laurel(let cfg):
                 let pct = CGFloat(cfg.maxHeightPct ?? 10)
                 maxH = max(maxH, canvasSize.height * pct / 100.0)
@@ -65,12 +72,13 @@ package struct OverlayPlacer: @unchecked Sendable {
 
     /// Measured geometry of the single `above_title` image overlay, for the
     /// equal-spacing layout. `drawSlot` sizes an image to a box of height
-    /// `box` (= canvasH * max_height_pct / 100, the same value
-    /// `reservedHeight` returns) and centers that box in its slot, but the
+    /// `box` (= canvasH * max_height_pct / 100). Note that is the IMAGE box,
+    /// no longer the same number `reservedHeight` returns, which also carries
+    /// `top_padding_pct`. `drawSlot` centers that box in its slot, but the
     /// glyph ink inside the box is usually shorter than the box and not
     /// vertically centered in it (an SVG/PNG wordmark carries internal
     /// padding). Equal-spacing needs the *visual ink* extent, not the box, so
-    /// the three gaps are visually equal. We rasterize the image exactly as
+    /// the gaps are visually equal. We rasterize the image exactly as
     /// `drawSlot` loads it, measure the alpha bounding box, and scale those
     /// ink rows to the on-canvas box height.
     ///

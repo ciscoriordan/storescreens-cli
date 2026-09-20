@@ -404,12 +404,20 @@ package struct RenderPipeline {
 
         // --- Equal-spacing override ------------------------------------------
         //
-        // When `caption.equal_spacing` is on and the slide has both an
-        // above_title logo image and a caption, make the three vertical gaps
-        // identical: canvas top -> logo, logo -> caption, and caption ->
-        // device top. The two default centerings (logo centered in a tall
-        // above_title slot, caption centered in its own band) otherwise leave
-        // the caption -> device gap visibly fatter than the other two.
+        // When `caption.equal_spacing` is on and the slide has an above_title
+        // logo image, make every vertical gap above the device identical. With
+        // a caption that is three gaps: canvas top -> logo, logo -> caption,
+        // and caption -> device top. The two default centerings (logo centered
+        // in a tall above_title slot, caption centered in its own band)
+        // otherwise leave the caption -> device gap visibly fatter than the
+        // other two.
+        //
+        // On a caption-less slide - a hero carrying only the wordmark - it is
+        // the same rule with one box removed: two gaps, canvas top -> logo and
+        // logo -> device top, so the wordmark reads as centered in the space
+        // above the device. Without this the logo is centered inside its own
+        // above_title band instead, which sits at the canvas edge and ignores
+        // the chrome inset below it, so the wordmark rides visibly high.
         //
         // The device stays exactly where it naturally lands; we solve for one
         // uniform gap S from the leftover space after the logo and caption
@@ -444,9 +452,6 @@ package struct RenderPipeline {
         var equalSpacingAboveRect: CGRect? = nil
         var equalSpacingStripLogoNudge = false
         if captionResolved?.equalSpacing == true,
-           hasCaption,
-           let out = captionLayout,
-           let cr = captionResolved,
            aboveTitleBandH > 0,
            let logoMetrics = overlayPlacer.aboveTitleImageMetrics(
                images: images, laurels: laurels, tables: tables,
@@ -472,15 +477,43 @@ package struct RenderPipeline {
             let deviceAnchorFromTop = screenTopBL.map { canvasSize.height - $0 } ?? deviceTopY
 
             // Visible heights: wordmark bright extent, caption bright extent.
+            // A caption-less slide contributes no caption box and no caption
+            // gap, which turns the three-gap solve into the two-gap one.
+            // `captionLayout` is assigned only inside the `hasCaption` branch
+            // above, so it is already nil exactly when there is no caption.
+            let captionOut = captionLayout
             let hLogo = logoMetrics.inkHeight
-            let capInk = out.drawable.inkExtent(measuredHeight: out.measuredHeight)
+            let capInk = captionOut.flatMap { $0.drawable.inkExtent(measuredHeight: $0.measuredHeight) }
             let capInkTop = capInk?.top ?? 0          // box top -> first bright row
-            let hCaption = capInk?.height ?? out.measuredHeight
+            let hCaption = captionOut.map { capInk?.height ?? $0.measuredHeight } ?? 0
+            let gapCount: CGFloat = captionOut == nil ? 2.0 : 3.0
+
+            // The two-gap solve hands everything between the logo and the
+            // device to the two gaps, so it is only correct when nothing else
+            // is drawn down there. A middle-slot overlay or a
+            // `below_subtitle` overlay occupies exactly that space and is
+            // drawn AFTER the logo, so an equal-spacing logo would be laid
+            // across it - and an opaque overlay would paint the wordmark out
+            // of the render with nothing to show for it. Fall back to band
+            // centering and say why.
+            //
+            // The three-gap form needs no such guard for the caption, which
+            // it places itself. It does share the blind spot for a
+            // `below_subtitle` overlay, but that predates this branch and is
+            // left alone so captioned slides keep rendering as they already
+            // do; it is called out in the README instead.
+            let blockedByLowerOverlay = captionOut == nil && (middleSlotH + belowSubtitleBandH) > 0
 
             // Single uniform gap, top-origin pixels, from the VISIBLE heights.
-            let s = (deviceAnchorFromTop - hLogo - hCaption) / 3.0
-            if s < 0 {
-                warnings.append("[\(slideName)] caption.equal_spacing: not enough room - logo ink (\(Int(hLogo))px) + caption ink (\(Int(hCaption))px) leave no space above the device; falling back to default placement")
+            let s = (deviceAnchorFromTop - hLogo - hCaption) / gapCount
+            if blockedByLowerOverlay {
+                warnings.append("[\(slideName)] caption.equal_spacing: skipped - this slide has no caption, and a below_title or below_subtitle overlay sits between the logo and the device where the spacing would have put it; the logo keeps its band centering")
+            } else if s < 0 {
+                let captionTerm = captionOut == nil ? "" : " + caption ink (\(Int(hCaption))px)"
+                // Singular subject on a caption-less slide, plural once the
+                // caption term joins it.
+                let verb = captionOut == nil ? "leaves" : "leave"
+                warnings.append("[\(slideName)] caption.equal_spacing: not enough room - logo ink (\(Int(hLogo))px)\(captionTerm) \(verb) no space above the device; falling back to default placement")
             } else {
                 // LOGO: size the slot to the box so drawSlot's centering is a
                 // no-op (box top == slot top), then place the box so the
@@ -500,12 +533,15 @@ package struct RenderPipeline {
                 // the canvas top. The bright text begins `capInkTop` below the
                 // box top, so the box top sits at (2*S + H_logo) - capInkTop.
                 // captionTopLeft.y is the BL y of the box's BOTTOM. Re-apply
-                // caption.nudge.y so fine-tuning still works.
-                let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
-                let captionBoxTopFromTop = 2.0 * s + hLogo - capInkTop
-                captionTopLeft.y = canvasSize.height - captionBoxTopFromTop - out.measuredHeight + nudgeY
-                captionBlockBottomBL = captionTopLeft.y
-                captionBlockTopBL = captionBlockBottomBL + out.measuredHeight
+                // caption.nudge.y so fine-tuning still works. Skipped in the
+                // two-gap case - there is no caption block to place.
+                if let out = captionOut, let cr = captionResolved {
+                    let nudgeY = CGFloat(cr.nudge?.yPct ?? 0) * canvasSize.height / 100.0
+                    let captionBoxTopFromTop = 2.0 * s + hLogo - capInkTop
+                    captionTopLeft.y = canvasSize.height - captionBoxTopFromTop - out.measuredHeight + nudgeY
+                    captionBlockBottomBL = captionTopLeft.y
+                    captionBlockTopBL = captionBlockBottomBL + out.measuredHeight
+                }
             }
         }
 
