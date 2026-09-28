@@ -1438,8 +1438,8 @@ app_store_connect:
 
   submit:
     create_version: "1.2.0"   # creates the version if it doesn't exist
-    screenshots: true
-    metadata: true
+    screenshots: true         # false: leave the version's screenshot sets alone
+    metadata: true            # false: leave its metadata alone
     submit_for_review: false  # hard default; review submission is manual
 ```
 
@@ -1519,7 +1519,7 @@ storescreens submit
 ```
 
 Flags:
-- `--skip-screenshots` / `--skip-metadata` to upload only one side
+- `--skip-screenshots` / `--skip-metadata` to upload only one side. A flag only turns an upload off; it never re-enables one the yml switched off with `submit.screenshots: false` or `submit.metadata: false`. Before 3.13.1 those two yml keys were parsed but ignored, so a run meant to update only the release notes still replaced every screenshot set; on an older version, pass the flag.
 - `--version-override 1.2.1` overrides `submit.create_version`
 - `--submit-for-review` / `--no-submit-for-review` overrides `submit.submit_for_review` for one run without touching the yml
 - `--render-dir` / `--metadata-dir` override config paths

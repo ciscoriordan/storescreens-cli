@@ -16,6 +16,49 @@ final class AppStoreConnectConfigTests: XCTestCase {
         return try decoder.decode(AppStoreConnectConfig.self, from: yaml)
     }
 
+    // MARK: - Submit uploads
+
+    func testSubmitConfig_screenshotsAndMetadataFalseAreHonored() throws {
+        // `storescreens submit` used to parse these keys and then ignore
+        // them, so a metadata-only resubmission replaced every screenshot
+        // set on the version.
+        let yaml = """
+        bundle_id: com.example.app
+        submit:
+          create_version: "2.5.0"
+          screenshots: false
+          metadata: false
+        """
+        let submit = try XCTUnwrap(try decode(yaml).submit)
+        XCTAssertFalse(submit.uploadsScreenshots)
+        XCTAssertFalse(submit.uploadsMetadata)
+    }
+
+    func testSubmitConfig_uploadsDefaultToTrue() throws {
+        let yaml = """
+        bundle_id: com.example.app
+        submit:
+          create_version: "2.5.0"
+        """
+        let submit = try XCTUnwrap(try decode(yaml).submit)
+        XCTAssertTrue(submit.uploadsScreenshots)
+        XCTAssertTrue(submit.uploadsMetadata)
+    }
+
+    func testSubmitConfig_skipFlagsOnlyTurnUploadsOff() {
+        let on = SubmitConfig(createVersion: "2.5.0", screenshots: true, metadata: true)
+        let skipped = on.applyingSkips(screenshots: true, metadata: false)
+        XCTAssertFalse(skipped.uploadsScreenshots)
+        XCTAssertTrue(skipped.uploadsMetadata)
+
+        // No flag re-enables what the yml turned off.
+        let off = SubmitConfig(createVersion: "2.5.0", screenshots: false, metadata: false)
+        let unchanged = off.applyingSkips(screenshots: false, metadata: false)
+        XCTAssertFalse(unchanged.uploadsScreenshots)
+        XCTAssertFalse(unchanged.uploadsMetadata)
+        XCTAssertEqual(unchanged.createVersion, "2.5.0")
+    }
+
     // MARK: - Categories
 
     func testCategoriesConfig_primaryAndSecondary() throws {

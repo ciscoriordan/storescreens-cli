@@ -616,6 +616,24 @@ package struct SubmitConfig: Codable, Sendable {
         self.exportCompliance = exportCompliance
     }
 
+    /// Whether a submit run uploads screenshots: `screenshots` from the
+    /// yml, true when unset.
+    package var uploadsScreenshots: Bool { screenshots ?? true }
+
+    /// Whether a submit run uploads metadata: `metadata` from the yml,
+    /// true when unset.
+    package var uploadsMetadata: Bool { metadata ?? true }
+
+    /// This config with the CLI's `--skip-screenshots` and
+    /// `--skip-metadata` applied. A skip flag only turns an upload off; it
+    /// never turns back on what the yml switched off.
+    package func applyingSkips(screenshots skipScreenshots: Bool, metadata skipMetadata: Bool) -> SubmitConfig {
+        var out = self
+        if skipScreenshots { out.screenshots = false }
+        if skipMetadata { out.metadata = false }
+        return out
+    }
+
     package enum CodingKeys: String, CodingKey {
         case createVersion = "create_version"
         case screenshots

@@ -77,6 +77,16 @@ struct SubmitCommand: AsyncParsableCommand {
             submit.submitForReview = sfr
             effectiveConfig.submit = submit
         }
+        // The skip flags turn an upload off on top of the yml's
+        // submit.screenshots / submit.metadata. Those keys were once parsed
+        // and then ignored, so `screenshots: false` still replaced every
+        // screenshot set; every upload decision below reads these two.
+        if skipScreenshots || skipMetadata {
+            effectiveConfig.submit = (effectiveConfig.submit ?? SubmitConfig())
+                .applyingSkips(screenshots: skipScreenshots, metadata: skipMetadata)
+        }
+        let uploadScreenshots = effectiveConfig.submit?.uploadsScreenshots ?? true
+        let uploadMetadata = effectiveConfig.submit?.uploadsMetadata ?? true
 
         // Load manifest.
         let capturedDir = URL(fileURLWithPath: captureConfig.outputDir)
@@ -100,7 +110,7 @@ struct SubmitCommand: AsyncParsableCommand {
             return baseDir.appendingPathComponent("storescreens-framed")
         }()
         let metadataURL: URL? = {
-            if skipMetadata { return nil }
+            if !uploadMetadata { return nil }
             let path: String
             if let override = metadataDir { path = override }
             else if let configured = effectiveConfig.metadataDir { path = configured }
@@ -114,6 +124,9 @@ struct SubmitCommand: AsyncParsableCommand {
         print("  version:   \(effectiveConfig.submit?.createVersion ?? "(unset)")")
         print("  render:    \(renderRoot.path)")
         print("  metadata:  \(metadataURL?.path ?? "(none)")")
+        if !uploadScreenshots {
+            print("  screenshots: skipped (--skip-screenshots or submit.screenshots: false)")
+        }
 
         if dryRun {
             try await runDryRun(
@@ -134,8 +147,8 @@ struct SubmitCommand: AsyncParsableCommand {
             manifest: manifest,
             renderRoot: renderRoot,
             metadataRoot: metadataURL,
-            shouldUploadScreenshots: !skipScreenshots,
-            shouldUploadMetadata: !skipMetadata && metadataURL != nil,
+            shouldUploadScreenshots: uploadScreenshots,
+            shouldUploadMetadata: uploadMetadata && metadataURL != nil,
             screenshotOrder: captureConfig.screenshots,
             progress: { line in print("  \(line)") }
         )
@@ -280,7 +293,7 @@ struct SubmitCommand: AsyncParsableCommand {
         }
 
         // 4. Metadata locales exist.
-        if !skipMetadata {
+        if ascConfig.submit?.uploadsMetadata ?? true {
             if let metadataRoot {
                 do {
                     var warnings: [String] = []
@@ -373,7 +386,7 @@ struct SubmitCommand: AsyncParsableCommand {
         // Uses the same plan as the live upload, so sizes App Store Connect
         // does not accept yet and devices that share a set with another
         // device are reported as skipped here too, not as problems.
-        if !skipScreenshots {
+        if ascConfig.submit?.uploadsScreenshots ?? true {
             let plan = SubmitOrchestrator.planScreenshotUploads(
                 manifest: manifest, renderRoot: renderRoot
             )
@@ -412,7 +425,7 @@ struct SubmitCommand: AsyncParsableCommand {
         // 6. Metadata guideline scan. The offline rules only - the URL
         // reachability pass belongs to `storescreens precheck`, where the
         // operator has opted into third-party network calls.
-        if !skipMetadata, let metadataRoot {
+        if ascConfig.submit?.uploadsMetadata ?? true, let metadataRoot {
             let result = MetadataPrecheck().scan(dir: metadataRoot)
             for finding in result.findings {
                 print("    \(finding.severity == .error ? "✗" : "warn:") [\(finding.rule)] \(finding.locale)/\(finding.file): \(finding.message)")
