@@ -232,6 +232,12 @@ package struct SubmitOrchestrator {
         guard let createVersion = config.submit?.createVersion, !createVersion.isEmpty else {
             throw Failure.missingCreateVersion
         }
+        // The yml's submit.screenshots / submit.metadata switch an upload off
+        // whatever the caller passed. `storescreens submit` once passed only
+        // its skip flags, so `screenshots: false` re-synced every screenshot
+        // set anyway; checking here keeps any caller from doing that again.
+        let screenshotsOn = shouldUploadScreenshots && (config.submit?.uploadsScreenshots ?? true)
+        let metadataOn = shouldUploadMetadata && (config.submit?.uploadsMetadata ?? true)
         let platform = config.submit?.platform ?? "IOS"
 
         // 1. Resolve app.
@@ -313,7 +319,7 @@ package struct SubmitOrchestrator {
         }
 
         // 3. Metadata.
-        if shouldUploadMetadata, let metadataRoot {
+        if metadataOn, let metadataRoot {
             try await uploadMetadata(
                 appsAPI: appsAPI,
                 versionID: version.id,
@@ -346,7 +352,7 @@ package struct SubmitOrchestrator {
         // error (a file it could not place, a set refused or failed),
         // which blocks step 5.
         var screenshotsIncomplete = false
-        if shouldUploadScreenshots {
+        if screenshotsOn {
             let orderedManifest: CaptureManifest = {
                 guard let order = screenshotOrder, !order.isEmpty else { return manifest }
                 let reorderedDevices = manifest.devices.map { dev in

@@ -758,6 +758,56 @@ final class SubmitOrchestratorTests: XCTestCase {
 
     /// When all configured review fields already match what ASC has, no
     /// PATCH should fire (idempotent re-run).
+    func testSubmit_ymlScreenshotsAndMetadataFalse_overrideTheCaller() async throws {
+        // `storescreens submit` once passed only its skip flags here, so
+        // `screenshots: false` in the yml still re-synced every screenshot
+        // set on the version. The orchestrator reads the yml keys itself.
+        let (client, _) = makeClient()
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("submit-yml-off-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let renderRoot = tmp.appendingPathComponent("render")
+        try FileManager.default.createDirectory(at: renderRoot, withIntermediateDirectories: true)
+        try makePNG(w: 1320, h: 2868).write(to: renderRoot.appendingPathComponent("iPhone_6.9_01.png"))
+        let metaRoot = tmp.appendingPathComponent("metadata")
+        try writeFixture("new release notes", to: metaRoot.appendingPathComponent("en-US/release_notes.txt"))
+        let manifest = CaptureManifest(
+            version: 1, generatedAt: Date(), generatedBy: "t",
+            appName: "a", displayName: nil, scheme: "s",
+            devices: [
+                CaptureManifest.DeviceCapture(
+                    deviceType: "iPhone 6.9\"", simulatorName: "iPhone 17 Pro Max",
+                    locale: "en-US", appearance: nil,
+                    screenshots: [.init(name: "01", filename: "iPhone_6.9_01.png", capturedAt: Date())]
+                )
+            ]
+        )
+        ASCStub.add(method: "GET", suffix: "/v1/apps") { _ in
+            (200, Data(#"{"data":[{"id":"APP-1","type":"apps","attributes":{"bundleId":"com.example.app"}}]}"#.utf8))
+        }
+        ASCStub.add(method: "GET", suffix: "/v1/apps/APP-1/appStoreVersions") { _ in
+            (200, Data(#"{"data":[{"id":"VER-1","type":"appStoreVersions","attributes":{"versionString":"1.0.0","platform":"IOS"}}]}"#.utf8))
+        }
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(createVersion: "1.0.0", screenshots: false, metadata: false, attachBuild: false)
+        )
+        let report = try await SubmitOrchestrator(client: client, config: config).submit(
+            manifest: manifest,
+            renderRoot: renderRoot,
+            metadataRoot: metaRoot,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: true
+        )
+
+        let touched = ASCStub.requests.compactMap { $0.url?.path }.filter {
+            $0.contains("appScreenshot") || $0.contains("appStoreVersionLocalizations")
+        }
+        XCTAssertEqual(touched, [], "yml switched both uploads off, but these endpoints were called")
+        XCTAssertTrue(report.screenshotUploads.isEmpty)
+        XCTAssertTrue(report.metadataUpdates.isEmpty)
+    }
+
     func testSubmit_reviewNotes_unchangedSkipsPatch() async throws {
         let (client, _) = makeClient()
 

@@ -88,17 +88,26 @@ struct SubmitCommand: AsyncParsableCommand {
         let uploadScreenshots = effectiveConfig.submit?.uploadsScreenshots ?? true
         let uploadMetadata = effectiveConfig.submit?.uploadsMetadata ?? true
 
-        // Load manifest.
-        let capturedDir = URL(fileURLWithPath: captureConfig.outputDir)
-        let manifestPath = capturedDir.appendingPathComponent("manifest.json")
-        guard FileManager.default.fileExists(atPath: manifestPath.path) else {
-            logger.log("no manifest.json at \(manifestPath.path); run `storescreens capture` first", level: .error)
-            throw ExitCode(1)
+        // Load the capture manifest. Only the screenshot upload reads it, so
+        // a metadata-only run does not need a capture on disk.
+        let manifest: CaptureManifest
+        if uploadScreenshots {
+            let capturedDir = URL(fileURLWithPath: captureConfig.outputDir)
+            let manifestPath = capturedDir.appendingPathComponent("manifest.json")
+            guard FileManager.default.fileExists(atPath: manifestPath.path) else {
+                logger.log("no manifest.json at \(manifestPath.path); run `storescreens capture` first", level: .error)
+                throw ExitCode(1)
+            }
+            let manifestData = try Data(contentsOf: manifestPath)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            manifest = try decoder.decode(CaptureManifest.self, from: manifestData)
+        } else {
+            manifest = CaptureManifest(
+                version: 1, generatedAt: Date(), generatedBy: "storescreens submit",
+                appName: "", displayName: nil, scheme: "", devices: []
+            )
         }
-        let manifestData = try Data(contentsOf: manifestPath)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let manifest = try decoder.decode(CaptureManifest.self, from: manifestData)
 
         // Resolve render + metadata paths relative to the YML.
         let baseDir = URL(fileURLWithPath: config).deletingLastPathComponent().standardized
@@ -123,7 +132,14 @@ struct SubmitCommand: AsyncParsableCommand {
         print("  app:       \(effectiveConfig.appID ?? effectiveConfig.bundleID ?? "(unset)")")
         print("  version:   \(effectiveConfig.submit?.createVersion ?? "(unset)")")
         print("  render:    \(renderRoot.path)")
-        print("  metadata:  \(metadataURL?.path ?? "(none)")")
+        if uploadMetadata {
+            print("  metadata:  \(metadataURL?.path ?? "(none)")")
+        } else {
+            print("  metadata:  skipped (--skip-metadata or submit.metadata: false)")
+            if metadataDir != nil {
+                print("    note: --metadata-dir is ignored while metadata uploads are off")
+            }
+        }
         if !uploadScreenshots {
             print("  screenshots: skipped (--skip-screenshots or submit.screenshots: false)")
         }

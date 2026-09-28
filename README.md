@@ -1439,7 +1439,8 @@ app_store_connect:
   submit:
     create_version: "1.2.0"   # creates the version if it doesn't exist
     screenshots: true         # false: leave the version's screenshot sets alone
-    metadata: true            # false: leave its metadata alone
+    metadata: true            # false: skip metadata/<locale>/*.txt (review_info, categories
+                              # and the other app_store_connect blocks still apply)
     submit_for_review: false  # hard default; review submission is manual
 ```
 
@@ -1519,7 +1520,7 @@ storescreens submit
 ```
 
 Flags:
-- `--skip-screenshots` / `--skip-metadata` to upload only one side. A flag only turns an upload off; it never re-enables one the yml switched off with `submit.screenshots: false` or `submit.metadata: false`. Before 3.13.1 those two yml keys were parsed but ignored, so a run meant to update only the release notes still replaced every screenshot set; on an older version, pass the flag.
+- `--skip-screenshots` / `--skip-metadata` to upload only one side. A flag only turns an upload off; it never re-enables one the yml switched off with `submit.screenshots: false` or `submit.metadata: false`. Before 3.13.1 those two yml keys were parsed but ignored, so a run meant to update only the release notes still re-synced every screenshot set to the local renders, replacing any set that differed; on an older version, pass the flag. A run with screenshots off does not need a capture manifest.
 - `--version-override 1.2.1` overrides `submit.create_version`
 - `--submit-for-review` / `--no-submit-for-review` overrides `submit.submit_for_review` for one run without touching the yml
 - `--render-dir` / `--metadata-dir` override config paths
@@ -1570,7 +1571,7 @@ Note: programmatic cancel uses PATCH `{"canceled": true}` on the submission. ASC
 
 When `attach_build: true` (the default) and `submit_for_review: true`, `submit` will poll `/v1/builds` for up to 20 minutes waiting for a VALID build to appear for the target marketing version before continuing. Submitting against a build-less version is what leaves an empty draft `reviewSubmission` behind, so the wait is cheaper than the cleanup. If the wait times out, `submit` skips the review-submission step entirely (no empty draft is created) and reports an explicit "submit for review: skipped because no VALID build was attached" error; re-run once `storescreens testflight builds list` shows the build as `VALID`.
 
-Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version.
+Prefer to leave `submit_for_review: false` in the yml as the default safe state and opt in per-run with `--submit-for-review` on the CLI when you're ready to ship. The inverse `--no-submit-for-review` suppresses submission even if the yml has it enabled, which is handy for a dry rehearsal against the production config. If neither flag is passed, the yml value wins. The flags combine with `--skip-screenshots --skip-metadata` if you just want to re-trigger the review submission against an already-uploaded version; the other `app_store_connect` blocks you configured (review_info, categories, age_rating, pricing, availability, release, attach_build, export_compliance) still apply on that run.
 
 #### App Review notes and contact info
 
