@@ -624,7 +624,7 @@ Rules:
 |------|----------|-----------------|
 | `other-platform` | Error | Android, Google Play, BlackBerry, Windows Phone, Kindle Fire (guideline 2.3.10) |
 | `placeholder-text` | Error | Lorem ipsum, TODO, FIXME, TBD shipped in copy |
-| `profanity` | Error | Obviously objectionable language (guideline 1.1.1) |
+| `profanity` | Error | Obviously objectionable language (guideline 1.1.1). The words are English and are checked in every locale, since they turn up as loanwords, except where a word is ordinary in the locale's language: "slut" is not checked in Danish or Swedish, where it means "end" |
 | `field-length` | Error | Over Apple's hard limits - name/subtitle 30, keywords 100, promotional text 170, description and release notes 4000 |
 | `url-format` | Error | Support / marketing / privacy URLs that aren't absolute http(s) |
 | `url-unreachable` | Error | Links that don't answer (only with `--check-urls`) |

@@ -128,6 +128,55 @@ final class MetadataPrecheckTests: XCTestCase {
         XCTAssertEqual(findings(rule: "test-word").first?.severity, .warning)
     }
 
+    // MARK: - Profanity (guideline 1.1.1)
+
+    func testProfanity_flagsEnglishSwearWord() throws {
+        try write("This keyboard is the shit.", to: "description.txt")
+        let hits = findings(rule: "profanity")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.severity, .error)
+        XCTAssertEqual(hits.first?.locale, "en-US")
+    }
+
+    /// English swear words are loanwords in many languages, so the list is
+    /// matched outside English locales too.
+    func testProfanity_flagsEnglishLoanwordInAnotherLocale() throws {
+        try write("Nie wieder Shit beim Tippen.", to: "description.txt", locale: "de-DE")
+        XCTAssertEqual(findings(rule: "profanity").map(\.locale), ["de-DE"])
+    }
+
+    /// Danish and Swedish "slut" means "end". Tonos' Danish description
+    /// opens with "Slut med at kopiere ...", and the precheck failed it.
+    func testProfanity_ignoresSlutWhereItMeansEnd() throws {
+        try write(
+            "Slut med at kopiere og indsætte besværlige diakritiske tegn fra en hjemmeside!",
+            to: "description.txt", locale: "da"
+        )
+        try write("Slut på att kopiera accenter från en webbsida.", to: "description.txt", locale: "sv")
+        try write("Läs till slut.", to: "promotional_text.txt", locale: "sv-SE")
+        XCTAssertTrue(findings(rule: "profanity").isEmpty, "got: \(findings(rule: "profanity").map(\.locale))")
+    }
+
+    /// The exemption is per word and per language: "slut" is still checked
+    /// in English, and the other words are still checked in Danish.
+    func testProfanity_exemptionCoversOnlyThatWordInThatLanguage() throws {
+        try write("Slut shaming has no place here.", to: "description.txt", locale: "en-GB")
+        try write("Slut med det. Fuck, hvor er det nemt.", to: "description.txt", locale: "da")
+        let hits = findings(rule: "profanity")
+        XCTAssertEqual(hits.map(\.locale), ["da", "en-GB"])
+        XCTAssertEqual(hits.first?.excerpt?.contains("Fuck"), true, "got: \(hits.map { $0.excerpt ?? "" })")
+        XCTAssertEqual(hits.last?.excerpt?.contains("Slut"), true, "got: \(hits.map { $0.excerpt ?? "" })")
+    }
+
+    func testProfanity_wordsForLocale() {
+        XCTAssertFalse(MetadataPrecheck.profanity(forLocale: "da").contains("slut"))
+        XCTAssertFalse(MetadataPrecheck.profanity(forLocale: "sv-SE").contains("slut"))
+        XCTAssertFalse(MetadataPrecheck.profanity(forLocale: "sv_SE").contains("slut"))
+        XCTAssertTrue(MetadataPrecheck.profanity(forLocale: "en-US").contains("slut"))
+        XCTAssertTrue(MetadataPrecheck.profanity(forLocale: "de-DE").contains("slut"))
+        XCTAssertEqual(MetadataPrecheck.profanity(forLocale: "da"), MetadataPrecheck.profanity.filter { $0 != "slut" })
+    }
+
     // MARK: - Field lengths
 
     func testFieldLength_flagsOverLongName() throws {

@@ -147,10 +147,36 @@ package struct MetadataPrecheck {
     /// content rather than mild language. Words with a common innocent
     /// reading are left out on purpose - "dick" is a name, and flagging an
     /// author credit as profanity is worse than missing it.
+    ///
+    /// The words are English, but they are matched in every locale, because
+    /// English swear words turn up as loanwords in other languages' copy.
+    /// Where one of them is also an ordinary word of the locale's language,
+    /// `profanityOrdinaryIn` exempts it there.
     static let profanity: [String] = [
         "fuck", "shit", "bitch", "asshole", "bastard", "cunt",
         "piss", "whore", "slut",
     ]
+
+    /// Words from `profanity` that are ordinary vocabulary in another
+    /// language, keyed by the language subtag of the locale directory
+    /// (`da` for `da`, `sv` for `sv` or `sv-SE`). In those locales the word
+    /// is not checked: Danish and Swedish "slut" means "end", as in "Slut
+    /// med at kopiere ..." ("No more copying ..."), and flagging it made a
+    /// correct description fail the precheck.
+    static let profanityOrdinaryIn: [String: Set<String>] = [
+        "da": ["slut"],
+        "sv": ["slut"],
+    ]
+
+    /// The `profanity` words checked in `locale`: all of them, minus the
+    /// ones `profanityOrdinaryIn` lists for the locale's language.
+    static func profanity(forLocale locale: String) -> [String] {
+        let language = locale
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .first.map { $0.lowercased() } ?? ""
+        let ordinary = profanityOrdinaryIn[language] ?? []
+        return profanity.filter { !ordinary.contains($0) }
+    }
 
     static let appleSentiment: [String] = [
         "apple sucks", "apple is terrible", "apple rejected",
@@ -246,7 +272,7 @@ package struct MetadataPrecheck {
         ) { "contains placeholder text \"\($0)\"" })
 
         findings.append(contentsOf: matchAll(
-            Self.profanity, in: lines, file: file, locale: locale,
+            Self.profanity(forLocale: locale), in: lines, file: file, locale: locale,
             severity: .error, rule: "profanity"
         ) { _ in "contains profanity, which App Review flags under guideline 1.1.1" })
 
