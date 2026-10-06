@@ -3797,4 +3797,141 @@ final class SubmitOrchestratorTests: XCTestCase {
         XCTAssertEqual(report.reviewSubmissionID, "RSUB-1")
         XCTAssertEqual(report.reviewSubmissionState, "WAITING_FOR_REVIEW")
     }
+
+    // MARK: - Sets the manifest leaves out
+
+    /// A yml locale with no manifest entry used to be skipped without a
+    /// word. Tonos 2.6.1 added Danish to `locales:`, but its checkout had a
+    /// manifest from before Danish, so a submit would have uploaded every
+    /// locale except the one App Store Connect had no screenshots for.
+    func testPlan_ymlLocaleMissingFromManifest_isAGap() throws {
+        let renderRoot = try makeRenderRoot("plan-missing-locale")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        for locale in ["en-US", "ja"] {
+            try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["\(locale)/max_01.png"])
+            try writePNGs(makePNG(w: 2064, h: 2752), to: renderRoot, ["\(locale)/ipad_01.png"])
+        }
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", files: ["en-US/max_01.png"]),
+            device("iPad Pro 13\"", "iPad Pro 13-inch (M5)", files: ["en-US/ipad_01.png"]),
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", locale: "ja", files: ["ja/max_01.png"]),
+            device("iPad Pro 13\"", "iPad Pro 13-inch (M5)", locale: "ja", files: ["ja/ipad_01.png"]),
+        ]), renderRoot: renderRoot, expectedLocales: ["en-US", "ja", "da"])
+
+        XCTAssertTrue(plan.problems.isEmpty, "got: \(plan.problems)")
+        XCTAssertEqual(plan.groups.map { "\($0.locale) \($0.displayType)" }, [
+            "en-US APP_IPAD_PRO_3GEN_129", "en-US APP_IPHONE_67",
+            "ja APP_IPAD_PRO_3GEN_129", "ja APP_IPHONE_67",
+        ])
+        XCTAssertEqual(plan.gaps, [.localeNotInManifest(locale: "da")])
+        XCTAssertTrue(plan.gaps.first?.message.hasPrefix("screenshots da: storescreens.yml lists this locale, but manifest.json has no screenshots for it") == true,
+                      "got: \(plan.gaps.map(\.message))")
+    }
+
+    /// A locale whose capture lacks a device: the other locales have an
+    /// iPad set, this one does not.
+    func testPlan_localeMissingADisplayType_isAGap() throws {
+        let renderRoot = try makeRenderRoot("plan-missing-set")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        for locale in ["en-US", "ja", "da"] {
+            try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["\(locale)/max_01.png"])
+        }
+        for locale in ["en-US", "ja"] {
+            try writePNGs(makePNG(w: 2064, h: 2752), to: renderRoot, ["\(locale)/ipad_01.png"])
+        }
+        let plan = SubmitOrchestrator.planScreenshotUploads(manifest: manifest([
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", files: ["en-US/max_01.png"]),
+            device("iPad Pro 13\"", "iPad Pro 13-inch (M5)", files: ["en-US/ipad_01.png"]),
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", locale: "ja", files: ["ja/max_01.png"]),
+            device("iPad Pro 13\"", "iPad Pro 13-inch (M5)", locale: "ja", files: ["ja/ipad_01.png"]),
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", locale: "da", files: ["da/max_01.png"]),
+        ]), renderRoot: renderRoot, expectedLocales: ["en-US", "ja", "da"])
+
+        XCTAssertEqual(plan.gaps, [.missingSet(locale: "da", displayType: "APP_IPAD_PRO_3GEN_129", otherLocales: 2)])
+        XCTAssertEqual(plan.gaps.first?.message,
+                       "screenshots da/APP_IPAD_PRO_3GEN_129: manifest.json has no screenshots for this set, though 2 other locale(s) have them, so nothing is uploaded to it and it keeps what it holds now on App Store Connect.")
+    }
+
+    /// The display-type comparison runs without a yml `locales:` list too,
+    /// and a manifest that covers every listed locale has no gaps.
+    func testPlan_completeManifest_hasNoGaps() throws {
+        let renderRoot = try makeRenderRoot("plan-no-gaps")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        for locale in ["en-US", "da"] {
+            try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["\(locale)/max_01.png"])
+        }
+        let entries = [
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", files: ["en-US/max_01.png"]),
+            device("iPhone 6.9\"", "iPhone 17 Pro Max", locale: "da", files: ["da/max_01.png"]),
+        ]
+        XCTAssertEqual(SubmitOrchestrator.planScreenshotUploads(
+            manifest: manifest(entries), renderRoot: renderRoot, expectedLocales: ["en-US", "da"]
+        ).gaps, [])
+        XCTAssertEqual(SubmitOrchestrator.planScreenshotUploads(
+            manifest: manifest(entries), renderRoot: renderRoot
+        ).gaps, [])
+    }
+
+    /// On a run that submits for review, a left-out locale is an error: the
+    /// other locales still upload, but the version is not sent to review.
+    func testSubmit_localeMissingFromManifest_isAnErrorAndSkipsSubmitForReview() async throws {
+        let (client, _) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-missing-locale-review")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["en-US/max_01.png"])
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 1)
+        stubReviewSubmissionFlow()
+
+        let config = AppStoreConnectConfig(
+            bundleID: "com.example.app",
+            submit: SubmitConfig(
+                createVersion: "1.2.0", screenshots: true, metadata: false,
+                submitForReview: true, attachBuild: false
+            )
+        )
+        let report = try await SubmitOrchestrator(
+            client: client, config: config, settlePollInterval: 0, settlePollMaxAttempts: 0
+        ).submit(
+            manifest: manifest([device("iPhone 6.9\"", "iPhone 17 Pro Max", files: ["en-US/max_01.png"])]),
+            renderRoot: renderRoot,
+            metadataRoot: nil,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: false,
+            expectedLocales: ["en-US", "da"]
+        )
+
+        XCTAssertEqual(report.errors.count, 2, "got: \(report.errors)")
+        XCTAssertTrue(report.errors.first?.hasPrefix("screenshots da: storescreens.yml lists this locale") == true, "got: \(report.errors)")
+        XCTAssertEqual(report.errors.last, "submit for review: skipped because the screenshot step reported errors (see above); fix them and re-run")
+        XCTAssertEqual(report.screenshotUploads.map { "\($0.locale) \($0.displayType) \($0.count)" }, ["en-US APP_IPHONE_67 1"])
+        XCTAssertEqual(report.screenshotWarnings, [])
+        XCTAssertEqual(reviewSubmissionRequests(), [], "no review submission call expected")
+    }
+
+    /// Without submit-for-review the same gap is a warning: printed as the
+    /// run goes and kept in the report, with no error.
+    func testSubmit_localeMissingFromManifest_warnsWithoutSubmitForReview() async throws {
+        let (client, config) = makeClient()
+        let renderRoot = try makeRenderRoot("submit-missing-locale-warn")
+        defer { try? FileManager.default.removeItem(at: renderRoot) }
+        try writePNGs(makePNG(w: 1320, h: 2868), to: renderRoot, ["en-US/max_01.png"])
+        stubScreenshotOnlySubmit(locales: ["en-US"], maxUploads: 1)
+        let lines = LineCollector()
+
+        let report = try await SubmitOrchestrator(client: client, config: config).submit(
+            manifest: manifest([device("iPhone 6.9\"", "iPhone 17 Pro Max", files: ["en-US/max_01.png"])]),
+            renderRoot: renderRoot,
+            metadataRoot: nil,
+            shouldUploadScreenshots: true,
+            shouldUploadMetadata: false,
+            expectedLocales: ["en-US", "da"],
+            progress: { lines.append($0) }
+        )
+
+        XCTAssertTrue(report.errors.isEmpty, "got: \(report.errors)")
+        XCTAssertEqual(report.screenshotWarnings.count, 1)
+        XCTAssertTrue(report.screenshotWarnings.first?.hasPrefix("screenshots da: ") == true, "got: \(report.screenshotWarnings)")
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix("warning: screenshots da: ") }, "got: \(lines.all)")
+        XCTAssertEqual(report.screenshotUploads.map(\.locale), ["en-US"])
+    }
 }

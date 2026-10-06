@@ -78,6 +78,11 @@ package struct SubmitOrchestrator {
         /// `maxScreenshotsPerSet`, or a set whose upload failed each add to
         /// `errors` and make submit skip submit-for-review.
         package var screenshotsSkipped: [SkippedScreenshots] = []
+        /// Screenshot sets the manifest leaves out (`ScreenshotUploadPlan.Gap`
+        /// messages) on a run that does not submit for review. A run that
+        /// does reports them in `errors` instead, which skips the review
+        /// submission.
+        package var screenshotWarnings: [String] = []
         /// Locales where the privacy policy URL was successfully PATCHed
         /// onto `appInfoLocalizations`. Kept for backwards-compatibility
         /// with earlier report consumers; same data is also reflected in
@@ -227,6 +232,7 @@ package struct SubmitOrchestrator {
         shouldUploadScreenshots: Bool,
         shouldUploadMetadata: Bool,
         screenshotOrder: [String]? = nil,
+        expectedLocales: [String]? = nil,
         progress: ((String) -> Void)? = nil
     ) async throws -> Report {
         guard let createVersion = config.submit?.createVersion, !createVersion.isEmpty else {
@@ -379,6 +385,7 @@ package struct SubmitOrchestrator {
                 versionID: version.id,
                 manifest: orderedManifest,
                 renderRoot: renderRoot,
+                expectedLocales: expectedLocales,
                 report: &report,
                 progress: progress
             )
@@ -472,9 +479,9 @@ package struct SubmitOrchestrator {
         //
         // Also skip when step 4 added a screenshot error (a file it could
         // not place, a set refused for holding too many screenshots, a
-        // failed upload): the set still holds the previous version's
-        // screenshots, nothing, or only part of the new ones, and the
-        // version would go to App Review with them.
+        // failed upload, a set the manifest leaves out): the set still
+        // holds the previous version's screenshots, nothing, or only part
+        // of the new ones, and the version would go to App Review with them.
         // Skipped screenshots (iPhone Duo, devices another device's
         // screenshots stand in for) are not errors and don't block this.
         if submitForReviewEnabled {
@@ -1818,21 +1825,37 @@ package struct SubmitOrchestrator {
 
     /// Uploads the sets `planScreenshotUploads` works out. Returns true when
     /// it added any error to `report.errors`: a plan problem (a file that
-    /// cannot be placed, a set refused for holding too many screenshots) or
-    /// a set whose API calls failed. Skipped screenshots are not errors.
+    /// cannot be placed, a set refused for holding too many screenshots), a
+    /// set whose API calls failed, or, on a run that submits for review, a
+    /// set the manifest leaves out (a plan gap). Skipped screenshots are not
+    /// errors, and gaps on a run that does not submit for review are
+    /// warnings.
     private func uploadScreenshots(
         appsAPI: AppsAPI,
         versionID: String,
         manifest: CaptureManifest,
         renderRoot: URL,
+        expectedLocales: [String]?,
         report: inout Report,
         progress: ((String) -> Void)?
     ) async throws -> Bool {
         let screenshotsAPI = ScreenshotsAPI(client: client)
         let errorCountBefore = report.errors.count
 
-        let plan = Self.planScreenshotUploads(manifest: manifest, renderRoot: renderRoot)
+        let plan = Self.planScreenshotUploads(
+            manifest: manifest, renderRoot: renderRoot, expectedLocales: expectedLocales
+        )
         report.errors.append(contentsOf: plan.problems.map(\.message))
+        // A left-out set keeps whatever App Store Connect holds, which can
+        // be nothing for a locale new in this version. Uploading the other
+        // sets is still right, but the version must not go to App Review
+        // that way, so on such a run a gap is an error.
+        if config.submit?.submitForReview == true {
+            report.errors.append(contentsOf: plan.gaps.map(\.message))
+        } else {
+            report.screenshotWarnings.append(contentsOf: plan.gaps.map(\.message))
+            for gap in plan.gaps { progress?("warning: \(gap.message)") }
+        }
         for line in plan.notices { progress?(line) }
         // A same-size-class row says the set was filled from another device,
         // so it is only recorded once that set has really been uploaded (or
@@ -2008,8 +2031,43 @@ package struct SubmitOrchestrator {
             }
         }
 
+        /// Screenshot sets the manifest leaves out. Nothing is uploaded to
+        /// them, so App Store Connect keeps whatever they hold: the previous
+        /// version's screenshots, or nothing, in which case the store shows
+        /// the primary locale's screenshots in that locale.
+        package enum Gap: Sendable, Equatable {
+            /// storescreens.yml lists the locale, but no manifest entry has
+            /// it. A `capture --locale` run rewrites manifest.json with only
+            /// the locales it captured, which is the usual way to get here.
+            case localeNotInManifest(locale: String)
+            /// The locale has no screenshots for `displayType`, which
+            /// `otherLocales` other locales in the manifest have.
+            case missingSet(locale: String, displayType: String, otherLocales: Int)
+
+            package var locale: String {
+                switch self {
+                case .localeNotInManifest(let locale), .missingSet(let locale, _, _):
+                    return locale
+                }
+            }
+
+            package var message: String {
+                switch self {
+                case .localeNotInManifest(let locale):
+                    return "screenshots \(locale): storescreens.yml lists this locale, but manifest.json has no screenshots for it, so none are uploaded and its App Store Connect screenshot sets keep what they hold now. Capture it (`storescreens capture --locale \(locale)`) or restore its entries in manifest.json; a `capture --locale` run rewrites manifest.json with only the locales it captured."
+                case .missingSet(let locale, let displayType, let otherLocales):
+                    return "screenshots \(locale)/\(displayType): manifest.json has no screenshots for this set, though \(otherLocales) other locale(s) have them, so nothing is uploaded to it and it keeps what it holds now on App Store Connect."
+                }
+            }
+        }
+
         /// Sets to fill, sorted by (locale, displayType).
         package var groups: [Group] = []
+        /// Sets left out: first each yml locale the manifest lacks entirely,
+        /// in yml order, then each missing (locale, displayType) in locale
+        /// order. Submit reports them as errors when the run submits for
+        /// review, and as warnings otherwise.
+        package var gaps: [Gap] = []
         /// Files deliberately not uploaded; not errors.
         package var skipped: [Report.SkippedScreenshots] = []
         /// Files and sets that cannot be uploaded; submit reports these as
@@ -2096,9 +2154,15 @@ package struct SubmitOrchestrator {
     /// entries of one simulator stay together. When a second device's entry
     /// lists files a first device already listed (see `SharedFiles`), those
     /// files count for the first device only.
+    ///
+    /// `expectedLocales` is the yml's `locales:` list. Each of them with no
+    /// manifest entry, and each locale in the manifest missing a display
+    /// type another locale has, becomes a `Gap`; before gaps were reported,
+    /// a locale the manifest lacked was skipped without a word.
     package static func planScreenshotUploads(
         manifest: CaptureManifest,
-        renderRoot: URL
+        renderRoot: URL,
+        expectedLocales: [String]? = nil
     ) -> ScreenshotUploadPlan {
         struct Device: Hashable {
             let deviceType: String
@@ -2251,6 +2315,33 @@ package struct SubmitOrchestrator {
                 locale: key.locale, displayType: key.displayType,
                 device: chosen.name, files: files, choice: choice
             ))
+        }
+
+        // Gaps. A set counts as present when any device has files for it,
+        // even a device refused for having too many: that set is already a
+        // problem, and reporting it twice would only add noise.
+        var displayTypesByLocale: [String: Set<String>] = [:]
+        for key in filesByGroup.keys {
+            displayTypesByLocale[key.locale, default: []].insert(key.displayType)
+        }
+        var manifestLocales: [String] = []
+        for entry in manifest.devices {
+            let locale = entry.locale ?? "en-US"
+            if !manifestLocales.contains(locale) { manifestLocales.append(locale) }
+        }
+        var seenExpected: Set<String> = []
+        for locale in expectedLocales ?? [] where seenExpected.insert(locale).inserted {
+            if !manifestLocales.contains(locale) {
+                plan.gaps.append(.localeNotInManifest(locale: locale))
+            }
+        }
+        let allDisplayTypes = displayTypesByLocale.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+        for locale in manifestLocales.sorted() {
+            let present = displayTypesByLocale[locale] ?? []
+            for displayType in allDisplayTypes.subtracting(present).sorted() {
+                let others = displayTypesByLocale.filter { $0.key != locale && $0.value.contains(displayType) }.count
+                plan.gaps.append(.missingSet(locale: locale, displayType: displayType, otherLocales: others))
+            }
         }
         return plan
     }

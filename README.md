@@ -1511,7 +1511,17 @@ Dry run first to validate everything without pushing:
 storescreens submit --dry-run
 ```
 
-It checks credentials, app lookup, and the metadata directory, and confirms that every rendered PNG maps to a valid App Store display type and stays under Apple's 8 MB size cap, and that each screenshot set can be filled within App Store Connect's limit of 10 screenshots.
+It checks credentials, app lookup, and the metadata directory, looks up the version (read-only) and says whether it exists, with its state, or will be created, and confirms that every rendered PNG maps to a valid App Store display type and stays under Apple's 8 MB size cap, and that each screenshot set can be filled within App Store Connect's limit of 10 screenshots. It then lists every set the upload would fill, one line per locale with each display type, its screenshot count and the device it comes from, so a locale that is missing stands out:
+
+```
+  ✓ version: 2.6.1 is not on App Store Connect yet; submit will create it
+  ✓ screenshots: 324 PNG(s) in 36 set(s) for 18 locale(s) map to valid ASC display types
+    da: APP_IPAD_PRO_3GEN_129 9 from iPad Pro 13-inch (M5), APP_IPHONE_67 9 from iPhone 17 Pro Max
+    de-DE: APP_IPAD_PRO_3GEN_129 9 from iPad Pro 13-inch (M5), APP_IPHONE_67 9 from iPhone 17 Pro Max
+    ...
+```
+
+A version already in a released state (`READY_FOR_SALE`, `PENDING_DEVELOPER_RELEASE` and the like) fails the dry run, since `submit` cannot edit it.
 
 Live upload:
 
@@ -1526,6 +1536,8 @@ Flags:
 - `--render-dir` / `--metadata-dir` override config paths
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order. App Store Connect holds at most 10 screenshots per set, and the light and dark captures of one device share a set, so a device captured in both appearances fits only with 5 slides or fewer. A device over that limit is always reported as an error, so `submit` and `--dry-run` exit non-zero and the review submission is skipped. The next device in the slot still fills the set when it fits; when no device fits, the set is not touched and its current screenshots stay.
+
+`submit` uploads exactly what `manifest.json` lists, so it also checks the manifest against the yml. A locale in `locales:` with no manifest entries, or a locale missing a display type the other locales have (a device that was not captured in that locale), is reported by name. Nothing is uploaded to those sets, so they keep whatever App Store Connect holds: the previous version's screenshots, or nothing for a locale new in this version, in which case the store shows the primary locale's screenshots there. On a run that submits for review (`submit_for_review: true` or `--submit-for-review`), each one is an error: the other sets still upload, but `submit` and `--dry-run` exit non-zero and the review submission is skipped. On any other run each one is a warning, printed as the run goes and again in the report. The usual cause is `storescreens capture --locale <code>`, which rewrites `manifest.json` with only the locales it captured. Before 3.13.2 these sets were left out without a word.
 
 Each PNG's screenshot set (its display type) comes from the PNG's pixel size, per the table in [App Store Connect Screenshot Sizes](#app-store-connect-screenshot-sizes). Two consequences:
 
@@ -1547,7 +1559,7 @@ app_store_connect:
     submit_for_review: true   # default false
 ```
 
-Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. If any screenshot set failed to upload or was refused (for example, more than 10 screenshots for one set), `submit` skips the review submission and reports an error instead of sending the version with stale screenshots; fix the set and re-run. iPhone Duo screenshots skipped with a notice, and devices left out because another device filled their slot, don't block the submission. The review submission ID and final state (`WAITING_FOR_REVIEW` on success) are included in the report output.
+Submission runs only after screenshots + metadata have been successfully uploaded, so the version is complete when Apple picks it up. If any screenshot set failed to upload or was refused (for example, more than 10 screenshots for one set), or the manifest leaves a set out (a locale in `locales:` with no manifest entries, or a locale missing a display type the others have), `submit` skips the review submission and reports an error instead of sending the version with stale screenshots; fix the set and re-run. iPhone Duo screenshots skipped with a notice, and devices left out because another device filled their slot, don't block the submission. The review submission ID and final state (`WAITING_FOR_REVIEW` on success) are included in the report output.
 
 Under the hood we use Apple's newer three-step `reviewSubmissions` flow (create the submission, POST a `reviewSubmissionItems` to attach the version, PATCH `submitted:true` to push it into `WAITING_FOR_REVIEW`). The older per-version `appStoreVersionSubmissions` endpoint has been retired.
 

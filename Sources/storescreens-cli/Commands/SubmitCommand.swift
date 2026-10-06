@@ -151,6 +151,7 @@ struct SubmitCommand: AsyncParsableCommand {
                 manifest: manifest,
                 renderRoot: renderRoot,
                 metadataRoot: metadataURL,
+                expectedLocales: captureConfig.locales,
                 logger: logger
             )
             return
@@ -166,6 +167,7 @@ struct SubmitCommand: AsyncParsableCommand {
             shouldUploadScreenshots: uploadScreenshots,
             shouldUploadMetadata: uploadMetadata && metadataURL != nil,
             screenshotOrder: captureConfig.screenshots,
+            expectedLocales: captureConfig.locales,
             progress: { line in print("  \(line)") }
         )
 
@@ -209,6 +211,10 @@ struct SubmitCommand: AsyncParsableCommand {
                     print("    \(s.locale) / \(s.device): \(s.count) file(s), \(displayType) set filled from \(uploadedDevice)")
                 }
             }
+        }
+        if !report.screenshotWarnings.isEmpty {
+            logger.log("\(report.screenshotWarnings.count) screenshot set(s) left out:", level: .warning)
+            for w in report.screenshotWarnings { print("    \(w)") }
         }
         if let buildNumber = report.attachedBuildNumber {
             print("  build attached: \(buildNumber)")
@@ -260,6 +266,7 @@ struct SubmitCommand: AsyncParsableCommand {
         manifest: CaptureManifest,
         renderRoot: URL,
         metadataRoot: URL?,
+        expectedLocales: [String]?,
         logger: Logger
     ) async throws {
         var problems: [String] = []
@@ -280,16 +287,16 @@ struct SubmitCommand: AsyncParsableCommand {
         // 2. App resolves.
         let client = ASCClient(credentials: creds)
         let apps = AppsAPI(client: client)
-        var appOK = false
+        var appID: String?
         do {
             if let id = ascConfig.appID {
                 let app = try await apps.lookupApp(id: id)
                 print("  ✓ app: \(app.attributes?.name ?? id)")
-                appOK = true
+                appID = app.id
             } else if let bundle = ascConfig.bundleID {
                 if let app = try await apps.lookupApp(bundleID: bundle) {
                     print("  ✓ app: \(app.attributes?.name ?? bundle) (id \(app.id))")
-                    appOK = true
+                    appID = app.id
                 } else {
                     problems.append("no app matches bundle id \(bundle)")
                 }
@@ -299,13 +306,33 @@ struct SubmitCommand: AsyncParsableCommand {
         } catch {
             problems.append("app lookup failed: \(error)")
         }
-        _ = appOK
 
-        // 3. Version string present.
-        if ascConfig.submit?.createVersion?.isEmpty ?? true {
-            problems.append("submit.create_version is empty")
+        // 3. Version: looked up read-only, so the run says whether submit
+        // will reuse the version or create it.
+        if let versionString = ascConfig.submit?.createVersion, !versionString.isEmpty {
+            if let appID {
+                let platform = ascConfig.submit?.platform ?? "IOS"
+                do {
+                    if let existing = try await apps.findEditableVersion(
+                        appID: appID, versionString: versionString, platform: platform
+                    ) {
+                        let state = existing.attributes?.appStoreState ?? "state unknown"
+                        if AppsAPI.publiclyReleasedVersionStates.contains(state) {
+                            problems.append("version \(versionString) is already \(state) on App Store Connect, so submit cannot edit it; raise submit.create_version")
+                        } else {
+                            print("  ✓ version: \(versionString) exists on App Store Connect (\(state), id \(existing.id))")
+                        }
+                    } else {
+                        print("  ✓ version: \(versionString) is not on App Store Connect yet; submit will create it")
+                    }
+                } catch {
+                    problems.append("version lookup failed: \(error)")
+                }
+            } else {
+                print("  ✓ version: \(versionString) (not looked up, the app did not resolve)")
+            }
         } else {
-            print("  ✓ version: \(ascConfig.submit!.createVersion!)")
+            problems.append("submit.create_version is empty")
         }
 
         // 4. Metadata locales exist.
@@ -404,7 +431,7 @@ struct SubmitCommand: AsyncParsableCommand {
         // device are reported as skipped here too, not as problems.
         if ascConfig.submit?.uploadsScreenshots ?? true {
             let plan = SubmitOrchestrator.planScreenshotUploads(
-                manifest: manifest, renderRoot: renderRoot
+                manifest: manifest, renderRoot: renderRoot, expectedLocales: expectedLocales
             )
             for problem in plan.problems {
                 switch problem {
@@ -431,9 +458,29 @@ struct SubmitCommand: AsyncParsableCommand {
                     slotCount += 1
                 }
             }
-            print("  ✓ screenshots: \(slotCount) PNG(s) map to valid ASC display types" + (sizeProblems > 0 ? " (\(sizeProblems) too large)" : ""))
+            let planLocales = plan.groups.reduce(into: [String]()) { locales, group in
+                if !locales.contains(group.locale) { locales.append(group.locale) }
+            }
+            print("  ✓ screenshots: \(slotCount) PNG(s) in \(plan.groups.count) set(s) for \(planLocales.count) locale(s) map to valid ASC display types" + (sizeProblems > 0 ? " (\(sizeProblems) too large)" : ""))
+            // Every set the upload would fill, so a locale left out shows
+            // as a missing line rather than only as a smaller total.
+            for locale in planLocales {
+                let sets = plan.groups.filter { $0.locale == locale }
+                    .map { "\($0.displayType) \($0.files.count) from \($0.device)" }
+                print("    \(locale): \(sets.joined(separator: ", "))")
+            }
             for line in plan.notices { print("    note: \(line)") }
-            if !plan.problems.isEmpty, ascConfig.submit?.submitForReview == true {
+            // Same rule as the live run: a set the manifest leaves out is an
+            // error when the run submits for review, a warning otherwise.
+            let submitsForReview = ascConfig.submit?.submitForReview == true
+            for gap in plan.gaps {
+                if submitsForReview {
+                    problems.append(gap.message)
+                } else {
+                    print("    warning: \(gap.message)")
+                }
+            }
+            if submitsForReview, !plan.problems.isEmpty || !plan.gaps.isEmpty {
                 print("    note: the live run skips submit-for-review until these screenshot problems are fixed")
             }
         }
