@@ -550,11 +550,12 @@ Options:
 | `--mode xctest\|simple` | Capture mode (default: `xctest`) |
 | `--config PATH` | Config file path (default: `storescreens.yml`) |
 | `--output DIR` | Override output directory |
-| `--locale LOCALE` | Override locales (repeatable) |
+| `--locale LOCALE` | Override locales (repeatable). Replaces only those locales' entries in `manifest.json`; see [Partial captures](#partial-captures) |
+| `--appearance APPEARANCE` | Override appearances (repeatable). Replaces only those appearances' entries in `manifest.json` |
 | `--retries N` | Retry failed test runs per device (default: 1) |
 | `--keep-alive` | Keep simulators running after capture |
 | `--xcresult` | Extract screenshots from `.xcresult` bundle instead of filesystem |
-| `--only PREFIXES` | Only capture screenshots matching these prefixes (comma-separated) |
+| `--only PREFIXES` | Only capture screenshots matching these prefixes (comma-separated). The other screenshots stay in `manifest.json` |
 | `--skip-check` | Skip preflight source code check |
 | `--no-render` | Skip the post-capture render pass even if `render.enabled: true` is set in config |
 | `--verbose` | Stream full xcodebuild output to terminal (logs are always saved to `logs/`) |
@@ -1537,7 +1538,7 @@ Flags:
 
 Screenshot uploads are destructive: each App Store Connect screenshot set is wiped and re-populated from the manifest so the local rendered PNGs are the source of truth. The manifest's screenshot order becomes the App Store display order. App Store Connect holds at most 10 screenshots per set, and the light and dark captures of one device share a set, so a device captured in both appearances fits only with 5 slides or fewer. A device over that limit is always reported as an error, so `submit` and `--dry-run` exit non-zero and the review submission is skipped. The next device in the slot still fills the set when it fits; when no device fits, the set is not touched and its current screenshots stay.
 
-`submit` uploads exactly what `manifest.json` lists, so it also checks the manifest against the yml. A locale in `locales:` with no manifest entries, or a locale missing a display type the other locales have (a device that was not captured in that locale), is reported by name. Nothing is uploaded to those sets, so they keep whatever App Store Connect holds: the previous version's screenshots, or nothing for a locale new in this version, in which case the store shows the primary locale's screenshots there. On a run that submits for review (`submit_for_review: true` or `--submit-for-review`), each one is an error: the other sets still upload, but `submit` and `--dry-run` exit non-zero and the review submission is skipped. On any other run each one is a warning, printed as the run goes and again in the report. The usual cause is `storescreens capture --locale <code>`, which rewrites `manifest.json` with only the locales it captured. Before 3.13.2 these sets were left out without a word.
+`submit` uploads exactly what `manifest.json` lists, so it also checks the manifest against the yml. A locale in `locales:` with no manifest entries, or a locale missing a display type the other locales have (a device that was not captured in that locale), is reported by name. Nothing is uploaded to those sets, so they keep whatever App Store Connect holds: the previous version's screenshots, or nothing for a locale new in this version, in which case the store shows the primary locale's screenshots there. On a run that submits for review (`submit_for_review: true` or `--submit-for-review`), each one is an error: the other sets still upload, but `submit` and `--dry-run` exit non-zero and the review submission is skipped. On any other run each one is a warning, printed as the run goes and again in the report. Before 3.13.3 the usual cause was `storescreens capture --locale <code>`, which rewrote `manifest.json` with only the locales it captured; it now keeps the other locales' entries (see [Partial captures](#partial-captures)). Before 3.13.2 these sets were left out without a word.
 
 Each PNG's screenshot set (its display type) comes from the PNG's pixel size, per the table in [App Store Connect Screenshot Sizes](#app-store-connect-screenshot-sizes). Two consequences:
 
@@ -6135,6 +6136,8 @@ storescreens capture --only 14_ca_indian,18_tx_military
 
 The filter works by writing a filter file that the test reads at runtime. Navigation still runs for all screenshots (maintaining test state), but `takeScreenshot` returns early for non-matching names. The filter file is automatically cleaned up after capture completes.
 
+The screenshots the filter skipped stay in `manifest.json`: each recaptured screenshot replaces the entry of the same name, in its place, and the rest are kept (see [Partial captures](#partial-captures)).
+
 ## Retries
 
 Simulators can be flaky. Capture retries a failed test run once by default, because the most common failure is environmental: `xcodebuild` clones the simulator on every run, and if the new clone's test-runner install starts while the previous clone is still tearing down, SpringBoard rejects the launch with `Busy ("Application failed preflight checks")`. Capture deletes leftover clones and waits for CoreSimulator to settle before each run, and a retry recovers the cases that slip through.
@@ -6170,6 +6173,16 @@ Change this with `keep_runs` in your config:
 | `N` | Keep the last N runs. |
 
 With history enabled, a `latest` symlink always points to the most recent successful run.
+
+### Partial captures
+
+A capture narrowed with `--locale`, `--appearance` or `--only` replaces only what it captured. Its files replace only the files it wrote, and `manifest.json` follows the same rule:
+
+- An entry for a device, locale and appearance the run captured is replaced in its place, so the manifest order stays the same. Under `--only` the old and new entries are merged by screenshot name instead.
+- Inside the run's locales and appearances, an entry for a device the run did not capture (one taken out of the config) is dropped. Under `--only` it is kept.
+- Entries for other locales and appearances are kept as they are, and entries new to the manifest (a locale captured for the first time) are added at the end.
+
+So a new locale can be captured on its own (`storescreens capture --locale da`) and `submit` then uploads it together with every locale captured before. Before 3.13.3, such a run rewrote `manifest.json` with only its own entries, and the next `submit` uploaded only that locale. A full capture, with none of those flags, still rewrites `manifest.json`, so a device or locale removed from the config drops out of it. In history mode (`keep_runs` other than 1) every run has its own directory and its own manifest, and nothing is merged.
 
 ## Device Size Detection
 

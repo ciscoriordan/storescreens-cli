@@ -188,6 +188,39 @@ struct CaptureCommand: AsyncParsableCommand {
         }
     }
 
+    /// What `--locale`, `--appearance` and `--only` limited this run to.
+    private var scope: CaptureScope {
+        CaptureScope(locales: locale, appearances: appearance, someScreenshotsOnly: only != nil)
+    }
+
+    /// The manifest.json this run writes. A run narrowed by `--locale`,
+    /// `--appearance` or `--only` replaces only the entries it captured and
+    /// keeps the rest of the manifest already in `outputDir`, the same way
+    /// its files replace only the files it wrote (see
+    /// `CaptureManifest.merged(over:scope:)`). A full run, and a run in
+    /// history mode (`keep_runs` above 1, where every run has its own
+    /// directory), writes only its own entries.
+    private func manifestToWrite(
+        _ manifest: CaptureManifest,
+        outputDir: String,
+        destination: CaptureDestination,
+        logger: Logger
+    ) -> CaptureManifest {
+        guard destination.isStaging, !scope.isFull else { return manifest }
+        do {
+            guard let existing = try CaptureManifest.load(fromOutputDir: outputDir) else { return manifest }
+            let merged = manifest.merged(over: existing, scope: scope)
+            let kept = merged.devices.count - manifest.devices.count
+            if kept > 0 {
+                logger.log("manifest.json keeps \(kept) entr\(kept == 1 ? "y" : "ies") from earlier captures that this run did not replace", level: .info)
+            }
+            return merged
+        } catch {
+            logger.log("could not read the existing manifest.json in \(outputDir) (\(error)), so it is replaced by this run's entries only", level: .warning)
+            return manifest
+        }
+    }
+
     /// Project-local cache directory for screenshots and named pipes.
     /// Test code discovers this path via the breadcrumb at ~/.storescreens-cache-dir.
     private static let screenshotsCacheDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -534,7 +567,7 @@ struct CaptureCommand: AsyncParsableCommand {
 
             // Write manifest
             let hasLocales = config.locales?.isEmpty == false
-            let manifest = CaptureManifest(
+            let manifest = manifestToWrite(CaptureManifest(
                 version: hasLocales || multipleAppearances ? 2 : 1,
                 generatedAt: Date(),
                 generatedBy: "storescreens-cli \(storescreensVersion)",
@@ -542,7 +575,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 displayName: displayName,
                 scheme: config.scheme,
                 devices: manifestDevices
-            )
+            ), outputDir: outputDir, destination: destination, logger: logger)
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
             try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false, screenshotOrder: config.screenshots)
 
@@ -1114,7 +1147,7 @@ struct CaptureCommand: AsyncParsableCommand {
 
             // Write manifest
             let hasLocales = config.locales?.isEmpty == false
-            let manifest = CaptureManifest(
+            let manifest = manifestToWrite(CaptureManifest(
                 version: hasLocales || multipleAppearances ? 2 : 1,
                 generatedAt: Date(),
                 generatedBy: "storescreens-cli \(storescreensVersion)",
@@ -1122,7 +1155,7 @@ struct CaptureCommand: AsyncParsableCommand {
                 displayName: simpleDisplayName,
                 scheme: config.scheme,
                 devices: manifestDevices
-            )
+            ), outputDir: outputDir, destination: destination, logger: logger)
             try outputOrganizer.writeManifest(manifest, to: effectiveOutputDir)
             try HTMLPreviewGenerator(localeFlags: config.localeFlags).generate(manifest: manifest, outputDir: effectiveOutputDir, keepOldPreviews: config.keepOldPreviews ?? false, screenshotOrder: config.screenshots)
 

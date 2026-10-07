@@ -2037,8 +2037,9 @@ package struct SubmitOrchestrator {
         /// the primary locale's screenshots in that locale.
         package enum Gap: Sendable, Equatable {
             /// storescreens.yml lists the locale, but no manifest entry has
-            /// it. A `capture --locale` run rewrites manifest.json with only
-            /// the locales it captured, which is the usual way to get here.
+            /// it: a manifest from before the locale was added, or one
+            /// written by a `capture --locale` run before 3.13.3, which
+            /// rewrote manifest.json with only the locales it captured.
             case localeNotInManifest(locale: String)
             /// The locale has no screenshots for `displayType`, which
             /// `otherLocales` other locales in the manifest have.
@@ -2054,7 +2055,7 @@ package struct SubmitOrchestrator {
             package var message: String {
                 switch self {
                 case .localeNotInManifest(let locale):
-                    return "screenshots \(locale): storescreens.yml lists this locale, but manifest.json has no screenshots for it, so none are uploaded and its App Store Connect screenshot sets keep what they hold now. Capture it (`storescreens capture --locale \(locale)`) or restore its entries in manifest.json; a `capture --locale` run rewrites manifest.json with only the locales it captured."
+                    return "screenshots \(locale): storescreens.yml lists this locale, but manifest.json has no screenshots for it, so none are uploaded and its App Store Connect screenshot sets keep what they hold now. Capture it (`storescreens capture --locale \(locale)`) or restore its entries in manifest.json."
                 case .missingSet(let locale, let displayType, let otherLocales):
                     return "screenshots \(locale)/\(displayType): manifest.json has no screenshots for this set, though \(otherLocales) other locale(s) have them, so nothing is uploaded to it and it keeps what it holds now on App Store Connect."
                 }
